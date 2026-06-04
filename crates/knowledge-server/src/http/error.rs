@@ -1,0 +1,57 @@
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use axum::Json;
+use serde::Serialize;
+
+#[derive(Debug)]
+pub struct ApiError {
+  status: StatusCode,
+  message: String,
+}
+
+impl ApiError {
+  pub fn bad_request(message: impl Into<String>) -> Self {
+    Self {
+      status: StatusCode::BAD_REQUEST,
+      message: message.into(),
+    }
+  }
+
+  pub fn forbidden(message: impl Into<String>) -> Self {
+    Self {
+      status: StatusCode::FORBIDDEN,
+      message: message.into(),
+    }
+  }
+
+  pub fn internal(message: impl Into<String>) -> Self {
+    Self {
+      status: StatusCode::INTERNAL_SERVER_ERROR,
+      message: message.into(),
+    }
+  }
+
+  pub fn unauthorized(message: impl Into<String>) -> Self {
+    Self {
+      status: StatusCode::UNAUTHORIZED,
+      message: message.into(),
+    }
+  }
+}
+
+impl From<sqlx::Error> for ApiError {
+  fn from(value: sqlx::Error) -> Self {
+    Self::internal(value.to_string())
+  }
+}
+
+impl IntoResponse for ApiError {
+  fn into_response(self) -> Response {
+    #[derive(Serialize)]
+    struct ErrorBody<'a> {
+      error: &'a str,
+    }
+
+    (self.status, Json(ErrorBody { error: &self.message })).into_response()
+  }
+}

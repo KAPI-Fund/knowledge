@@ -1,0 +1,11 @@
+[package]
+name = "knowledge-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror = "2.0.17"
+
+[dev-dependencies]
+tempfile.workspace = true
