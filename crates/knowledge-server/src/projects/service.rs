@@ -1,4 +1,5 @@
 use knowledge_core::project::root::ProjectRoot;
+use knowledge_core::project::scaffold::initialize_project;
 use serde::Serialize;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
@@ -22,7 +23,7 @@ pub async fn create_project(
   user_id: &str,
 ) -> Result<ProjectDto, ApiError> {
   let id = Uuid::new_v4().to_string();
-  let root = ProjectRoot::new(&input.root_path)
+  let root = initialize_project(std::path::Path::new(&input.root_path))
     .map_err(|error| ApiError::bad_request(error.to_string()))?;
   let created_at = OffsetDateTime::now_utc()
     .format(&Rfc3339)
@@ -58,4 +59,18 @@ pub async fn create_project(
     root_path: root.as_str().to_owned(),
     created_at,
   })
+}
+
+pub async fn project_root_for_id(
+  state: &AppState,
+  project_id: &str,
+) -> Result<ProjectRoot, ApiError> {
+  let root_path = sqlx::query_scalar::<_, String>("SELECT root_path FROM projects WHERE id = ?1")
+    .bind(project_id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(ApiError::from)?
+    .ok_or_else(|| ApiError::bad_request("unknown project"))?;
+
+  ProjectRoot::new(root_path).map_err(|error| ApiError::bad_request(error.to_string()))
 }

@@ -2,6 +2,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { LoginPage } from "./login-page";
 
@@ -16,10 +17,13 @@ vi.mock("./api", () => ({
 describe("LoginPage", () => {
   it("submits username and password to the login mutation", async () => {
     const user = userEvent.setup();
+    const queryClient = new QueryClient();
     render(
-      <MemoryRouter>
-        <LoginPage />
-      </MemoryRouter>,
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter>
+          <LoginPage />
+        </MemoryRouter>
+      </QueryClientProvider>,
     );
 
     await user.type(screen.getByLabelText(/username/i), "admin");

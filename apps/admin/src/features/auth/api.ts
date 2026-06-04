@@ -1,12 +1,9 @@
 import { useMutation } from "@tanstack/react-query";
 
-type LoginInput = {
-  username: string;
-  password: string;
-};
+import { login } from "../shared/api";
 
 export function useLoginMutation() {
   return useMutation({
-    mutationFn: async (input: LoginInput) => input,
+    mutationFn: login,
   });
 }

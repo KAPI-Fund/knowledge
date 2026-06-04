@@ -5,6 +5,10 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+base64.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+time.workspace = true
 thiserror = "2.0.17"
 
 [dev-dependencies]

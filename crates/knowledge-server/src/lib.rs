@@ -11,10 +11,10 @@ use config::AppConfig;
 use sqlx::SqlitePool;
 
 pub async fn run() -> anyhow::Result<()> {
-  let database_url = std::env::var("KNOWLEDGE_DATABASE_URL")
-    .unwrap_or_else(|_| "sqlite://knowledge.db".to_string());
-  let config = AppConfig::for_tests(database_url);
-  let _state = bootstrap_state(&config).await?;
+  let config = AppConfig::from_env();
+  let state = bootstrap_state(&config).await?;
+  let listener = tokio::net::TcpListener::bind(config.bind_addr).await?;
+  axum::serve(listener, build_app(state)).await?;
   Ok(())
 }
 

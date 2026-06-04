@@ -11,6 +11,8 @@ pub enum ProjectRootError {
   NotDirectory,
   #[error("resolved path escapes project root")]
   EscapesRoot,
+  #[error("invalid source payload: {0}")]
+  InvalidSourcePayload(String),
   #[error("io error: {0}")]
   Io(#[from] std::io::Error),
 }
@@ -30,6 +32,10 @@ impl ProjectRoot {
 
   pub fn as_str(&self) -> &str {
     self.0.to_str().unwrap_or_default()
+  }
+
+  pub fn as_path(&self) -> &Path {
+    &self.0
   }
 
   pub fn safe_join(&self, relative: &str) -> Result<PathBuf, ProjectRootError> {

@@ -54,6 +54,14 @@ async fn admin_can_create_project_with_absolute_root() {
     .unwrap();
 
   assert_eq!(response.status(), StatusCode::CREATED);
+  assert!(project_root.join("purpose.md").is_file());
+  assert!(project_root.join("schema.md").is_file());
+  assert!(project_root.join("wiki/index.md").is_file());
+  assert!(project_root.join("wiki/log.md").is_file());
+  assert!(project_root.join("wiki/overview.md").is_file());
+  assert!(project_root.join("raw/sources").is_dir());
+  assert!(project_root.join("raw/assets").is_dir());
+  assert!(project_root.join(".knowledge/ingest").is_dir());
 }
 
 #[tokio::test]
@@ -74,6 +82,84 @@ async fn non_member_cannot_list_project_members() {
     .unwrap();
 
   assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn list_projects_and_users_return_registered_data() {
+  let temp = tempdir().unwrap();
+  let database_path = temp.path().join("listing.sqlite");
+  let database_url = format!(
+    "sqlite://{}",
+    database_path.to_string_lossy().replace('\\', "/")
+  );
+  let config = AppConfig::for_tests(database_url);
+  let state = bootstrap_state(&config).await.unwrap();
+
+  let login_app = build_app(state.clone());
+  let login = login(login_app).await;
+  let cookie = login
+    .headers()
+    .get(header::SET_COOKIE)
+    .unwrap()
+    .to_str()
+    .unwrap()
+    .to_string();
+  let body = read_json(login.into_body()).await;
+  let csrf = body.get("csrfToken").and_then(Value::as_str).unwrap();
+
+  let project_root = temp.path().join("listed-project");
+  std::fs::create_dir_all(&project_root).unwrap();
+  let _ = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri("/api/projects")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::COOKIE, &cookie)
+        .header("x-csrf-token", csrf)
+        .body(Body::from(
+          json!({
+            "name": "listed-project",
+            "rootPath": project_root.to_string_lossy()
+          })
+          .to_string(),
+        ))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+  let projects_response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .uri("/api/projects")
+        .header(header::COOKIE, &cookie)
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(projects_response.status(), StatusCode::OK);
+  let projects_payload = read_json(projects_response.into_body()).await;
+  let projects = projects_payload.get("projects").and_then(Value::as_array).unwrap();
+  assert_eq!(projects.len(), 1);
+  assert_eq!(projects[0].get("name").and_then(Value::as_str), Some("listed-project"));
+
+  let users_response = build_app(state)
+    .oneshot(
+      Request::builder()
+        .uri("/api/users")
+        .header(header::COOKIE, &cookie)
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(users_response.status(), StatusCode::OK);
+  let users_payload = read_json(users_response.into_body()).await;
+  let users = users_payload.get("users").and_then(Value::as_array).unwrap();
+  assert_eq!(users.len(), 1);
+  assert_eq!(users[0].get("username").and_then(Value::as_str), Some("admin"));
 }
 
 async fn login(app: axum::Router) -> axum::response::Response {

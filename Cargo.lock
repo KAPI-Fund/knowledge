@@ -776,8 +776,12 @@ dependencies = [
 name = "knowledge-core"
 version = "0.1.0"
 dependencies = [
+ "base64",
+ "serde",
+ "serde_json",
  "tempfile",
  "thiserror",
+ "time",
 ]
 
 [[package]]
