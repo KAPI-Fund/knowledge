@@ -31,6 +31,14 @@ body {
   border-radius: 10px;
 }
 
+.card textarea {
+  padding: 10px 12px;
+  border: 1px solid #d1d5db;
+  border-radius: 10px;
+  resize: vertical;
+  font: inherit;
+}
+
 .card button {
   padding: 10px 14px;
   border: 0;
@@ -60,4 +68,67 @@ body {
 
 .content {
   padding: 24px;
+}
+
+.stack {
+  display: grid;
+  gap: 16px;
+}
+
+.stack.compact {
+  gap: 4px;
+}
+
+.stats {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.subnav {
+  display: flex;
+  gap: 12px;
+}
+
+.subnav a {
+  color: #0f766e;
+  text-decoration: none;
+}
+
+.panel {
+  max-width: 720px;
+}
+
+.results-list {
+  display: grid;
+  gap: 12px;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.graph-layout {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: minmax(0, 2fr) minmax(260px, 1fr);
+}
+
+.ghost-button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #0f766e;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+
+@media (max-width: 900px) {
+  .shell {
+    grid-template-columns: 1fr;
+  }
+
+  .graph-layout {
+    grid-template-columns: 1fr;
+  }
 }

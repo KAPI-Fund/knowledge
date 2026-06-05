@@ -5,11 +5,14 @@ edition.workspace = true
 license.workspace = true
 
 [dev-dependencies]
+anyhow.workspace = true
 axum.workspace = true
 http.workspace = true
 knowledge-server = { path = "../../crates/knowledge-server" }
+redis.workspace = true
 serde_json.workspace = true
 sqlx.workspace = true
 tempfile.workspace = true
 tokio.workspace = true
 tower.workspace = true
+uuid.workspace = true

@@ -19,11 +19,12 @@ axum = { version = "0.8.4", features = ["macros"] }
 base64 = "0.22.1"
 http = "1.3.1"
 rand_core = { version = "0.6.4", features = ["getrandom"] }
+redis = { version = "0.32.7", features = ["tokio-comp"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
-sqlx = { version = "0.8.6", features = ["sqlite", "runtime-tokio-rustls", "macros", "migrate", "uuid", "time"] }
+sqlx = { version = "0.8.6", features = ["postgres", "runtime-tokio-rustls", "macros", "migrate", "uuid", "time"] }
 tempfile = "3.23.0"
-tokio = { version = "1.48.0", features = ["macros", "rt-multi-thread", "signal", "fs"] }
+tokio = { version = "1.48.0", features = ["macros", "rt-multi-thread", "signal", "fs", "time"] }
 tower = "0.5.2"
 tracing = "0.1.41"
 thiserror = "2.0.17"

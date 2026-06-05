@@ -1,3 +1,5 @@
+mod support;
+
 use std::fs;
 
 use axum::body::{to_bytes, Body};
@@ -5,17 +7,15 @@ use axum::http::{header, Request, StatusCode};
 use knowledge_server::config::AppConfig;
 use knowledge_server::{bootstrap_state, build_app};
 use serde_json::{json, Value};
+use support::TestEnvironment;
 use tempfile::tempdir;
 use tower::util::ServiceExt;
 
 #[tokio::test]
 async fn ingest_source_generates_summary_and_updates_indexes() {
   let temp = tempdir().unwrap();
-  let database_url = format!(
-    "sqlite://{}",
-    temp.path().join("ingest.sqlite").to_string_lossy().replace('\\', "/")
-  );
-  let config = AppConfig::for_tests(database_url);
+  let _env = TestEnvironment::start("ingest-source").await.unwrap();
+  let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
   let state = bootstrap_state(&config).await.unwrap();
   let (cookie, csrf) = login_and_csrf(state.clone()).await;
   let project_root = temp.path().join("ingest-project");
@@ -72,16 +72,23 @@ async fn ingest_source_generates_summary_and_updates_indexes() {
 
   let overview = fs::read_to_string(project_root.join("wiki/overview.md")).unwrap();
   assert!(overview.contains("Attention"));
+
+  let analysis_checkpoint =
+    fs::read_to_string(project_root.join(".knowledge/ingest/checkpoints/attention.analysis.json"))
+      .unwrap();
+  assert!(analysis_checkpoint.contains("\"title\":\"Attention\""));
+
+  let generation_checkpoint =
+    fs::read_to_string(project_root.join(".knowledge/ingest/checkpoints/attention.generation.json"))
+      .unwrap();
+  assert!(generation_checkpoint.contains("\"summaryPath\":\"wiki/sources/attention.md\""));
 }
 
 #[tokio::test]
 async fn query_api_returns_answer_and_citations_from_search_context() {
   let temp = tempdir().unwrap();
-  let database_url = format!(
-    "sqlite://{}",
-    temp.path().join("query.sqlite").to_string_lossy().replace('\\', "/")
-  );
-  let config = AppConfig::for_tests(database_url);
+  let _env = TestEnvironment::start("query-answer").await.unwrap();
+  let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
   let state = bootstrap_state(&config).await.unwrap();
   let (cookie, csrf) = login_and_csrf(state.clone()).await;
   let project_root = temp.path().join("query-project");
@@ -109,6 +116,13 @@ async fn query_api_returns_answer_and_citations_from_search_context() {
   assert_eq!(response.status(), StatusCode::OK);
   let payload = read_json(response.into_body()).await;
   assert!(payload.get("answer").and_then(Value::as_str).unwrap().contains("Attention"));
+  assert!(
+    payload
+      .get("contextSummary")
+      .and_then(Value::as_str)
+      .unwrap()
+      .contains("wiki/concepts/attention.md")
+  );
   let citations = payload.get("citations").and_then(Value::as_array).unwrap();
   assert_eq!(citations.len(), 1);
   assert_eq!(

@@ -1,7 +1,7 @@
 use axum::extract::{Path, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::IntoResponse;
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, patch, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::json;
@@ -9,11 +9,14 @@ use serde_json::json;
 use crate::app::state::AppState;
 use crate::auth::session::find_session;
 use crate::http::error::ApiError;
-use crate::projects::service::{create_project, project_root_for_id};
-use knowledge_core::graph::build_graph;
+use crate::projects::audit::{append_audit_log, list_audit_logs, CreateAuditLog};
+use crate::projects::service::{create_project, project_detail, project_root_for_id};
+use crate::projects::tasks::{create_completed_task, get_task, list_tasks, update_task_status, CreateTaskRecord};
+use knowledge_core::graph::{build_graph, neighbors_for_node};
 use knowledge_core::ingest::{analyze_source, generate_wiki_from_analysis};
+use knowledge_core::project::reviews::{load_reviews, update_review_status};
 use knowledge_core::project::sources::{
-  delete_source, import_source, list_sources, load_queue, rescan_sources,
+  delete_source, import_source, list_sources, rescan_sources,
 };
 use knowledge_core::query::answer_from_results;
 use knowledge_core::search::search_project;
@@ -21,6 +24,7 @@ use knowledge_core::search::search_project;
 pub fn router() -> Router<AppState> {
   Router::new()
     .route("/api/projects", get(list_projects_handler).post(create_project_handler))
+    .route("/api/projects/{project_id}", get(project_detail_handler))
     .route("/api/projects/{project_id}/members", get(list_project_members))
     .route("/api/projects/{project_id}/sources", get(list_sources_handler))
     .route("/api/projects/{project_id}/sources:import", post(import_source_handler))
@@ -28,9 +32,16 @@ pub fn router() -> Router<AppState> {
     .route("/api/projects/{project_id}/sources/{*relative_path}", delete(delete_source_handler))
     .route("/api/projects/{project_id}/search", post(search_handler))
     .route("/api/projects/{project_id}/graph", get(graph_handler))
+    .route("/api/projects/{project_id}/graph/{node_id}/neighbors", get(graph_neighbors_handler))
     .route("/api/projects/{project_id}/tasks", get(tasks_handler))
+    .route("/api/projects/{project_id}/tasks/{task_id}", get(task_detail_handler))
+    .route("/api/projects/{project_id}/tasks/{task_id}/retry", post(retry_task_handler))
+    .route("/api/projects/{project_id}/tasks/{task_id}/cancel", post(cancel_task_handler))
     .route("/api/projects/{project_id}/ingest", post(ingest_handler))
     .route("/api/projects/{project_id}/query", post(query_handler))
+    .route("/api/projects/{project_id}/reviews", get(list_reviews_handler))
+    .route("/api/projects/{project_id}/reviews/{review_id}", patch(update_review_handler))
+    .route("/api/projects/{project_id}/audit-logs", get(audit_logs_handler))
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -56,6 +67,11 @@ pub struct SearchRequest {
 #[serde(rename_all = "camelCase")]
 pub struct IngestRequest {
   pub relative_path: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpdateReviewRequest {
+  pub status: String,
 }
 
 async fn create_project_handler(
@@ -96,6 +112,15 @@ async fn list_projects_handler(
   Ok(Json(json!({ "projects": projects })))
 }
 
+async fn project_detail_handler(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Path(project_id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+  let _session = authorized_session(&state, &headers, Some(&project_id)).await?;
+  Ok(Json(project_detail(&state, &project_id).await?))
+}
+
 async fn list_project_members(
   State(state): State<AppState>,
   headers: HeaderMap,
@@ -103,8 +128,8 @@ async fn list_project_members(
 ) -> Result<impl IntoResponse, ApiError> {
   let _session = authorized_session(&state, &headers, Some(&project_id)).await?;
 
-  let rows = sqlx::query_as::<_, (String, String, i64)>(
-    "SELECT user_id, role, can_import FROM project_members WHERE project_id = ?1 ORDER BY created_at ASC",
+  let rows = sqlx::query_as::<_, (String, String, bool)>(
+    "SELECT user_id, role, can_import FROM project_members WHERE project_id = $1 ORDER BY created_at ASC",
   )
   .bind(&project_id)
   .fetch_all(&state.pool)
@@ -117,7 +142,7 @@ async fn list_project_members(
       json!({
         "userId": user_id,
         "role": role,
-        "canImport": can_import != 0
+        "canImport": can_import
       })
     })
     .collect::<Vec<_>>();
@@ -149,6 +174,32 @@ async fn import_source_handler(
     import_source(&root, &payload.file_name, &payload.content_base64).map_err(|error| {
       ApiError::bad_request(error.to_string())
     })?;
+  let task = create_completed_task(
+    &state,
+    CreateTaskRecord {
+      project_id: project_id.clone(),
+      task_type: "source_import".to_string(),
+      title: format!("Imported {}", payload.file_name),
+      relative_path: Some(source.relative_path.clone()),
+      detail: json!({ "size": source.size }),
+      created_by: session.user_id.clone(),
+    },
+  )
+  .await?;
+  append_audit_log(
+    &state,
+    CreateAuditLog {
+      project_id: Some(project_id.clone()),
+      actor_id: session.user_id.clone(),
+      action: "source.imported".to_string(),
+      target_type: "source".to_string(),
+      target_id: source.relative_path.clone(),
+      task_id: Some(task.id),
+      summary: format!("Imported source {}", payload.file_name),
+      metadata: json!({ "relativePath": source.relative_path }),
+    },
+  )
+  .await?;
   Ok((StatusCode::CREATED, Json(source)))
 }
 
@@ -162,6 +213,32 @@ async fn rescan_sources_handler(
   let root = project_root_for_id(&state, &project_id).await?;
   let discovered_count =
     rescan_sources(&root).map_err(|error| ApiError::bad_request(error.to_string()))?;
+  let task = create_completed_task(
+    &state,
+    CreateTaskRecord {
+      project_id: project_id.clone(),
+      task_type: "source_rescan".to_string(),
+      title: "Rescanned sources".to_string(),
+      relative_path: None,
+      detail: json!({ "discoveredCount": discovered_count }),
+      created_by: session.user_id.clone(),
+    },
+  )
+  .await?;
+  append_audit_log(
+    &state,
+    CreateAuditLog {
+      project_id: Some(project_id.clone()),
+      actor_id: session.user_id.clone(),
+      action: "sources.rescanned".to_string(),
+      target_type: "project".to_string(),
+      target_id: project_id.clone(),
+      task_id: Some(task.id),
+      summary: "Rescanned project sources".to_string(),
+      metadata: json!({ "discoveredCount": discovered_count }),
+    },
+  )
+  .await?;
   Ok(Json(json!({ "discoveredCount": discovered_count })))
 }
 
@@ -174,6 +251,32 @@ async fn delete_source_handler(
   validate_csrf(&headers, &session.csrf_token)?;
   let root = project_root_for_id(&state, &project_id).await?;
   delete_source(&root, &relative_path).map_err(|error| ApiError::bad_request(error.to_string()))?;
+  let task = create_completed_task(
+    &state,
+    CreateTaskRecord {
+      project_id: project_id.clone(),
+      task_type: "source_delete".to_string(),
+      title: format!("Deleted {}", relative_path),
+      relative_path: Some(format!("raw/sources/{relative_path}")),
+      detail: json!({}),
+      created_by: session.user_id.clone(),
+    },
+  )
+  .await?;
+  append_audit_log(
+    &state,
+    CreateAuditLog {
+      project_id: Some(project_id.clone()),
+      actor_id: session.user_id.clone(),
+      action: "source.deleted".to_string(),
+      target_type: "source".to_string(),
+      target_id: relative_path.clone(),
+      task_id: Some(task.id),
+      summary: format!("Deleted source {}", relative_path),
+      metadata: json!({ "relativePath": relative_path }),
+    },
+  )
+  .await?;
   Ok(StatusCode::NO_CONTENT)
 }
 
@@ -202,15 +305,61 @@ async fn graph_handler(
   Ok(Json(json!({ "nodes": nodes, "edges": edges })))
 }
 
+async fn graph_neighbors_handler(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Path((project_id, node_id)): Path<(String, String)>,
+) -> Result<impl IntoResponse, ApiError> {
+  let _session = authorized_session(&state, &headers, Some(&project_id)).await?;
+  let root = project_root_for_id(&state, &project_id).await?;
+  let neighborhood = neighbors_for_node(root.as_path(), &node_id)
+    .map_err(|error| ApiError::bad_request(error.to_string()))?;
+  Ok(Json(json!(neighborhood)))
+}
+
 async fn tasks_handler(
   State(state): State<AppState>,
   headers: HeaderMap,
   Path(project_id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
   let _session = authorized_session(&state, &headers, Some(&project_id)).await?;
-  let root = project_root_for_id(&state, &project_id).await?;
-  let queue = load_queue(&root).map_err(|error| ApiError::bad_request(error.to_string()))?;
-  Ok(Json(json!({ "tasks": queue.tasks })))
+  let tasks = list_tasks(&state, &project_id).await?;
+  Ok(Json(json!({ "tasks": tasks })))
+}
+
+async fn task_detail_handler(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Path((project_id, task_id)): Path<(String, String)>,
+) -> Result<impl IntoResponse, ApiError> {
+  let _session = authorized_session(&state, &headers, Some(&project_id)).await?;
+  Ok(Json(json!(get_task(&state, &project_id, &task_id).await?)))
+}
+
+async fn retry_task_handler(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Path((project_id, task_id)): Path<(String, String)>,
+) -> Result<impl IntoResponse, ApiError> {
+  let session = authorized_session(&state, &headers, Some(&project_id)).await?;
+  validate_csrf(&headers, &session.csrf_token)?;
+  let updated = update_task_status(&state, &project_id, &task_id, "queued").await?;
+  Ok(Json(json!(updated)))
+}
+
+async fn cancel_task_handler(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Path((project_id, task_id)): Path<(String, String)>,
+) -> Result<impl IntoResponse, ApiError> {
+  let session = authorized_session(&state, &headers, Some(&project_id)).await?;
+  validate_csrf(&headers, &session.csrf_token)?;
+  let current = get_task(&state, &project_id, &task_id).await?;
+  if current.status == "completed" {
+    return Err(ApiError::bad_request("completed tasks cannot be cancelled"));
+  }
+  let updated = update_task_status(&state, &project_id, &task_id, "cancelled").await?;
+  Ok(Json(json!(updated)))
 }
 
 async fn ingest_handler(
@@ -233,6 +382,32 @@ async fn ingest_handler(
   let analysis = analyze_source(source_name, &content);
   let result = generate_wiki_from_analysis(&root, source_name, &analysis)
     .map_err(|error| ApiError::bad_request(error.to_string()))?;
+  let task = create_completed_task(
+    &state,
+    CreateTaskRecord {
+      project_id: project_id.clone(),
+      task_type: "ingest_source".to_string(),
+      title: format!("Ingested {}", source_name),
+      relative_path: Some(payload.relative_path.clone()),
+      detail: json!({ "summaryPath": result.summary_path }),
+      created_by: session.user_id.clone(),
+    },
+  )
+  .await?;
+  append_audit_log(
+    &state,
+    CreateAuditLog {
+      project_id: Some(project_id.clone()),
+      actor_id: session.user_id.clone(),
+      action: "ingest.completed".to_string(),
+      target_type: "source".to_string(),
+      target_id: payload.relative_path.clone(),
+      task_id: Some(task.id),
+      summary: format!("Ingested source {}", payload.relative_path),
+      metadata: json!({ "summaryPath": result.summary_path }),
+    },
+  )
+  .await?;
   Ok(Json(json!(result)))
 }
 
@@ -248,6 +423,57 @@ async fn query_handler(
     .map_err(|error| ApiError::bad_request(error.to_string()))?;
   let answer = answer_from_results(&payload.query, &results);
   Ok(Json(json!(answer)))
+}
+
+async fn list_reviews_handler(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Path(project_id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+  let _session = authorized_session(&state, &headers, Some(&project_id)).await?;
+  let root = project_root_for_id(&state, &project_id).await?;
+  let store = load_reviews(&root).map_err(|error| ApiError::bad_request(error.to_string()))?;
+  Ok(Json(json!({ "reviews": store.reviews })))
+}
+
+async fn update_review_handler(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Path((project_id, review_id)): Path<(String, String)>,
+  Json(payload): Json<UpdateReviewRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+  let session = authorized_session(&state, &headers, Some(&project_id)).await?;
+  validate_csrf(&headers, &session.csrf_token)?;
+  let root = project_root_for_id(&state, &project_id).await?;
+  let updated =
+    update_review_status(&root, &review_id, &payload.status).map_err(|error| {
+      ApiError::bad_request(error.to_string())
+    })?;
+  append_audit_log(
+    &state,
+    CreateAuditLog {
+      project_id: Some(project_id),
+      actor_id: session.user_id,
+      action: "review.updated".to_string(),
+      target_type: "review".to_string(),
+      target_id: review_id,
+      task_id: None,
+      summary: format!("Updated review status to {}", payload.status),
+      metadata: json!({ "status": payload.status }),
+    },
+  )
+  .await?;
+  Ok(Json(json!(updated)))
+}
+
+async fn audit_logs_handler(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Path(project_id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+  let _session = authorized_session(&state, &headers, Some(&project_id)).await?;
+  let items = list_audit_logs(&state, &project_id).await?;
+  Ok(Json(json!({ "items": items })))
 }
 
 fn extract_session_id(headers: &HeaderMap) -> Option<String> {
@@ -288,7 +514,7 @@ async fn authorized_session(
 
   if let Some(project_id) = project_id {
     let membership = sqlx::query_scalar::<_, i64>(
-      "SELECT COUNT(*) FROM project_members WHERE project_id = ?1 AND user_id = ?2",
+      "SELECT COUNT(*) FROM project_members WHERE project_id = $1 AND user_id = $2",
     )
     .bind(project_id)
     .bind(&session.user_id)

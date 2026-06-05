@@ -7,6 +7,7 @@ export function AppShell() {
         <NavLink to="/">Dashboard</NavLink>
         <NavLink to="/projects">Projects</NavLink>
         <NavLink to="/users">Users</NavLink>
+        <NavLink to="/settings">Settings</NavLink>
       </aside>
       <main className="content">
         <Outlet />

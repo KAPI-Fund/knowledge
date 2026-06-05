@@ -5,5 +5,6 @@ test("admin can sign in and reach the projects page", async ({ page }) => {
   await page.getByLabel("Username").fill("admin");
   await page.getByLabel("Password").fill("secret-password");
   await page.getByRole("button", { name: "Sign in" }).click();
+  await page.waitForURL("**/projects");
   await expect(page.getByRole("heading", { name: "Projects" })).toBeVisible();
 });

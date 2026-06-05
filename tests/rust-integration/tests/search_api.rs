@@ -1,3 +1,5 @@
+mod support;
+
 use std::fs;
 
 use axum::body::{to_bytes, Body};
@@ -5,17 +7,15 @@ use axum::http::{header, Request, StatusCode};
 use knowledge_server::config::AppConfig;
 use knowledge_server::{bootstrap_state, build_app};
 use serde_json::{json, Value};
+use support::TestEnvironment;
 use tempfile::tempdir;
 use tower::util::ServiceExt;
 
 #[tokio::test]
 async fn search_returns_matching_wiki_pages_and_snippets() {
   let temp = tempdir().unwrap();
-  let database_url = format!(
-    "sqlite://{}",
-    temp.path().join("search.sqlite").to_string_lossy().replace('\\', "/")
-  );
-  let config = AppConfig::for_tests(database_url);
+  let _env = TestEnvironment::start("search-query").await.unwrap();
+  let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
   let state = bootstrap_state(&config).await.unwrap();
   let (cookie, csrf) = login_and_csrf(state.clone()).await;
   let project_root = temp.path().join("search-project");
@@ -60,11 +60,8 @@ async fn search_returns_matching_wiki_pages_and_snippets() {
 #[tokio::test]
 async fn graph_returns_nodes_and_edges_from_wikilinks() {
   let temp = tempdir().unwrap();
-  let database_url = format!(
-    "sqlite://{}",
-    temp.path().join("graph.sqlite").to_string_lossy().replace('\\', "/")
-  );
-  let config = AppConfig::for_tests(database_url);
+  let _env = TestEnvironment::start("graph-query").await.unwrap();
+  let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
   let state = bootstrap_state(&config).await.unwrap();
   let (cookie, csrf) = login_and_csrf(state.clone()).await;
   let project_root = temp.path().join("graph-project");
@@ -101,11 +98,8 @@ async fn graph_returns_nodes_and_edges_from_wikilinks() {
 #[tokio::test]
 async fn task_endpoint_returns_source_task_queue() {
   let temp = tempdir().unwrap();
-  let database_url = format!(
-    "sqlite://{}",
-    temp.path().join("tasks.sqlite").to_string_lossy().replace('\\', "/")
-  );
-  let config = AppConfig::for_tests(database_url);
+  let _env = TestEnvironment::start("task-queue").await.unwrap();
+  let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
   let state = bootstrap_state(&config).await.unwrap();
   let (cookie, csrf) = login_and_csrf(state.clone()).await;
   let project_root = temp.path().join("tasks-project");

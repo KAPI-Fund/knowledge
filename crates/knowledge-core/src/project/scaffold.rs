@@ -31,6 +31,7 @@ pub fn initialize_project(root_path: &Path) -> Result<ProjectRoot, ProjectRootEr
   fs::write(root_path.join("wiki/log.md"), "# Research Log\n\n")?;
   fs::write(root_path.join("wiki/overview.md"), overview_template())?;
   fs::write(root_path.join(".knowledge/ingest/queue.json"), "{\"tasks\":[]}")?;
+  fs::write(root_path.join(".knowledge/reviews/items.json"), "{\"reviews\":[]}")?;
 
   ProjectRoot::new(root_path)
 }

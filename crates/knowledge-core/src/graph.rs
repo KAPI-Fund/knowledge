@@ -20,6 +20,13 @@ pub struct GraphEdge {
   pub target: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphNeighborhood {
+  pub node: GraphNode,
+  pub neighbors: Vec<GraphNode>,
+}
+
 pub fn build_graph(project_root: &Path) -> Result<(Vec<GraphNode>, Vec<GraphEdge>), std::io::Error> {
   let wiki_root = project_root.join("wiki");
   let mut nodes = Vec::new();
@@ -51,6 +58,38 @@ pub fn build_graph(project_root: &Path) -> Result<(Vec<GraphNode>, Vec<GraphEdge
   }
 
   Ok((nodes, edges))
+}
+
+pub fn neighbors_for_node(
+  project_root: &Path,
+  node_id: &str,
+) -> Result<GraphNeighborhood, std::io::Error> {
+  let (nodes, edges) = build_graph(project_root)?;
+  let node = nodes
+    .iter()
+    .find(|node| node.id == node_id)
+    .cloned()
+    .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "node not found"))?;
+
+  let neighbor_ids = edges
+    .iter()
+    .filter_map(|edge| {
+      if edge.source == node_id {
+        Some(edge.target.clone())
+      } else if edge.target == node_id {
+        Some(edge.source.clone())
+      } else {
+        None
+      }
+    })
+    .collect::<BTreeSet<_>>();
+
+  let neighbors = nodes
+    .into_iter()
+    .filter(|candidate| neighbor_ids.contains(&candidate.id))
+    .collect::<Vec<_>>();
+
+  Ok(GraphNeighborhood { node, neighbors })
 }
 
 fn collect_pages(

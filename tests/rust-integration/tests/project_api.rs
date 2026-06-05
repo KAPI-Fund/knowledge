@@ -1,20 +1,19 @@
+mod support;
+
 use axum::body::{to_bytes, Body};
 use axum::http::{header, Request, StatusCode};
 use knowledge_server::config::AppConfig;
 use knowledge_server::{bootstrap_state, build_app};
 use serde_json::{json, Value};
+use support::TestEnvironment;
 use tempfile::tempdir;
 use tower::util::ServiceExt;
 
 #[tokio::test]
 async fn admin_can_create_project_with_absolute_root() {
   let temp = tempdir().unwrap();
-  let database_path = temp.path().join("project.sqlite");
-  let database_url = format!(
-    "sqlite://{}",
-    database_path.to_string_lossy().replace('\\', "/")
-  );
-  let config = AppConfig::for_tests(database_url);
+  let _env = TestEnvironment::start("project-create").await.unwrap();
+  let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
   let state = bootstrap_state(&config).await.unwrap();
 
   let login_app = build_app(state.clone());
@@ -66,13 +65,8 @@ async fn admin_can_create_project_with_absolute_root() {
 
 #[tokio::test]
 async fn non_member_cannot_list_project_members() {
-  let temp = tempdir().unwrap();
-  let database_path = temp.path().join("members.sqlite");
-  let database_url = format!(
-    "sqlite://{}",
-    database_path.to_string_lossy().replace('\\', "/")
-  );
-  let config = AppConfig::for_tests(database_url);
+  let _env = TestEnvironment::start("project-members").await.unwrap();
+  let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
   let state = bootstrap_state(&config).await.unwrap();
   let app = build_app(state);
 
@@ -87,12 +81,8 @@ async fn non_member_cannot_list_project_members() {
 #[tokio::test]
 async fn list_projects_and_users_return_registered_data() {
   let temp = tempdir().unwrap();
-  let database_path = temp.path().join("listing.sqlite");
-  let database_url = format!(
-    "sqlite://{}",
-    database_path.to_string_lossy().replace('\\', "/")
-  );
-  let config = AppConfig::for_tests(database_url);
+  let _env = TestEnvironment::start("project-listing").await.unwrap();
+  let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
   let state = bootstrap_state(&config).await.unwrap();
 
   let login_app = build_app(state.clone());

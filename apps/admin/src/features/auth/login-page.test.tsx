@@ -10,7 +10,7 @@ const mockLogin = vi.fn();
 
 vi.mock("./api", () => ({
   useLoginMutation: () => ({
-    mutateAsync: mockLogin,
+    mutateAsync: mockLogin.mockResolvedValue({ csrfToken: "csrf-token" }),
   }),
 }));
 

@@ -13,6 +13,7 @@ pub struct QueryCitation {
 #[serde(rename_all = "camelCase")]
 pub struct QueryAnswer {
   pub answer: String,
+  pub context_summary: String,
   pub citations: Vec<QueryCitation>,
 }
 
@@ -32,5 +33,16 @@ pub fn answer_from_results(query: &str, results: &[SearchResult]) -> QueryAnswer
     format!("{query} -> no matching wiki content")
   };
 
-  QueryAnswer { answer, citations }
+  let context_summary = results
+    .iter()
+    .take(3)
+    .map(|result| format!("{} ({})", result.path, result.title))
+    .collect::<Vec<_>>()
+    .join("; ");
+
+  QueryAnswer {
+    answer,
+    context_summary,
+    citations,
+  }
 }

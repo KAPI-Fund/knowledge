@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 use crate::app::state::AppState;
 use crate::auth::password::{hash_password, verify_password};
-use crate::auth::session::create_session;
+use crate::auth::session::{create_session, destroy_session, find_session};
 use crate::http::error::ApiError;
 
 pub fn router() -> Router<AppState> {
@@ -39,7 +39,7 @@ async fn login(
   ensure_admin_user(&state, &payload.username, &payload.password).await?;
 
   let user = sqlx::query_as::<_, (String, String, String)>(
-    "SELECT id, username, password_hash FROM users WHERE username = ?1",
+    "SELECT id, username, password_hash FROM users WHERE username = $1",
   )
   .bind(&payload.username)
   .fetch_one(&state.pool)
@@ -68,23 +68,69 @@ async fn login(
   Ok(response)
 }
 
-async fn logout() -> StatusCode {
-  StatusCode::OK
-}
-
-async fn me(request: Request) -> Result<StatusCode, ApiError> {
-  let authorized = request
+async fn logout(
+  State(state): State<AppState>,
+  request: Request,
+) -> Result<impl IntoResponse, ApiError> {
+  if let Some(session_id) = request
     .headers()
     .get(header::COOKIE)
     .and_then(|value| value.to_str().ok())
-    .map(|value| value.contains("knowledge_session="))
-    .unwrap_or(false);
-
-  if authorized {
-    Ok(StatusCode::OK)
-  } else {
-    Err(ApiError::unauthorized("missing session"))
+    .and_then(|value| {
+      value
+        .split(';')
+        .map(str::trim)
+        .find(|item| item.starts_with("knowledge_session="))
+        .map(|item| item.trim_start_matches("knowledge_session=").to_string())
+    })
+  {
+    destroy_session(&state, &session_id).await?;
   }
+
+  let mut response = StatusCode::OK.into_response();
+  response.headers_mut().append(
+    header::SET_COOKIE,
+    HeaderValue::from_static("knowledge_session=; Max-Age=0; HttpOnly; Path=/; SameSite=Lax"),
+  );
+  Ok(response)
+}
+
+async fn me(
+  State(state): State<AppState>,
+  request: Request,
+) -> Result<impl IntoResponse, ApiError> {
+  let session_id = request
+    .headers()
+    .get(header::COOKIE)
+    .and_then(|value| value.to_str().ok())
+    .and_then(|value| {
+      value
+        .split(';')
+        .map(str::trim)
+        .find(|item| item.starts_with("knowledge_session="))
+        .map(|item| item.trim_start_matches("knowledge_session=").to_string())
+    })
+    .ok_or_else(|| ApiError::unauthorized("missing session"))?;
+
+  let _session = find_session(&state, &session_id)
+    .await?
+    .ok_or_else(|| ApiError::unauthorized("missing session"))?;
+
+  let (id, username, role) = sqlx::query_as::<_, (String, String, String)>(
+    "SELECT id, username, role FROM users WHERE id = $1",
+  )
+  .bind(&_session.user_id)
+  .fetch_one(&state.pool)
+  .await
+  .map_err(ApiError::from)?;
+
+  Ok(Json(serde_json::json!({
+    "user": {
+      "id": id,
+      "username": username,
+      "role": role
+    }
+  })))
 }
 
 async fn ensure_admin_user(
@@ -92,22 +138,14 @@ async fn ensure_admin_user(
   username: &str,
   password: &str,
 ) -> Result<(), ApiError> {
-  let existing = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users WHERE username = ?1")
-    .bind(username)
-    .fetch_one(&state.pool)
-    .await
-    .map_err(ApiError::from)?;
-
-  if existing > 0 {
-    return Ok(());
-  }
-
   let created_at = OffsetDateTime::now_utc()
     .format(&Rfc3339)
     .map_err(|_| ApiError::internal("failed to format created_at"))?;
 
   sqlx::query(
-    "INSERT INTO users (id, username, password_hash, role, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+    "INSERT INTO users (id, username, password_hash, role, created_at)
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (username) DO NOTHING",
   )
   .bind(Uuid::new_v4().to_string())
   .bind(username)

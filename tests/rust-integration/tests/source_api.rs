@@ -1,3 +1,5 @@
+mod support;
+
 use std::fs;
 use std::path::Path;
 
@@ -6,18 +8,15 @@ use axum::http::{header, Request, StatusCode};
 use knowledge_server::config::AppConfig;
 use knowledge_server::{bootstrap_state, build_app};
 use serde_json::{json, Value};
+use support::TestEnvironment;
 use tempfile::tempdir;
 use tower::util::ServiceExt;
 
 #[tokio::test]
 async fn import_source_writes_file_lists_source_and_records_task() {
   let temp = tempdir().unwrap();
-  let database_path = temp.path().join("source-import.sqlite");
-  let database_url = format!(
-    "sqlite://{}",
-    database_path.to_string_lossy().replace('\\', "/")
-  );
-  let config = AppConfig::for_tests(database_url);
+  let _env = TestEnvironment::start("source-import").await.unwrap();
+  let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
   let state = bootstrap_state(&config).await.unwrap();
   let (cookie, csrf) = login_and_csrf(state.clone()).await;
   let project_id = create_project(state.clone(), &cookie, &csrf, temp.path().join("wiki-import")).await;
@@ -76,12 +75,8 @@ async fn import_source_writes_file_lists_source_and_records_task() {
 #[tokio::test]
 async fn rescan_and_delete_source_update_catalog_and_task_log() {
   let temp = tempdir().unwrap();
-  let database_path = temp.path().join("source-rescan.sqlite");
-  let database_url = format!(
-    "sqlite://{}",
-    database_path.to_string_lossy().replace('\\', "/")
-  );
-  let config = AppConfig::for_tests(database_url);
+  let _env = TestEnvironment::start("source-rescan").await.unwrap();
+  let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
   let state = bootstrap_state(&config).await.unwrap();
   let (cookie, csrf) = login_and_csrf(state.clone()).await;
   let project_root = temp.path().join("wiki-rescan");

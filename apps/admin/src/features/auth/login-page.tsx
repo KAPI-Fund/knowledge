@@ -11,7 +11,8 @@ export function LoginPage() {
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    await login.mutateAsync({ username, password });
+    const result = await login.mutateAsync({ username, password });
+    window.sessionStorage.setItem("knowledge.csrfToken", result.csrfToken);
     navigate("/projects");
   }
 

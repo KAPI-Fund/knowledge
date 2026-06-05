@@ -3,6 +3,7 @@ use std::path::Path;
 
 use serde::Serialize;
 
+use crate::project::reviews::maybe_add_review_for_source;
 use crate::project::root::ProjectRoot;
 
 #[derive(Debug, Clone, Serialize)]
@@ -12,9 +13,16 @@ pub struct IngestResult {
 }
 
 #[derive(Debug, Clone)]
+#[derive(Serialize)]
 pub struct AnalysisResult {
   pub title: String,
   pub summary_markdown: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GenerationCheckpoint {
+  summary_path: String,
 }
 
 pub fn analyze_source(source_name: &str, content: &str) -> AnalysisResult {
@@ -43,6 +51,8 @@ pub fn generate_wiki_from_analysis(
     analysis.title, source_name, analysis.title, analysis.summary_markdown
   );
   fs::write(summary_abs, summary)?;
+  write_checkpoints(root.as_path(), source_name, analysis, &summary_path)?;
+  maybe_add_review_for_source(root, source_name, &analysis.summary_markdown).map_err(io_from_root_error)?;
   update_index(root.as_path(), source_name, &analysis.title)?;
   update_log(root.as_path(), &analysis.title)?;
   update_overview(root.as_path(), &analysis.title)?;
@@ -74,6 +84,27 @@ fn update_overview(root: &Path, title: &str) -> Result<(), std::io::Error> {
     "---\ntype: overview\ntitle: Project Overview\nsources: []\n---\n\n# Overview\n\nThis wiki currently includes {title}.\n"
   );
   fs::write(path, content)
+}
+
+fn write_checkpoints(
+  root: &Path,
+  source_name: &str,
+  analysis: &AnalysisResult,
+  summary_path: &str,
+) -> Result<(), std::io::Error> {
+  let checkpoint_root = root.join(".knowledge/ingest/checkpoints");
+  fs::create_dir_all(&checkpoint_root)?;
+  let stem = source_name.trim_end_matches(".md");
+  let analysis_json = serde_json::to_string(analysis).map_err(std::io::Error::other)?;
+  let generation_json = serde_json::to_string(&GenerationCheckpoint {
+    summary_path: summary_path.to_string(),
+  })
+  .map_err(std::io::Error::other)?;
+  fs::write(checkpoint_root.join(format!("{stem}.analysis.json")), analysis_json)?;
+  fs::write(
+    checkpoint_root.join(format!("{stem}.generation.json")),
+    generation_json,
+  )
 }
 
 fn io_from_root_error(error: crate::project::root::ProjectRootError) -> std::io::Error {
