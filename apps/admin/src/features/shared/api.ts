@@ -167,6 +167,14 @@ const searchResultsSchema = z.object({
       snippet: z.string(),
       score: z.number(),
       titleMatch: z.boolean().optional(),
+      images: z
+        .array(
+          z.object({
+            url: z.string(),
+            alt: z.string(),
+          }),
+        )
+        .optional(),
       content: z.string().optional(),
     }),
   ),

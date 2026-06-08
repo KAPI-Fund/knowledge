@@ -20,6 +20,10 @@ export function SearchPage() {
       title: string;
       snippet: string;
       score: number;
+      images?: Array<{
+        url: string;
+        alt: string;
+      }>;
       content?: string;
     }>;
   } | null>(null);
@@ -79,6 +83,18 @@ export function SearchPage() {
             <strong>{result.title}</strong>
             <ProjectFileLink projectId={projectId} path={result.path} />
             <span>{result.snippet}</span>
+            {result.images?.length ? (
+              <div className="stack compact">
+                <strong>Images</strong>
+                <ul>
+                  {result.images.map((image) => (
+                    <li key={`${result.path}:${image.url}`}>
+                      <span>{image.alt}</span> <code>{image.url}</code>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
             {result.content ? <pre className="preview-pane">{result.content}</pre> : null}
           </li>
         ))}

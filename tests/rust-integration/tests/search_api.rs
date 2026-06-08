@@ -24,7 +24,7 @@ async fn search_returns_matching_wiki_pages_and_snippets() {
 
   fs::write(
     project_root.join("wiki/concepts/chain-of-thought.md"),
-    "---\ntype: concept\ntitle: Chain of Thought\nsources: []\n---\n\n# Chain of Thought\n\nReasoning traces improve stepwise problem solving.\n",
+    "---\ntype: concept\ntitle: Chain of Thought\nsources: []\n---\n\n# Chain of Thought\n\n![Trace Diagram](wiki/media/trace-diagram.png)\n\nReasoning traces improve stepwise problem solving.\n",
   )
   .unwrap();
   fs::write(
@@ -77,6 +77,16 @@ async fn search_returns_matching_wiki_pages_and_snippets() {
       .and_then(Value::as_str)
       .unwrap()
       .contains("Reasoning traces improve")
+  );
+  let images = results[0].get("images").and_then(Value::as_array).unwrap();
+  assert_eq!(images.len(), 1);
+  assert_eq!(
+    images[0].get("url").and_then(Value::as_str),
+    Some("wiki/media/trace-diagram.png"),
+  );
+  assert_eq!(
+    images[0].get("alt").and_then(Value::as_str),
+    Some("Trace Diagram"),
   );
 }
 

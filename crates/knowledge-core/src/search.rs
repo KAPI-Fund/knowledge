@@ -31,12 +31,20 @@ impl Default for SearchOptions {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SearchImageRef {
+  pub url: String,
+  pub alt: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SearchResult {
   pub path: String,
   pub title: String,
   pub snippet: String,
   pub title_match: bool,
   pub score: usize,
+  pub images: Vec<SearchImageRef>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub content: Option<String>,
 }
@@ -198,6 +206,34 @@ pub fn build_snippet(content: &str, query: &str) -> String {
   snippet
 }
 
+pub fn extract_image_refs(content: &str) -> Vec<SearchImageRef> {
+  let mut images = Vec::new();
+  let mut seen = BTreeSet::new();
+  let mut remaining = content;
+
+  while let Some(start) = remaining.find("![") {
+    remaining = &remaining[start + 2..];
+    let Some(alt_end) = remaining.find("](") else {
+      break;
+    };
+    let alt = &remaining[..alt_end];
+    remaining = &remaining[alt_end + 2..];
+    let Some(url_end) = remaining.find(')') else {
+      break;
+    };
+    let url = &remaining[..url_end];
+    if !url.trim().is_empty() && !url.contains(char::is_whitespace) && seen.insert(url.to_string()) {
+      images.push(SearchImageRef {
+        url: url.to_string(),
+        alt: alt.to_string(),
+      });
+    }
+    remaining = &remaining[url_end + 1..];
+  }
+
+  images
+}
+
 fn walk_markdown(
   root: &Path,
   visit: &mut impl FnMut(&Path) -> Result<(), std::io::Error>,
@@ -268,6 +304,7 @@ fn score_file(
     snippet: build_snippet(content, &snippet_anchor),
     title_match: filename_exact || title_has_phrase || title_token_score > 0,
     score,
+    images: extract_image_refs(content),
     content: include_content.then_some(content.to_string()),
   })
 }
@@ -375,7 +412,7 @@ fn relative_to_project(project_root: &Path, path: &Path) -> String {
 mod tests {
   use std::fs;
 
-  use super::{extract_title, search_project, tokenize_query};
+  use super::{extract_image_refs, extract_title, search_project, tokenize_query};
 
   #[test]
   fn extract_title_prefers_frontmatter_title() {
@@ -417,5 +454,17 @@ mod tests {
     assert_eq!(results[0].path, "wiki/concepts/reasoning-models.md");
     assert!(results[0].snippet.contains("Reasoning Models"));
     assert!(results[0].score > results[1].score);
+  }
+
+  #[test]
+  fn extract_image_refs_returns_unique_markdown_images() {
+    let images = extract_image_refs(
+      "![Trace Diagram](wiki/media/trace-diagram.png)\n![Trace Diagram](wiki/media/trace-diagram.png)\n![Flow](raw/assets/flow.jpg)",
+    );
+
+    assert_eq!(images.len(), 2);
+    assert_eq!(images[0].url, "wiki/media/trace-diagram.png");
+    assert_eq!(images[0].alt, "Trace Diagram");
+    assert_eq!(images[1].url, "raw/assets/flow.jpg");
   }
 }

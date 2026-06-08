@@ -30,6 +30,12 @@ const runSearch = vi.fn().mockResolvedValue({
       title: "Demo",
       snippet: "Demo content",
       score: 1,
+      images: [
+        {
+          url: "wiki/media/demo.png",
+          alt: "Demo Diagram",
+        },
+      ],
       content: "# Demo",
     },
   ],
@@ -248,6 +254,8 @@ describe("operations actions", () => {
     });
     expect(await screen.findByText("wiki/sources/demo.md")).toBeInTheDocument();
     expect(screen.getByText("Mode: keyword")).toBeInTheDocument();
+    expect(screen.getByText("Demo Diagram")).toBeInTheDocument();
+    expect(screen.getByText("wiki/media/demo.png")).toBeInTheDocument();
 
     render(
       <QueryClientProvider client={queryClient}>
