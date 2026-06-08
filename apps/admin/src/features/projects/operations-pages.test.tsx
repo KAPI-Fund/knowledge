@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { AppShell } from "../../components/layout/app-shell";
 import { AuditPage } from "../audit/page";
+import { FilesPage } from "../files/page";
 import { GraphPage } from "../graph/page";
 import { ReviewsPage } from "../reviews/page";
 import { SearchPage } from "../search/page";
@@ -75,6 +76,58 @@ vi.mock("../reviews/queries", () => ({
   }),
   useSweepReviewsMutation: () => ({
     mutateAsync: vi.fn(),
+  }),
+}));
+
+vi.mock("../files/queries", () => ({
+  useProjectFilesQuery: () => ({
+    data: {
+      root: "all",
+      truncated: false,
+      files: [
+        {
+          name: "wiki",
+          path: "wiki",
+          isDir: true,
+          children: [
+            {
+              name: "evaluation.md",
+              path: "wiki/evaluation.md",
+              isDir: false,
+              size: 64,
+            },
+          ],
+        },
+        {
+          name: "raw",
+          path: "raw",
+          isDir: true,
+          children: [
+            {
+              name: "sources",
+              path: "raw/sources",
+              isDir: true,
+              children: [
+                {
+                  name: "demo.md",
+                  path: "raw/sources/demo.md",
+                  isDir: false,
+                  size: 32,
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+    isLoading: false,
+  }),
+  useProjectFileContentQuery: (_projectId: string, path: string) => ({
+    data: {
+      path,
+      content: `preview:${path}`,
+    },
+    isLoading: false,
   }),
 }));
 
@@ -150,7 +203,7 @@ vi.mock("../graph/queries", () => ({
 }));
 
 describe("project operation pages", () => {
-  it("navigates to sources, search, graph, reviews, audit, and settings pages", async () => {
+  it("navigates to files, sources, search, graph, reviews, audit, and settings pages", async () => {
     const user = userEvent.setup();
     const queryClient = new QueryClient();
 
@@ -160,6 +213,7 @@ describe("project operation pages", () => {
           <Routes>
             <Route path="/" element={<AppShell />}>
               <Route path="projects/:projectId" element={<ProjectDetailPage />} />
+              <Route path="projects/:projectId/files" element={<FilesPage />} />
               <Route path="projects/:projectId/sources" element={<SourcesPage />} />
               <Route path="projects/:projectId/search" element={<SearchPage />} />
               <Route path="projects/:projectId/graph" element={<GraphPage />} />
@@ -171,6 +225,12 @@ describe("project operation pages", () => {
         </MemoryRouter>
       </QueryClientProvider>,
     );
+
+    await user.click(screen.getByRole("link", { name: "Files" }));
+    expect(await screen.findByRole("heading", { name: "Files" })).toBeInTheDocument();
+    expect(screen.getAllByText("demo.md").length).toBeGreaterThan(0);
+    await user.click(screen.getByRole("button", { name: "demo.md" }));
+    expect(screen.getByText("preview:raw/sources/demo.md")).toBeInTheDocument();
 
     await user.click(screen.getByRole("link", { name: "Sources" }));
     expect(await screen.findByRole("heading", { name: "Sources" })).toBeInTheDocument();
@@ -193,6 +253,9 @@ describe("project operation pages", () => {
     expect(screen.getByText("wiki/evaluation.md")).toBeInTheDocument();
     expect(screen.getByText("demo evaluation")).toBeInTheDocument();
     expect(screen.getByText("Approve")).toBeInTheDocument();
+    await user.click(screen.getByRole("link", { name: "wiki/evaluation.md" }));
+    expect(await screen.findByRole("heading", { name: "Files" })).toBeInTheDocument();
+    expect(screen.getByText("preview:wiki/evaluation.md")).toBeInTheDocument();
 
     await user.click(screen.getByRole("link", { name: "Audit" }));
     expect(await screen.findByRole("heading", { name: "Audit" })).toBeInTheDocument();

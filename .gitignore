@@ -8,3 +8,4 @@ test-results/
 .e2e/
 .env
 .env.*
+*.log

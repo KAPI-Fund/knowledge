@@ -1,11 +1,20 @@
+import { useState } from "react";
 import { useParams } from "react-router-dom";
 
 import { ProjectNav } from "../projects/project-nav";
+import { ProjectFileLink } from "../shared/file-links";
 import { useProjectReviewsQuery, useSweepReviewsMutation, useUpdateReviewMutation } from "./queries";
 
 export function ReviewsPage() {
   const { projectId = "" } = useParams();
-  const reviews = useProjectReviewsQuery(projectId);
+  const [status, setStatus] = useState("unresolved");
+  const [itemType, setItemType] = useState("");
+  const [limit, setLimit] = useState("200");
+  const reviews = useProjectReviewsQuery(projectId, {
+    status,
+    itemType,
+    limit: Number(limit) || 200,
+  });
   const sweepReviews = useSweepReviewsMutation();
   const updateReview = useUpdateReviewMutation();
 
@@ -13,12 +22,30 @@ export function ReviewsPage() {
     <section className="stack">
       <h1>Reviews</h1>
       <ProjectNav projectId={projectId} />
-      <button
-        type="button"
-        onClick={() => sweepReviews.mutateAsync({ projectId })}
-      >
-        Sweep Reviews
-      </button>
+      <div className="card stack compact panel">
+        <label>
+          Status
+          <select value={status} onChange={(event) => setStatus(event.target.value)}>
+            <option value="unresolved">unresolved</option>
+            <option value="resolved">resolved</option>
+            <option value="all">all</option>
+          </select>
+        </label>
+        <label>
+          Type
+          <input value={itemType} onChange={(event) => setItemType(event.target.value)} />
+        </label>
+        <label>
+          Limit
+          <input value={limit} onChange={(event) => setLimit(event.target.value)} />
+        </label>
+        <button
+          type="button"
+          onClick={() => sweepReviews.mutateAsync({ projectId })}
+        >
+          Sweep Reviews
+        </button>
+      </div>
       <ul className="results-list">
         {reviews.data?.map((review) => (
           <li key={review.id} className="card stack compact panel">
@@ -27,13 +54,17 @@ export function ReviewsPage() {
             </div>
             {review.type ? <span>{review.type}</span> : null}
             {review.description ? <p>{review.description}</p> : null}
-            {review.sourcePath ? <span>{review.sourcePath}</span> : null}
+            {review.sourcePath ? (
+              <ProjectFileLink projectId={projectId} path={review.sourcePath} />
+            ) : null}
             {review.affectedPages?.length ? (
               <div className="stack compact">
                 <strong>Affected Pages</strong>
                 <ul>
                   {review.affectedPages.map((page) => (
-                    <li key={page}>{page}</li>
+                    <li key={page}>
+                      <ProjectFileLink projectId={projectId} path={page} />
+                    </li>
                   ))}
                 </ul>
               </div>

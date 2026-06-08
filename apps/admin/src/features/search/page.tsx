@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useParams } from "react-router-dom";
 
 import { ProjectNav } from "../projects/project-nav";
+import { ProjectFileLink } from "../shared/file-links";
 
 import { useProjectSearchMutation } from "./queries";
 
@@ -41,7 +42,7 @@ export function SearchPage() {
         {results.map((result) => (
           <li key={result.path} className="card stack compact panel">
             <strong>{result.title}</strong>
-            <span>{result.path}</span>
+            <ProjectFileLink projectId={projectId} path={result.path} />
             <span>{result.snippet}</span>
           </li>
         ))}

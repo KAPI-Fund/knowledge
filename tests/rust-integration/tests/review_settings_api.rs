@@ -173,7 +173,7 @@ async fn ingest_creates_review_items_and_review_endpoint_can_update_status() {
   let reviews_after = build_app(state)
     .oneshot(
       Request::builder()
-        .uri(format!("/api/projects/{project_id}/reviews"))
+        .uri(format!("/api/projects/{project_id}/reviews?status=all"))
         .header(header::COOKIE, &cookie)
         .body(Body::empty())
         .unwrap(),
@@ -255,7 +255,7 @@ async fn provider_generated_review_blocks_are_persisted_during_ingest() {
   let reviews_response = build_app(state)
     .oneshot(
       Request::builder()
-        .uri(format!("/api/projects/{project_id}/reviews"))
+        .uri(format!("/api/projects/{project_id}/reviews?status=all"))
         .header(header::COOKIE, &cookie)
         .body(Body::empty())
         .unwrap(),
@@ -379,7 +379,7 @@ async fn final_ingest_triggers_review_sweep_for_existing_missing_page_items() {
   let reviews_response = build_app(state)
     .oneshot(
       Request::builder()
-        .uri(format!("/api/projects/{project_id}/reviews"))
+        .uri(format!("/api/projects/{project_id}/reviews?status=all"))
         .header(header::COOKIE, &cookie)
         .body(Body::empty())
         .unwrap(),
@@ -463,7 +463,7 @@ async fn final_ingest_uses_provider_to_semantically_resolve_remaining_reviews() 
   let reviews_response = build_app(state)
     .oneshot(
       Request::builder()
-        .uri(format!("/api/projects/{project_id}/reviews"))
+        .uri(format!("/api/projects/{project_id}/reviews?status=all"))
         .header(header::COOKIE, &cookie)
         .body(Body::empty())
         .unwrap(),
@@ -475,6 +475,84 @@ async fn final_ingest_uses_provider_to_semantically_resolve_remaining_reviews() 
   let reviews = reviews_payload.get("reviews").and_then(Value::as_array).unwrap();
   assert_eq!(reviews.len(), 1);
   assert_eq!(reviews[0].get("status").and_then(Value::as_str), Some("resolved"));
+}
+
+#[tokio::test]
+async fn review_endpoint_supports_status_type_and_limit_filters() {
+  let temp = tempdir().unwrap();
+  let _env = TestEnvironment::start("review-filters").await.unwrap();
+  let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let (cookie, csrf) = login_and_csrf(state.clone()).await;
+  let project_root = temp.path().join("review-filter-project");
+  let project_id = create_project(state.clone(), &cookie, &csrf, project_root.clone()).await;
+
+  std::fs::write(
+    project_root.join(".knowledge/reviews/items.json"),
+    json!({
+      "reviews": [
+        {
+          "id": "review-1",
+          "status": "open",
+          "type": "missing-page",
+          "title": "Missing page: Attention",
+          "description": "Open item"
+        },
+        {
+          "id": "review-2",
+          "status": "resolved",
+          "type": "missing-page",
+          "title": "Missing page: Context Window",
+          "description": "Resolved item"
+        },
+        {
+          "id": "review-3",
+          "status": "open",
+          "type": "duplicate",
+          "title": "Duplicate page: Attention",
+          "description": "Another open item"
+        }
+      ]
+    })
+    .to_string(),
+  )
+  .unwrap();
+
+  let default_response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .uri(format!("/api/projects/{project_id}/reviews"))
+        .header(header::COOKIE, &cookie)
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+  assert_eq!(default_response.status(), StatusCode::OK);
+  let default_payload = read_json(default_response.into_body()).await;
+  let default_reviews = default_payload.get("reviews").and_then(Value::as_array).unwrap();
+  assert_eq!(default_reviews.len(), 2);
+  assert!(default_reviews.iter().all(|item| item.get("status").and_then(Value::as_str) != Some("resolved")));
+
+  let filtered_response = build_app(state)
+    .oneshot(
+      Request::builder()
+        .uri(format!(
+          "/api/projects/{project_id}/reviews?status=all&type=missing-page&limit=1"
+        ))
+        .header(header::COOKIE, &cookie)
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+  assert_eq!(filtered_response.status(), StatusCode::OK);
+  let filtered_payload = read_json(filtered_response.into_body()).await;
+  let filtered_reviews = filtered_payload.get("reviews").and_then(Value::as_array).unwrap();
+  assert_eq!(filtered_reviews.len(), 1);
+  assert_eq!(filtered_reviews[0].get("id").and_then(Value::as_str), Some("review-1"));
 }
 
 async fn wait_for_task_terminal(state: &knowledge_server::app::state::AppState, task_id: &str) {

@@ -2,6 +2,7 @@ import { useParams } from "react-router-dom";
 import { useState } from "react";
 
 import { ProjectNav } from "../projects/project-nav";
+import { ProjectFileLink } from "../shared/file-links";
 import { useCancelTaskMutation, useProjectTasksQuery, useRetryTaskMutation, useTaskDetailQuery } from "./queries";
 
 export function TasksPage() {
@@ -22,7 +23,9 @@ export function TasksPage() {
           <li key={task.id} className="card stack compact panel">
             <strong>{task.title}</strong> <span>{task.status}</span>
             <span>{task.taskType}</span>
-            {task.relativePath ? <span>{task.relativePath}</span> : null}
+            {task.relativePath ? (
+              <ProjectFileLink projectId={projectId} path={task.relativePath} />
+            ) : null}
             <span>
               Attempts {(task.attemptCount ?? 0).toString()}/{(task.maxAttempts ?? 0).toString()}
             </span>
@@ -52,7 +55,9 @@ export function TasksPage() {
           <span>{detail.data.title}</span>
           <span>{detail.data.taskType}</span>
           <span>{detail.data.status}</span>
-          {detail.data.relativePath ? <span>{detail.data.relativePath}</span> : null}
+          {detail.data.relativePath ? (
+            <ProjectFileLink projectId={projectId} path={detail.data.relativePath} />
+          ) : null}
           {detail.data.error ? <pre>{JSON.stringify(detail.data.error, null, 2)}</pre> : null}
           {detail.data.result ? <pre>{JSON.stringify(detail.data.result, null, 2)}</pre> : null}
           <pre>{JSON.stringify(detail.data.detail, null, 2)}</pre>

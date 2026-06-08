@@ -31,6 +31,14 @@ body {
   border-radius: 10px;
 }
 
+.card select {
+  padding: 10px 12px;
+  border: 1px solid #d1d5db;
+  border-radius: 10px;
+  background: white;
+  font: inherit;
+}
+
 .card textarea {
   padding: 10px 12px;
   border: 1px solid #d1d5db;
@@ -123,12 +131,75 @@ body {
   cursor: pointer;
 }
 
+.inline-link {
+  color: #0f766e;
+  text-decoration: none;
+  word-break: break-all;
+}
+
+.checkbox-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.files-layout {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: minmax(260px, 360px) minmax(0, 1fr);
+}
+
+.tree-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.tree-list.nested {
+  padding-left: 16px;
+  margin-top: 8px;
+}
+
+.tree-item {
+  display: grid;
+  gap: 6px;
+}
+
+.tree-label {
+  color: #374151;
+}
+
+.tree-button {
+  padding: 6px 8px;
+  border-radius: 8px;
+}
+
+.tree-button.active {
+  background: rgba(15, 118, 110, 0.12);
+}
+
+.preview-pane {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: #f8fafc;
+  border-radius: 12px;
+  padding: 16px;
+  overflow: auto;
+}
+
 @media (max-width: 900px) {
   .shell {
     grid-template-columns: 1fr;
   }
 
   .graph-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .files-layout {
     grid-template-columns: 1fr;
   }
 }

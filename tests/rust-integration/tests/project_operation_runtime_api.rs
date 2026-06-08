@@ -180,7 +180,7 @@ async fn review_update_is_enqueued_and_completed_by_worker() {
   let reviews_after = build_app(state)
     .oneshot(
       Request::builder()
-        .uri(format!("/api/projects/{project_id}/reviews"))
+        .uri(format!("/api/projects/{project_id}/reviews?status=all"))
         .header(header::COOKIE, &cookie)
         .body(Body::empty())
         .unwrap(),
@@ -271,7 +271,7 @@ async fn review_sweep_is_enqueued_and_completed_by_worker() {
   let reviews_after = build_app(state)
     .oneshot(
       Request::builder()
-        .uri(format!("/api/projects/{project_id}/reviews"))
+        .uri(format!("/api/projects/{project_id}/reviews?status=all"))
         .header(header::COOKIE, &cookie)
         .body(Body::empty())
         .unwrap(),

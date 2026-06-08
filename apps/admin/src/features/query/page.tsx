@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useParams } from "react-router-dom";
 
 import { ProjectNav } from "../projects/project-nav";
+import { ProjectFileLink } from "../shared/file-links";
 import { useCancelTaskMutation, useRetryTaskMutation } from "../tasks/queries";
 
 import {
@@ -126,10 +127,13 @@ export function QueryPage() {
           {saveTask.data?.status === "succeeded" ? (
             <p>
               Saved to wiki{" "}
-              {String(
-                (saveTask.data.result as { relativePath?: string } | undefined | null)
-                  ?.relativePath ?? "",
-              )}
+              <ProjectFileLink
+                projectId={projectId}
+                path={String(
+                  (saveTask.data.result as { relativePath?: string } | undefined | null)
+                    ?.relativePath ?? "",
+                )}
+              />
             </p>
           ) : null}
           {saveTask.data?.status === "failed" ? <p>Save to wiki failed</p> : null}
@@ -137,7 +141,7 @@ export function QueryPage() {
             {(result.citations ?? []).map((citation) => (
               <li key={citation.path} className="card stack compact">
                 <strong>{citation.title}</strong>
-                <span>{citation.path}</span>
+                <ProjectFileLink projectId={projectId} path={citation.path} />
                 <span>{citation.snippet}</span>
               </li>
             ))}

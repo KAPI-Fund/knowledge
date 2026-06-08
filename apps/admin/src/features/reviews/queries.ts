@@ -2,10 +2,13 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { listProjectReviews, sweepProjectReviews, updateProjectReview } from "../shared/api";
 
-export function useProjectReviewsQuery(projectId: string) {
+export function useProjectReviewsQuery(
+  projectId: string,
+  input: { status: string; itemType: string; limit: number },
+) {
   return useQuery({
-    queryKey: ["project-reviews", projectId],
-    queryFn: () => listProjectReviews(projectId),
+    queryKey: ["project-reviews", projectId, input.status, input.itemType, input.limit],
+    queryFn: () => listProjectReviews({ projectId, ...input }),
   });
 }
 

@@ -16,6 +16,10 @@ use crate::projects::tasks::{
   CreateTaskRecord,
 };
 use knowledge_core::graph::{build_graph_view, neighbors_for_node};
+use knowledge_core::project::files::{
+  clamp_max_files, list_project_files, parse_project_file_root, read_project_file_content,
+  ProjectFileListOptions, ProjectFilesError,
+};
 use knowledge_core::project::reviews::load_reviews;
 use knowledge_core::project::sources::list_sources;
 use knowledge_core::query::answer_from_results;
@@ -30,6 +34,8 @@ pub fn router() -> Router<AppState> {
     .route("/api/projects/{project_id}/sources:import", post(import_source_handler))
     .route("/api/projects/{project_id}/sources:rescan", post(rescan_sources_handler))
     .route("/api/projects/{project_id}/sources/{*relative_path}", delete(delete_source_handler))
+    .route("/api/projects/{project_id}/files", get(list_files_handler))
+    .route("/api/projects/{project_id}/files/content", get(file_content_handler))
     .route("/api/projects/{project_id}/search", post(search_handler))
     .route("/api/projects/{project_id}/graph", get(graph_handler))
     .route("/api/projects/{project_id}/graph/{node_id}/neighbors", get(graph_neighbors_handler))
@@ -67,6 +73,22 @@ pub struct SearchRequest {
   pub query: String,
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct FileListRequest {
+  #[serde(default)]
+  pub root: Option<String>,
+  #[serde(default)]
+  pub recursive: Option<bool>,
+  #[serde(default)]
+  pub max_files: Option<usize>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct FileContentRequest {
+  pub path: String,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateQueryTaskRequest {
@@ -94,6 +116,16 @@ pub struct UpdateReviewRequest {
 pub struct GraphRequest {
   #[serde(default, rename = "q")]
   pub query: Option<String>,
+  #[serde(default)]
+  pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct ReviewListRequest {
+  #[serde(default)]
+  pub status: Option<String>,
+  #[serde(default, rename = "type")]
+  pub item_type: Option<String>,
   #[serde(default)]
   pub limit: Option<usize>,
 }
@@ -318,6 +350,42 @@ async fn delete_source_handler(
       "status": task.status
     })),
   ))
+}
+
+async fn list_files_handler(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Path(project_id): Path<String>,
+  Query(params): Query<FileListRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+  let _session = authorized_session(&state, &headers, Some(&project_id)).await?;
+  let root = project_root_for_id(&state, &project_id).await?;
+  let options = ProjectFileListOptions {
+    root: parse_project_file_root(params.root.as_deref()).map_err(map_project_files_error)?,
+    recursive: params.recursive.unwrap_or(true),
+    max_files: clamp_max_files(params.max_files),
+  };
+  let listing = list_project_files(&root, &options).map_err(map_project_files_error)?;
+  Ok(Json(json!({
+    "root": listing.root,
+    "files": listing.files,
+    "truncated": listing.truncated
+  })))
+}
+
+async fn file_content_handler(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Path(project_id): Path<String>,
+  Query(params): Query<FileContentRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+  let _session = authorized_session(&state, &headers, Some(&project_id)).await?;
+  let root = project_root_for_id(&state, &project_id).await?;
+  let file = read_project_file_content(&root, &params.path).map_err(map_project_files_error)?;
+  Ok(Json(json!({
+    "path": file.path,
+    "content": file.content
+  })))
 }
 
 async fn search_handler(
@@ -621,11 +689,34 @@ async fn list_reviews_handler(
   State(state): State<AppState>,
   headers: HeaderMap,
   Path(project_id): Path<String>,
+  Query(params): Query<ReviewListRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
   let _session = authorized_session(&state, &headers, Some(&project_id)).await?;
   let root = project_root_for_id(&state, &project_id).await?;
   let store = load_reviews(&root).map_err(|error| ApiError::bad_request(error.to_string()))?;
-  Ok(Json(json!({ "reviews": store.reviews })))
+  let status = parse_review_status(params.status.as_deref())?;
+  let item_type = params
+    .item_type
+    .as_deref()
+    .map(str::trim)
+    .filter(|value| !value.is_empty())
+    .map(str::to_string);
+  let limit = params.limit.unwrap_or(200).clamp(1, 1_000);
+
+  let reviews = store
+    .reviews
+    .into_iter()
+    .filter(|review| review_status_matches(status, &review.status))
+    .filter(|review| {
+      item_type
+        .as_deref()
+        .map(|expected| review.review_type == expected)
+        .unwrap_or(true)
+    })
+    .take(limit)
+    .collect::<Vec<_>>();
+
+  Ok(Json(json!({ "reviews": reviews })))
 }
 
 async fn sweep_reviews_handler(
@@ -769,6 +860,49 @@ fn slugify_title(input: &str) -> String {
   }
 
   slug.trim_matches('-').to_string()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReviewStatusFilter {
+  Unresolved,
+  Resolved,
+  All,
+}
+
+fn parse_review_status(value: Option<&str>) -> Result<ReviewStatusFilter, ApiError> {
+  match value.unwrap_or("unresolved") {
+    "unresolved" | "pending" => Ok(ReviewStatusFilter::Unresolved),
+    "resolved" => Ok(ReviewStatusFilter::Resolved),
+    "all" => Ok(ReviewStatusFilter::All),
+    invalid => Err(ApiError::bad_request(format!(
+      "invalid review status '{invalid}'. expected unresolved, resolved, or all"
+    ))),
+  }
+}
+
+fn review_status_matches(filter: ReviewStatusFilter, status: &str) -> bool {
+  match filter {
+    ReviewStatusFilter::Unresolved => status != "resolved",
+    ReviewStatusFilter::Resolved => status == "resolved",
+    ReviewStatusFilter::All => true,
+  }
+}
+
+fn map_project_files_error(error: ProjectFilesError) -> ApiError {
+  match error {
+    ProjectFilesError::InvalidRoot => ApiError::bad_request(error.to_string()),
+    ProjectFilesError::NonPublicPath => ApiError::forbidden(error.to_string()),
+    ProjectFilesError::NonTextPath | ProjectFilesError::InvalidUtf8 => {
+      ApiError::unsupported_media_type(error.to_string())
+    }
+    ProjectFilesError::FileTooLarge | ProjectFilesError::ListingExceedsMaxFiles(_) => {
+      ApiError::payload_too_large(error.to_string())
+    }
+    ProjectFilesError::NotFound => ApiError::not_found(error.to_string()),
+    ProjectFilesError::Io(_) | ProjectFilesError::Root(_) => {
+      ApiError::bad_request(error.to_string())
+    }
+  }
 }
 
 async fn authorized_session(

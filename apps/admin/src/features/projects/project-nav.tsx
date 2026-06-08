@@ -4,6 +4,7 @@ export function ProjectNav({ projectId }: { projectId: string }) {
   return (
     <nav className="subnav">
       <NavLink to={`/projects/${projectId}`}>Overview</NavLink>
+      <NavLink to={`/projects/${projectId}/files`}>Files</NavLink>
       <NavLink to={`/projects/${projectId}/sources`}>Sources</NavLink>
       <NavLink to={`/projects/${projectId}/search`}>Search</NavLink>
       <NavLink to={`/projects/${projectId}/query`}>Query</NavLink>

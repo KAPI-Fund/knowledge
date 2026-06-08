@@ -4,6 +4,7 @@ import { AppShell } from "../components/layout/app-shell";
 import { LoginPage } from "../features/auth/login-page";
 import { AuditPage } from "../features/audit/page";
 import { DashboardPage } from "../features/dashboard/page";
+import { FilesPage } from "../features/files/page";
 import { GraphPage } from "../features/graph/page";
 import { ProjectDetailPage } from "../features/projects/detail-page";
 import { ProjectsPage } from "../features/projects/page";
@@ -24,6 +25,7 @@ export function AppRouter() {
           <Route index element={<DashboardPage />} />
           <Route path="projects" element={<ProjectsPage />} />
           <Route path="projects/:projectId" element={<ProjectDetailPage />} />
+          <Route path="projects/:projectId/files" element={<FilesPage />} />
           <Route path="projects/:projectId/sources" element={<SourcesPage />} />
           <Route path="projects/:projectId/search" element={<SearchPage />} />
           <Route path="projects/:projectId/query" element={<QueryPage />} />

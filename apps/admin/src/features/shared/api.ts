@@ -112,6 +112,27 @@ const reviewsSchema = z.object({
   ),
 });
 
+const projectFileNodeSchema: z.ZodType<any> = z.lazy(() =>
+  z.object({
+    name: z.string(),
+    path: z.string(),
+    isDir: z.boolean(),
+    size: z.number().nullable().optional(),
+    children: z.array(projectFileNodeSchema).nullable().optional(),
+  }),
+);
+
+const projectFilesSchema = z.object({
+  root: z.string(),
+  files: z.array(projectFileNodeSchema),
+  truncated: z.boolean(),
+});
+
+const projectFileContentSchema = z.object({
+  path: z.string(),
+  content: z.string(),
+});
+
 const auditSchema = z.object({
   items: z.array(
     z.object({
@@ -249,6 +270,38 @@ export async function listProjectSources(projectId: string) {
   return response.sources;
 }
 
+export async function listProjectFiles(input: {
+  projectId: string;
+  root?: string;
+  recursive?: boolean;
+  maxFiles?: number;
+}) {
+  const searchParams = new URLSearchParams();
+  if (input.root?.trim()) {
+    searchParams.set("root", input.root.trim());
+  }
+  if (input.recursive === false) {
+    searchParams.set("recursive", "false");
+  }
+  if (input.maxFiles && input.maxFiles > 0) {
+    searchParams.set("maxFiles", String(input.maxFiles));
+  }
+  const query = searchParams.toString();
+  const path = query
+    ? `/api/projects/${input.projectId}/files?${query}`
+    : `/api/projects/${input.projectId}/files`;
+  return apiFetch(path, { method: "GET" }, projectFilesSchema);
+}
+
+export async function getProjectFileContent(input: { projectId: string; path: string }) {
+  const searchParams = new URLSearchParams({ path: input.path });
+  return apiFetch(
+    `/api/projects/${input.projectId}/files/content?${searchParams.toString()}`,
+    { method: "GET" },
+    projectFileContentSchema,
+  );
+}
+
 function encodeContentBase64(content: string) {
   const bytes = new TextEncoder().encode(content);
   const binary = Array.from(bytes, (byte) => String.fromCharCode(byte)).join("");
@@ -370,8 +423,27 @@ export async function getProjectGraphNeighbors(input: {
   );
 }
 
-export async function listProjectReviews(projectId: string) {
-  const response = await apiFetch(`/api/projects/${projectId}/reviews`, { method: "GET" }, reviewsSchema);
+export async function listProjectReviews(input: {
+  projectId: string;
+  status?: string;
+  itemType?: string;
+  limit?: number;
+}) {
+  const searchParams = new URLSearchParams();
+  if (input.status?.trim()) {
+    searchParams.set("status", input.status.trim());
+  }
+  if (input.itemType?.trim()) {
+    searchParams.set("type", input.itemType.trim());
+  }
+  if (input.limit && input.limit > 0) {
+    searchParams.set("limit", String(input.limit));
+  }
+  const query = searchParams.toString();
+  const path = query
+    ? `/api/projects/${input.projectId}/reviews?${query}`
+    : `/api/projects/${input.projectId}/reviews`;
+  const response = await apiFetch(path, { method: "GET" }, reviewsSchema);
   return response.reviews;
 }
 
