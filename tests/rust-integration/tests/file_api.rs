@@ -1,15 +1,19 @@
 mod support;
 
 use std::fs;
+use std::io::Write;
 
 use axum::body::{to_bytes, Body};
 use axum::http::{header, Request, StatusCode};
+use base64::Engine;
 use knowledge_server::config::AppConfig;
 use knowledge_server::{bootstrap_state, build_app};
 use serde_json::{json, Value};
 use support::TestEnvironment;
 use tempfile::tempdir;
 use tower::util::ServiceExt;
+use zip::write::FileOptions;
+use zip::ZipWriter;
 
 #[tokio::test]
 async fn files_api_lists_public_project_files_and_reads_text_content() {
@@ -75,6 +79,50 @@ async fn files_api_lists_public_project_files_and_reads_text_content() {
       .and_then(Value::as_str)
       .unwrap()
       .contains("# Attention"),
+  );
+}
+
+#[tokio::test]
+async fn files_api_extracts_text_preview_from_docx_sources() {
+  let temp = tempdir().unwrap();
+  let _env = TestEnvironment::start("files-api-docx-preview").await.unwrap();
+  let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let (cookie, csrf) = login_and_csrf(state.clone()).await;
+  let project_root = temp.path().join("files-docx-project");
+  let project_id = create_project(state.clone(), &cookie, &csrf, project_root.clone()).await;
+
+  fs::write(
+    project_root.join("raw/sources/attention.docx"),
+    build_minimal_docx("Attention from file preview."),
+  )
+  .unwrap();
+
+  let content_response = build_app(state)
+    .oneshot(
+      Request::builder()
+        .uri(format!(
+          "/api/projects/{project_id}/files/content?path=raw/sources/attention.docx"
+        ))
+        .header(header::COOKIE, &cookie)
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+  assert_eq!(content_response.status(), StatusCode::OK);
+  let content_payload = read_json(content_response.into_body()).await;
+  assert_eq!(
+    content_payload.get("path").and_then(Value::as_str),
+    Some("raw/sources/attention.docx"),
+  );
+  assert!(
+    content_payload
+      .get("content")
+      .and_then(Value::as_str)
+      .unwrap()
+      .contains("Attention from file preview."),
   );
 }
 
@@ -207,4 +255,52 @@ async fn create_project(
 async fn read_json(body: Body) -> Value {
   let bytes = to_bytes(body, usize::MAX).await.unwrap();
   serde_json::from_slice(&bytes).unwrap()
+}
+
+fn build_minimal_docx(text: &str) -> Vec<u8> {
+  let _ = base64::engine::general_purpose::STANDARD.encode(text);
+  let cursor = std::io::Cursor::new(Vec::new());
+  let mut zip = ZipWriter::new(cursor);
+  let options: FileOptions<'_, ()> = FileOptions::default();
+
+  zip.start_file("[Content_Types].xml", options).unwrap();
+  zip
+    .write_all(
+      br#"<?xml version="1.0" encoding="UTF-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+</Types>"#,
+    )
+    .unwrap();
+
+  zip.start_file("_rels/.rels", options).unwrap();
+  zip
+    .write_all(
+      br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>"#,
+    )
+    .unwrap();
+
+  zip.start_file("word/document.xml", options).unwrap();
+  zip
+    .write_all(
+      format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p>
+      <w:r><w:t>{text}</w:t></w:r>
+    </w:p>
+  </w:body>
+</w:document>"#
+      )
+      .as_bytes(),
+    )
+    .unwrap();
+
+  zip.finish().unwrap().into_inner()
 }

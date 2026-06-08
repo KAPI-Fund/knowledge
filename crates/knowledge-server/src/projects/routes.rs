@@ -921,7 +921,9 @@ fn map_project_files_error(error: ProjectFilesError) -> ApiError {
   match error {
     ProjectFilesError::InvalidRoot => ApiError::bad_request(error.to_string()),
     ProjectFilesError::NonPublicPath => ApiError::forbidden(error.to_string()),
-    ProjectFilesError::NonTextPath | ProjectFilesError::InvalidUtf8 => {
+    ProjectFilesError::NonTextPath
+    | ProjectFilesError::InvalidUtf8
+    | ProjectFilesError::PreviewReadFailed(_) => {
       ApiError::unsupported_media_type(error.to_string())
     }
     ProjectFilesError::FileTooLarge | ProjectFilesError::ListingExceedsMaxFiles(_) => {

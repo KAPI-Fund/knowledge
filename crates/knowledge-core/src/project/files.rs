@@ -4,6 +4,7 @@ use std::path::Path;
 use serde::Serialize;
 
 use crate::project::root::{ProjectRoot, ProjectRootError};
+use crate::project::source_text::{read_source_text, SourceTextError};
 
 pub const DEFAULT_MAX_FILES: usize = 2_000;
 pub const HARD_MAX_FILES: usize = 10_000;
@@ -80,12 +81,14 @@ pub enum ProjectFilesError {
   InvalidRoot,
   #[error("path is not exposed by the project API")]
   NonPublicPath,
-  #[error("only text-like project files can be read via this endpoint")]
+  #[error("only text-like or previewable source files can be read via this endpoint")]
   NonTextPath,
   #[error("file is too large to return via API")]
   FileTooLarge,
   #[error("file is not valid UTF-8 text")]
   InvalidUtf8,
+  #[error("failed to extract preview text: {0}")]
+  PreviewReadFailed(String),
   #[error("file listing exceeds maxFiles limit ({0})")]
   ListingExceedsMaxFiles(usize),
   #[error("file not found")]
@@ -136,7 +139,7 @@ pub fn read_project_file_content(
   if !is_public_project_rel(relative_path) {
     return Err(ProjectFilesError::NonPublicPath);
   }
-  if !is_text_content_rel(relative_path) {
+  if !is_preview_content_rel(relative_path) {
     return Err(ProjectFilesError::NonTextPath);
   }
 
@@ -153,11 +156,15 @@ pub fn read_project_file_content(
     return Err(ProjectFilesError::FileTooLarge);
   }
 
-  let content = fs::read_to_string(&path).map_err(|error| match error.kind() {
-    std::io::ErrorKind::InvalidData => ProjectFilesError::InvalidUtf8,
-    std::io::ErrorKind::NotFound => ProjectFilesError::NotFound,
-    _ => ProjectFilesError::Io(error),
-  })?;
+  let content = if is_text_content_rel(relative_path) {
+    fs::read_to_string(&path).map_err(|error| match error.kind() {
+      std::io::ErrorKind::InvalidData => ProjectFilesError::InvalidUtf8,
+      std::io::ErrorKind::NotFound => ProjectFilesError::NotFound,
+      _ => ProjectFilesError::Io(error),
+    })?
+  } else {
+    read_source_text(&path).map_err(map_source_text_error)?
+  };
 
   Ok(ProjectFileContent {
     path: normalize_path(relative_path),
@@ -203,6 +210,36 @@ pub fn is_text_content_rel(relative_path: &str) -> bool {
       | "rtf"
       | "log"
   )
+}
+
+pub fn is_preview_content_rel(relative_path: &str) -> bool {
+  is_text_content_rel(relative_path) || is_previewable_source_rel(relative_path)
+}
+
+fn is_previewable_source_rel(relative_path: &str) -> bool {
+  let normalized = normalize_path(relative_path).to_lowercase();
+  if !normalized.starts_with("raw/sources/") {
+    return false;
+  }
+
+  let extension = Path::new(&normalized)
+    .extension()
+    .and_then(|value| value.to_str())
+    .unwrap_or_default();
+
+  matches!(extension, "doc" | "docx" | "pptx" | "xls" | "xlsx" | "odt" | "ods" | "odp")
+}
+
+fn map_source_text_error(error: SourceTextError) -> ProjectFilesError {
+  match error {
+    SourceTextError::Io(error) => match error.kind() {
+      std::io::ErrorKind::InvalidData => ProjectFilesError::InvalidUtf8,
+      std::io::ErrorKind::NotFound => ProjectFilesError::NotFound,
+      _ => ProjectFilesError::Io(error),
+    },
+    SourceTextError::UnsupportedFormat(_) => ProjectFilesError::NonTextPath,
+    SourceTextError::Parse(message) => ProjectFilesError::PreviewReadFailed(message),
+  }
 }
 
 fn list_public_roots(
@@ -314,7 +351,7 @@ fn path_to_string(path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-  use super::{is_public_project_rel, is_text_content_rel, normalize_path};
+  use super::{is_preview_content_rel, is_public_project_rel, is_text_content_rel, normalize_path};
 
   #[test]
   fn public_project_paths_exclude_internal_state() {
@@ -331,6 +368,9 @@ mod tests {
     assert!(is_text_content_rel("wiki/index.md"));
     assert!(!is_text_content_rel("wiki/media/image.png"));
     assert!(!is_text_content_rel("raw/sources/book.pdf"));
+    assert!(is_preview_content_rel("raw/sources/book.docx"));
+    assert!(is_preview_content_rel("raw/sources/slides.pptx"));
+    assert!(!is_preview_content_rel("wiki/media/image.png"));
     assert_eq!(normalize_path("/wiki/index.md"), "wiki/index.md");
   }
 }
