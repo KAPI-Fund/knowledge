@@ -22,6 +22,7 @@ use knowledge_core::project::reviews::{
   build_review_sweep_prompt, parse_review_resolution_ids, resolve_review_ids,
   sweep_resolved_reviews, update_review_status,
 };
+use knowledge_core::project::source_text::read_source_text;
 use knowledge_core::project::sources::{delete_source, import_source, rescan_sources};
 use knowledge_core::search::SearchOptions;
 
@@ -334,13 +335,12 @@ async fn run_ingest_source_executor(
   let source_path = root
     .safe_join(&relative_path)
     .map_err(|error| ApiError::bad_request(error.to_string()))?;
-  let content =
-    std::fs::read_to_string(&source_path).map_err(|error| ApiError::bad_request(error.to_string()))?;
+  let source_identity = source_identity_from_relative_path(&relative_path);
+  let content = read_source_text(&source_path).map_err(|error| ApiError::bad_request(error.to_string()))?;
   let source_name = source_path
     .file_name()
     .and_then(|name| name.to_str())
     .ok_or_else(|| ApiError::bad_request("invalid source name"))?;
-  let source_identity = source_identity_from_relative_path(&relative_path);
   let ingest_provider = load_ingest_provider(state).await?;
 
   let result = if let Some(cached) = check_ingest_cache(&root, &source_identity, &content)
@@ -374,7 +374,7 @@ async fn run_ingest_source_executor(
           source_name,
           &overview,
           &content,
-          &source_summary_path(source_name),
+          &source_summary_path(&source_identity),
         ),
         user_prompt: build_generation_user_prompt(source_name, &analysis.analysis, &content),
       })

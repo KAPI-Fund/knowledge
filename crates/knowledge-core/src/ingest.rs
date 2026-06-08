@@ -5,12 +5,15 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
+use unicode_normalization::UnicodeNormalization;
 
 use crate::project::reviews::{maybe_add_review_for_source, save_generated_reviews};
 use crate::project::root::ProjectRoot;
 
 const FILE_OPENER_PREFIX: &str = "---FILE:";
 const FILE_CLOSER_CANONICAL: &str = "---END FILE---";
+const MAX_SOURCE_SUMMARY_SLUG_LENGTH: usize = 120;
+const FALLBACK_SOURCE_PART: &str = "source";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -61,8 +64,11 @@ pub fn analyze_source(source_name: &str, content: &str) -> AnalysisResult {
   }
 }
 
-pub fn source_summary_path(source_name: &str) -> String {
-  format!("wiki/sources/{source_name}")
+pub fn source_summary_path(source_identity: &str) -> String {
+  format!(
+    "wiki/sources/{}.md",
+    source_summary_slug_from_identity(source_identity)
+  )
 }
 
 pub fn build_analysis_prompt(purpose: &str, index: &str, source_content: &str) -> String {
@@ -241,7 +247,7 @@ pub fn generate_wiki_from_analysis(
   analysis: &AnalysisResult,
   generation_text: &str,
 ) -> Result<IngestResult, std::io::Error> {
-  let default_summary_path = source_summary_path(source_name);
+  let default_summary_path = source_summary_path(source_identity);
   let parsed_blocks = parse_file_blocks(generation_text);
   let mut written_paths = Vec::new();
   let mut wrote_summary = false;
@@ -288,7 +294,7 @@ pub fn generate_wiki_from_analysis(
   }
 
   if !wrote_index {
-    update_index(root.as_path(), source_name, &analysis.title)?;
+    update_index(root.as_path(), source_identity, &analysis.title)?;
     if !written_paths.contains(&"wiki/index.md".to_string()) {
       written_paths.push("wiki/index.md".to_string());
     }
@@ -343,7 +349,7 @@ fn fallback_summary_content(source_name: &str, analysis: &AnalysisResult) -> Str
 fn update_index(root: &Path, source_name: &str, title: &str) -> Result<(), std::io::Error> {
   let path = root.join("wiki/index.md");
   let existing = fs::read_to_string(&path).unwrap_or_default();
-  let slug = source_name.trim_end_matches(".md");
+  let slug = source_summary_slug_from_identity(source_name);
   let summary_entry = format!("- [[{slug}]] - {title}");
   if existing.contains(&summary_entry) {
     return Ok(());
@@ -392,7 +398,7 @@ fn write_checkpoints(
 ) -> Result<(), std::io::Error> {
   let checkpoint_root = root.join(".knowledge/ingest/checkpoints");
   fs::create_dir_all(&checkpoint_root)?;
-  let stem = source_name.trim_end_matches(".md");
+  let stem = source_name_stem(source_name);
   let analysis_json = serde_json::to_string(analysis).map_err(std::io::Error::other)?;
   let generation_json = serde_json::to_string(&GenerationCheckpoint {
     summary_path: result.summary_path.clone(),
@@ -803,7 +809,158 @@ fn source_title(source_name: &str, content: &str) -> String {
     .find_map(|line| line.strip_prefix("# ").map(str::trim))
     .filter(|value| !value.is_empty())
     .map(str::to_string)
-    .unwrap_or_else(|| source_name.trim_end_matches(".md").replace('-', " "))
+    .unwrap_or_else(|| source_name_stem(source_name).replace('-', " "))
+}
+
+fn source_name_stem(source_name: &str) -> String {
+  Path::new(source_name)
+    .file_stem()
+    .and_then(|value| value.to_str())
+    .unwrap_or(source_name)
+    .to_string()
+}
+
+fn source_summary_slug_from_identity(source_identity: &str) -> String {
+  let normalized = source_identity.replace('\\', "/");
+  let without_extension = if let Some((parent, file_name)) = normalized.rsplit_once('/') {
+    format!("{parent}/{}", strip_source_extension(file_name))
+  } else {
+    strip_source_extension(&normalized).to_string()
+  };
+  let parts = without_extension
+    .split('/')
+    .map(str::trim)
+    .filter(|value| !value.is_empty())
+    .collect::<Vec<_>>();
+
+  if parts.len() <= 1 {
+    return parts.first().copied().unwrap_or(FALLBACK_SOURCE_PART).to_string();
+  }
+
+  let hash = stable_slug_hash(source_identity);
+  let prefix = parts
+    .iter()
+    .map(|part| {
+      let (readable, structural_length) = readable_slug_part(part);
+      format!("{structural_length}-{readable}")
+    })
+    .collect::<Vec<_>>()
+    .join("--");
+
+  let full_slug = format!("{prefix}--{hash}");
+  if full_slug.chars().count() <= MAX_SOURCE_SUMMARY_SLUG_LENGTH {
+    return full_slug;
+  }
+
+  let readable_limit = MAX_SOURCE_SUMMARY_SLUG_LENGTH.saturating_sub(hash.chars().count() + 2);
+  let readable_prefix = prefix
+    .chars()
+    .take(readable_limit)
+    .collect::<String>()
+    .trim_end_matches('-')
+    .to_string();
+  format!(
+    "{}--{hash}",
+    if readable_prefix.is_empty() {
+      FALLBACK_SOURCE_PART
+    } else {
+      readable_prefix.as_str()
+    }
+  )
+}
+
+fn strip_source_extension(file_name: &str) -> &str {
+  match file_name.rsplit_once('.') {
+    Some((prefix, _)) if !prefix.is_empty() => prefix,
+    _ => file_name,
+  }
+}
+
+fn readable_slug_part(part: &str) -> (String, usize) {
+  let normalized = part.nfkc().collect::<String>();
+  let trimmed = normalized.trim();
+  let mut structural = String::new();
+  let mut last_was_dash = false;
+
+  for ch in trimmed.chars() {
+    if ch.is_whitespace() {
+      if !structural.is_empty() && !last_was_dash {
+        structural.push('-');
+        last_was_dash = true;
+      }
+      continue;
+    }
+
+    let mut wrote = false;
+    for lower in ch.to_lowercase() {
+      if lower.is_alphanumeric() || lower == '-' {
+        structural.push(lower);
+        last_was_dash = lower == '-';
+        wrote = true;
+      }
+    }
+    if !wrote && !structural.is_empty() && !last_was_dash {
+      last_was_dash = false;
+    }
+  }
+
+  let structural = structural.trim_matches('-').to_string();
+  let readable = structural.replace("--", "-");
+  let readable = collapse_repeated_hyphens(&readable);
+  let readable = if readable.is_empty() {
+    FALLBACK_SOURCE_PART.to_string()
+  } else {
+    readable
+  };
+  let structural_length = if structural.is_empty() {
+    FALLBACK_SOURCE_PART.chars().count()
+  } else {
+    structural.chars().count()
+  };
+  (readable, structural_length.max(1))
+}
+
+fn collapse_repeated_hyphens(value: &str) -> String {
+  let mut output = String::new();
+  let mut last_was_dash = false;
+  for ch in value.chars() {
+    if ch == '-' {
+      if !last_was_dash {
+        output.push(ch);
+      }
+      last_was_dash = true;
+    } else {
+      output.push(ch);
+      last_was_dash = false;
+    }
+  }
+  output
+}
+
+fn stable_slug_hash(value: &str) -> String {
+  let mut hash: u32 = 0x811c9dc5;
+  for byte in value.as_bytes() {
+    hash ^= u32::from(*byte);
+    hash = hash.wrapping_mul(0x01000193);
+  }
+  radix36(hash)
+}
+
+fn radix36(mut value: u32) -> String {
+  if value == 0 {
+    return "0".to_string();
+  }
+
+  let mut output = Vec::new();
+  while value > 0 {
+    let digit = (value % 36) as u8;
+    output.push(match digit {
+      0..=9 => (b'0' + digit) as char,
+      _ => (b'a' + (digit - 10)) as char,
+    });
+    value /= 36;
+  }
+  output.iter().rev().collect()
 }
 
 fn optional_section(title: &str, content: impl AsRef<str>) -> String {
@@ -846,7 +1003,7 @@ mod tests {
 
   use crate::project::scaffold::initialize_project;
 
-  use super::{AnalysisResult, generate_wiki_from_analysis};
+  use super::{source_summary_path, AnalysisResult, generate_wiki_from_analysis};
 
   #[test]
   fn repeated_ingest_merges_sources_tags_and_related_arrays() {
@@ -916,5 +1073,21 @@ mod tests {
     assert!(merged.contains("tags: [\"alpha\", \"beta\"]"));
     assert!(merged.contains("related: [\"origin-page\", \"follow-up-page\"]"));
     assert!(merged.contains("Fresh content."));
+  }
+
+  #[test]
+  fn source_summary_path_keeps_root_level_basename_for_non_markdown_sources() {
+    assert_eq!(source_summary_path("config.yaml"), "wiki/sources/config.md");
+    assert_eq!(source_summary_path("attention.docx"), "wiki/sources/attention.md");
+  }
+
+  #[test]
+  fn source_summary_path_uses_structural_nested_slug_with_hash() {
+    let first = source_summary_path("a--b/config.yaml");
+    let second = source_summary_path("a/b/config.yaml");
+    assert!(first.starts_with("wiki/sources/4-a-b--6-config--"));
+    assert!(second.starts_with("wiki/sources/1-a--1-b--6-config--"));
+    assert_ne!(first, second);
+    assert!(first.len() <= 136);
   }
 }

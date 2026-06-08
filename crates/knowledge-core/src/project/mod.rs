@@ -3,4 +3,5 @@ pub mod queries;
 pub mod root;
 pub mod reviews;
 pub mod scaffold;
+pub mod source_text;
 pub mod sources;

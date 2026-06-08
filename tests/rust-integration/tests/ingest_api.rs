@@ -1,9 +1,11 @@
 mod support;
 
 use std::fs;
+use std::io::Write;
 
 use axum::body::{to_bytes, Body};
 use axum::http::{header, Request, StatusCode};
+use base64::Engine;
 use knowledge_server::config::AppConfig;
 use knowledge_server::tasks::{scheduler, store};
 use knowledge_server::{bootstrap_state, build_app};
@@ -12,6 +14,8 @@ use support::mock_openai::{MockOpenAiServer, MockScenario};
 use support::TestEnvironment;
 use tempfile::tempdir;
 use tower::util::ServiceExt;
+use zip::write::FileOptions;
+use zip::ZipWriter;
 
 #[tokio::test]
 async fn ingest_source_generates_summary_and_updates_indexes() {
@@ -141,7 +145,7 @@ async fn ingest_source_uses_provider_two_stage_generation_and_writes_multiple_pa
   wait_for_task_terminal(&state, &task_id).await;
 
   let detail = store::get_task_by_id(&state, &task_id).await.unwrap();
-  assert_eq!(detail.status, "succeeded");
+  assert_eq!(detail.status, "succeeded", "{detail:?}");
   assert_eq!(
     detail.result.as_ref().unwrap()["summaryPath"],
     Value::String("wiki/sources/attention.md".to_string())
@@ -235,6 +239,73 @@ async fn query_api_returns_answer_and_citations_from_search_context() {
     citations[0].get("path").and_then(Value::as_str),
     Some("wiki/concepts/attention.md")
   );
+}
+
+#[tokio::test]
+async fn ingest_source_extracts_text_from_docx_sources() {
+  let temp = tempdir().unwrap();
+  let _env = TestEnvironment::start("ingest-docx-source").await.unwrap();
+  let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let (cookie, csrf) = login_and_csrf(state.clone()).await;
+  let project_root = temp.path().join("ingest-docx-project");
+  let project_id = create_project(state.clone(), &cookie, &csrf, project_root.clone()).await;
+
+  let import_response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri(format!("/api/projects/{project_id}/sources:import"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::COOKIE, &cookie)
+        .header("x-csrf-token", &csrf)
+        .body(Body::from(
+          json!({
+            "fileName": "attention.docx",
+            "contentBase64": base64::engine::general_purpose::STANDARD.encode(build_minimal_docx("Attention from DOCX."))
+          })
+          .to_string(),
+        ))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(import_response.status(), StatusCode::ACCEPTED);
+  let import_payload = read_json(import_response.into_body()).await;
+  wait_for_task_terminal(
+    &state,
+    import_payload.get("taskId").and_then(Value::as_str).unwrap(),
+  )
+  .await;
+
+  let ingest_response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri(format!("/api/projects/{project_id}/ingest"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::COOKIE, &cookie)
+        .header("x-csrf-token", &csrf)
+        .body(Body::from(json!({ "relativePath": "raw/sources/attention.docx" }).to_string()))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+  assert_eq!(ingest_response.status(), StatusCode::ACCEPTED);
+  let payload = read_json(ingest_response.into_body()).await;
+  let task_id = payload.get("taskId").and_then(Value::as_str).unwrap().to_string();
+  wait_for_task_terminal(&state, &task_id).await;
+
+  let detail = store::get_task_by_id(&state, &task_id).await.unwrap();
+  assert_eq!(detail.status, "succeeded", "{detail:?}");
+  assert_eq!(
+    detail.result.as_ref().unwrap()["summaryPath"],
+    Value::String("wiki/sources/attention.md".to_string())
+  );
+  let summary = fs::read_to_string(project_root.join("wiki/sources/attention.md")).unwrap();
+  assert!(summary.contains("Attention from DOCX."));
+  assert!(summary.contains("sources: [\"attention.docx\"]"));
 }
 
 async fn login_and_csrf(state: knowledge_server::app::state::AppState) -> (String, String) {
@@ -369,4 +440,51 @@ async fn wait_for_task_terminal(state: &knowledge_server::app::state::AppState, 
   }
 
   panic!("task did not reach a terminal state");
+}
+
+fn build_minimal_docx(text: &str) -> Vec<u8> {
+  let cursor = std::io::Cursor::new(Vec::new());
+  let mut zip = ZipWriter::new(cursor);
+  let options: FileOptions<'_, ()> = FileOptions::default();
+
+  zip.start_file("[Content_Types].xml", options).unwrap();
+  zip
+    .write_all(
+      br#"<?xml version="1.0" encoding="UTF-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+</Types>"#,
+    )
+    .unwrap();
+
+  zip.start_file("_rels/.rels", options).unwrap();
+  zip
+    .write_all(
+      br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>"#,
+    )
+    .unwrap();
+
+  zip.start_file("word/document.xml", options).unwrap();
+  zip
+    .write_all(
+      format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p>
+      <w:r><w:t>{text}</w:t></w:r>
+    </w:p>
+  </w:body>
+</w:document>"#
+      )
+      .as_bytes(),
+    )
+    .unwrap();
+
+  zip.finish().unwrap().into_inner()
 }

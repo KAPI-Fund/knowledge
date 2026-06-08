@@ -6,11 +6,16 @@ license.workspace = true
 
 [dependencies]
 base64.workspace = true
+calamine.workspace = true
+docx-rs.workspace = true
+office_oxide.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 time.workspace = true
 thiserror = "2.0.17"
+unicode-normalization.workspace = true
+zip.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
