@@ -4,7 +4,11 @@ import { useParams } from "react-router-dom";
 import { ProjectNav } from "../projects/project-nav";
 import { useCancelTaskMutation, useRetryTaskMutation } from "../tasks/queries";
 
-import { useCreateQueryTaskMutation, useQueryTaskDetailQuery } from "./queries";
+import {
+  useCreateQueryTaskMutation,
+  useQueryTaskDetailQuery,
+  useSaveQueryTaskMutation,
+} from "./queries";
 
 type QueryCitation = {
   path: string;
@@ -18,10 +22,13 @@ export function QueryPage() {
   const createQueryTask = useCreateQueryTaskMutation();
   const retryTask = useRetryTaskMutation();
   const cancelTask = useCancelTaskMutation();
+  const saveQueryTask = useSaveQueryTaskMutation();
   const [query, setQuery] = useState("");
   const [topK, setTopK] = useState("3");
   const [activeTaskId, setActiveTaskId] = useState("");
+  const [saveTaskId, setSaveTaskId] = useState("");
   const task = useQueryTaskDetailQuery(projectId, activeTaskId);
+  const saveTask = useQueryTaskDetailQuery(projectId, saveTaskId);
 
   async function handleRunQuery() {
     const trimmed = query.trim();
@@ -35,6 +42,21 @@ export function QueryPage() {
       topK: Number(topK) || 3,
     });
     setActiveTaskId(created.taskId);
+    setSaveTaskId("");
+  }
+
+  async function handleSaveToWiki() {
+    if (!task.data) {
+      return;
+    }
+
+    const title = deriveSaveTitle(query, task.data.title);
+    const created = await saveQueryTask.mutateAsync({
+      projectId,
+      taskId: task.data.id,
+      title,
+    });
+    setSaveTaskId(created.taskId);
   }
 
   const result = task.data?.result as
@@ -98,6 +120,19 @@ export function QueryPage() {
           <h2>Answer</h2>
           <p>{result.answer}</p>
           {result.contextSummary ? <p>{result.contextSummary}</p> : null}
+          <button type="button" onClick={handleSaveToWiki}>
+            Save To Wiki
+          </button>
+          {saveTask.data?.status === "succeeded" ? (
+            <p>
+              Saved to wiki{" "}
+              {String(
+                (saveTask.data.result as { relativePath?: string } | undefined | null)
+                  ?.relativePath ?? "",
+              )}
+            </p>
+          ) : null}
+          {saveTask.data?.status === "failed" ? <p>Save to wiki failed</p> : null}
           <ul className="results-list">
             {(result.citations ?? []).map((citation) => (
               <li key={citation.path} className="card stack compact">
@@ -118,4 +153,13 @@ export function QueryPage() {
       ) : null}
     </section>
   );
+}
+
+function deriveSaveTitle(query: string, taskTitle: string) {
+  const trimmedQuery = query.trim();
+  if (trimmedQuery) {
+    return trimmedQuery;
+  }
+
+  return taskTitle.replace(/^Query:\s*/, "").trim() || "Saved Query";
 }

@@ -39,6 +39,7 @@ pub fn router() -> Router<AppState> {
     .route("/api/projects/{project_id}/tasks/{task_id}/cancel", post(cancel_task_handler))
     .route("/api/projects/{project_id}/query-tasks", post(create_query_task_handler))
     .route("/api/projects/{project_id}/query-tasks/{task_id}", get(query_task_detail_handler))
+    .route("/api/projects/{project_id}/query-tasks/{task_id}/save", post(save_query_task_handler))
     .route("/api/projects/{project_id}/ingest", post(ingest_handler))
     .route("/api/projects/{project_id}/query", post(query_handler))
     .route("/api/projects/{project_id}/reviews", get(list_reviews_handler))
@@ -70,6 +71,11 @@ pub struct SearchRequest {
 pub struct CreateQueryTaskRequest {
   pub query: String,
   pub top_k: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SaveQueryTaskRequest {
+  pub title: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -448,6 +454,95 @@ async fn query_task_detail_handler(
   Ok(Json(json!(get_task(&state, &project_id, &task_id).await?)))
 }
 
+async fn save_query_task_handler(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Path((project_id, task_id)): Path<(String, String)>,
+  Json(payload): Json<SaveQueryTaskRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+  let session = authorized_session(&state, &headers, Some(&project_id)).await?;
+  validate_csrf(&headers, &session.csrf_token)?;
+
+  let source_task = get_task(&state, &project_id, &task_id).await?;
+  if source_task.task_type != "query.answer" || source_task.status != "succeeded" {
+    return Err(ApiError::bad_request("only successful query answer tasks can be saved"));
+  }
+
+  let result = source_task
+    .result
+    .as_ref()
+    .ok_or_else(|| ApiError::bad_request("query task result is missing"))?;
+  let title = payload.title.trim();
+  if title.is_empty() {
+    return Err(ApiError::bad_request("title is required"));
+  }
+  let slug = slugify_title(title);
+  if slug.is_empty() {
+    return Err(ApiError::bad_request("title does not produce a valid slug"));
+  }
+  let answer = result
+    .get("answer")
+    .and_then(serde_json::Value::as_str)
+    .ok_or_else(|| ApiError::bad_request("query answer is missing"))?;
+  let context_summary = result
+    .get("contextSummary")
+    .and_then(serde_json::Value::as_str)
+    .unwrap_or_default();
+  let citations = result
+    .get("citations")
+    .and_then(serde_json::Value::as_array)
+    .cloned()
+    .unwrap_or_default();
+
+  let task = create_queued_task(
+    &state,
+    CreateTaskRecord {
+      project_id: project_id.clone(),
+      task_type: "query.save_answer".to_string(),
+      title: format!("Save query: {title}"),
+      relative_path: Some(format!("wiki/queries/{slug}.md")),
+      detail: json!({
+        "sourceTaskId": task_id
+      }),
+      created_by: session.user_id.clone(),
+    },
+    json!({
+      "sourceTaskId": task_id,
+      "title": title,
+      "slug": slug,
+      "answer": answer,
+      "citations": citations,
+      "contextSummary": context_summary
+    }),
+  )
+  .await?;
+
+  append_audit_log(
+    &state,
+    CreateAuditLog {
+      project_id: Some(project_id),
+      actor_id: session.user_id,
+      action: "query.save.enqueued".to_string(),
+      target_type: "query".to_string(),
+      target_id: task_id,
+      task_id: Some(task.id.clone()),
+      summary: format!("Queued save-to-wiki for {title}"),
+      metadata: json!({
+        "slug": slug
+      }),
+    },
+  )
+  .await?;
+
+  Ok((
+    StatusCode::ACCEPTED,
+    Json(json!({
+      "taskId": task.id,
+      "status": task.status
+    })),
+  ))
+}
+
 async fn ingest_handler(
   State(state): State<AppState>,
   headers: HeaderMap,
@@ -600,6 +695,23 @@ fn validate_csrf(headers: &HeaderMap, expected_token: &str) -> Result<(), ApiErr
   }
 
   Ok(())
+}
+
+fn slugify_title(input: &str) -> String {
+  let mut slug = String::new();
+  let mut last_was_dash = false;
+
+  for ch in input.chars() {
+    if ch.is_ascii_alphanumeric() {
+      slug.push(ch.to_ascii_lowercase());
+      last_was_dash = false;
+    } else if !last_was_dash && !slug.is_empty() {
+      slug.push('-');
+      last_was_dash = true;
+    }
+  }
+
+  slug.trim_matches('-').to_string()
 }
 
 async fn authorized_session(

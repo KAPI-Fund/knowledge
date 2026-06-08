@@ -383,6 +383,27 @@ export async function getQueryTaskDetail(input: { projectId: string; taskId: str
   );
 }
 
+export async function saveQueryTaskResult(input: {
+  projectId: string;
+  taskId: string;
+  title: string;
+}) {
+  return apiFetch(
+    `/api/projects/${input.projectId}/query-tasks/${input.taskId}/save`,
+    {
+      method: "POST",
+      headers: csrfHeader(),
+      body: JSON.stringify({
+        title: input.title,
+      }),
+    },
+    z.object({
+      taskId: z.string(),
+      status: z.string(),
+    }),
+  );
+}
+
 export async function retryProjectTask(input: { projectId: string; taskId: string }) {
   return apiFetch(
     `/api/projects/${input.projectId}/tasks/${input.taskId}/retry`,

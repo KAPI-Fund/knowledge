@@ -19,6 +19,15 @@ export default defineConfig({
   },
   webServer: [
     {
+      command: "node ./mock-openai.mjs",
+      port: 18080,
+      reuseExistingServer: false,
+      cwd: ".",
+      env: {
+        KNOWLEDGE_MOCK_OPENAI_PORT: "18080",
+      },
+    },
+    {
       command: "cargo run -p knowledge-server",
       port: 4001,
       reuseExistingServer: false,

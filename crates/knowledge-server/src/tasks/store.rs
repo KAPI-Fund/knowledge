@@ -97,7 +97,7 @@ pub async fn acquire_next_task(
     "WITH next_task AS (
       SELECT id
       FROM project_tasks
-      WHERE status = 'queued'
+      WHERE status IN ('queued', 'retry_waiting')
         AND (next_retry_at IS NULL OR next_retry_at <= $3)
       ORDER BY created_at ASC
       LIMIT 1
@@ -108,7 +108,8 @@ pub async fn acquire_next_task(
         started_at = COALESCE(started_at, $3),
         updated_at = $3,
         lease_owner = $1,
-        lease_expires_at = $2
+        lease_expires_at = $2,
+        next_retry_at = NULL
     WHERE id IN (SELECT id FROM next_task)
     RETURNING
       id, project_id, task_type, status, title, relative_path, detail, payload, result, error,
@@ -142,7 +143,8 @@ pub async fn complete_task(
          updated_at = $3,
          finished_at = $3,
          lease_owner = NULL,
-         lease_expires_at = NULL
+         lease_expires_at = NULL,
+         next_retry_at = NULL
      WHERE id = $1
      RETURNING
       id, project_id, task_type, status, title, relative_path, detail, payload, result, error,
@@ -176,7 +178,8 @@ pub async fn fail_task(
          updated_at = $3,
          finished_at = $3,
          lease_owner = NULL,
-         lease_expires_at = NULL
+         lease_expires_at = NULL,
+         next_retry_at = NULL
      WHERE id = $1
      RETURNING
       id, project_id, task_type, status, title, relative_path, detail, payload, result, error,

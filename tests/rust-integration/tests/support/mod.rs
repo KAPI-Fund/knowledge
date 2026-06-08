@@ -1,4 +1,10 @@
+#[allow(dead_code)]
+pub mod mock_openai;
+
 use anyhow::{Context, Result};
+use knowledge_server::app::state::AppState;
+use knowledge_server::cache::CacheStore;
+use knowledge_server::config::AppConfig;
 use redis::AsyncCommands;
 use sqlx::Connection;
 use std::time::Duration;
@@ -67,6 +73,19 @@ impl TestEnvironment {
     let value: Option<String> = connection.get(key).await?;
     Ok(value)
   }
+}
+
+#[allow(dead_code)]
+pub async fn bootstrap_state_without_scheduler(config: &AppConfig) -> Result<AppState> {
+  let pool = knowledge_server::db::pool::connect_pool(&config.database_url).await?;
+  knowledge_server::db::migrate::run(&pool).await?;
+  let cache = CacheStore::connect(&config.redis_url).await?;
+
+  Ok(AppState {
+    pool,
+    cache,
+    session_ttl_hours: config.session_ttl_hours,
+  })
 }
 
 impl Drop for TestEnvironment {

@@ -4,6 +4,7 @@ pub mod cache;
 pub mod config;
 pub mod db;
 pub mod http;
+pub mod providers;
 pub mod projects;
 pub mod settings;
 pub mod tasks;

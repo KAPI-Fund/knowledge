@@ -1,3 +1,4 @@
+pub mod queries;
 pub mod root;
 pub mod reviews;
 pub mod scaffold;

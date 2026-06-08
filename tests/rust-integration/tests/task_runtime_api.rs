@@ -6,7 +6,7 @@ use knowledge_server::config::AppConfig;
 use knowledge_server::tasks::store::{self, CreateTaskInput};
 use knowledge_server::{bootstrap_state, build_app};
 use serde_json::{json, Value};
-use support::TestEnvironment;
+use support::{bootstrap_state_without_scheduler, TestEnvironment};
 use tempfile::tempdir;
 use tower::util::ServiceExt;
 
@@ -182,6 +182,70 @@ async fn queued_task_creation_emits_worker_wakeup_signal() {
     .await
     .unwrap();
   assert_eq!(wakeup.as_deref(), Some("queued"));
+}
+
+#[tokio::test]
+async fn retry_waiting_tasks_are_not_reacquired_before_next_retry_at_and_reenter_once_due() {
+  let env = TestEnvironment::start("retry-due-gating").await.unwrap();
+  let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
+  let state = bootstrap_state_without_scheduler(&config).await.unwrap();
+  let (cookie, csrf) = login_and_csrf(state.clone()).await;
+  let project_root = tempdir().unwrap().path().join("retry-due-gating-project");
+  let project_id = create_project(state.clone(), &cookie, &csrf, project_root).await;
+  let admin_user_id = sqlx::query_scalar::<_, String>("SELECT id FROM users WHERE username = $1")
+    .bind("admin")
+    .fetch_one(&state.pool)
+    .await
+    .unwrap();
+  let task = store::create_task(
+    &state,
+    CreateTaskInput {
+      project_id,
+      task_type: "query.answer".to_string(),
+      title: "Query: attention".to_string(),
+      relative_path: None,
+      detail: json!({}),
+      payload: json!({
+        "query": "attention",
+        "topK": 3
+      }),
+      created_by: admin_user_id,
+      max_attempts: 3,
+    },
+  )
+  .await
+  .unwrap();
+
+  store::retry_task(
+    &state,
+    &task.id,
+    json!({
+      "code": "provider_rate_limited",
+      "retryable": true
+    }),
+    "9999-01-01T00:00:00Z".to_string(),
+  )
+  .await
+  .unwrap();
+
+  let early = store::acquire_next_task(&state, "worker-1", 30).await.unwrap();
+  assert!(early.is_none());
+
+  store::retry_task(
+    &state,
+    &task.id,
+    json!({
+      "code": "provider_rate_limited",
+      "retryable": true
+    }),
+    "1970-01-01T00:00:00Z".to_string(),
+  )
+  .await
+  .unwrap();
+
+  let due = store::acquire_next_task(&state, "worker-1", 30).await.unwrap().unwrap();
+  assert_eq!(due.id, task.id);
+  assert_eq!(due.status, "running");
 }
 
 async fn login_and_csrf(state: knowledge_server::app::state::AppState) -> (String, String) {
