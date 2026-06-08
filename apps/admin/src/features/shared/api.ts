@@ -94,8 +94,20 @@ const reviewsSchema = z.object({
     z.object({
       id: z.string(),
       status: z.string(),
+      type: z.string().optional(),
       title: z.string(),
       description: z.string().optional(),
+      sourcePath: z.string().optional(),
+      affectedPages: z.array(z.string()).optional(),
+      searchQueries: z.array(z.string()).optional(),
+      options: z
+        .array(
+          z.object({
+            label: z.string(),
+            action: z.string(),
+          }),
+        )
+        .optional(),
     }),
   ),
 });
@@ -141,12 +153,14 @@ const graphSchema = z.object({
       label: z.string(),
       nodeType: z.string(),
       path: z.string(),
+      linkCount: z.number(),
     }),
   ),
   edges: z.array(
     z.object({
       source: z.string(),
       target: z.string(),
+      weight: z.number(),
     }),
   ),
 });
@@ -157,6 +171,7 @@ const graphNeighborsSchema = z.object({
     label: z.string(),
     nodeType: z.string(),
     path: z.string(),
+    linkCount: z.number(),
   }),
   neighbors: z.array(
     z.object({
@@ -164,6 +179,7 @@ const graphNeighborsSchema = z.object({
       label: z.string(),
       nodeType: z.string(),
       path: z.string(),
+      linkCount: z.number(),
     }),
   ),
 });
@@ -324,8 +340,23 @@ export async function searchProject(input: { projectId: string; query: string })
   return response.results;
 }
 
-export async function getProjectGraph(projectId: string) {
-  return apiFetch(`/api/projects/${projectId}/graph`, { method: "GET" }, graphSchema);
+export async function getProjectGraph(input: {
+  projectId: string;
+  query?: string;
+  limit?: number;
+}) {
+  const searchParams = new URLSearchParams();
+  if (input.query?.trim()) {
+    searchParams.set("q", input.query.trim());
+  }
+  if (input.limit && input.limit > 0) {
+    searchParams.set("limit", String(input.limit));
+  }
+  const queryString = searchParams.toString();
+  const path = queryString
+    ? `/api/projects/${input.projectId}/graph?${queryString}`
+    : `/api/projects/${input.projectId}/graph`;
+  return apiFetch(path, { method: "GET" }, graphSchema);
 }
 
 export async function getProjectGraphNeighbors(input: {
@@ -447,10 +478,22 @@ export async function updateProjectReview(input: {
       body: JSON.stringify({ status: input.status }),
     },
     z.object({
-      id: z.string(),
+      taskId: z.string(),
       status: z.string(),
-      title: z.string(),
-      description: z.string().optional(),
+    }),
+  );
+}
+
+export async function sweepProjectReviews(input: { projectId: string }) {
+  return apiFetch(
+    `/api/projects/${input.projectId}/reviews:sweep`,
+    {
+      method: "POST",
+      headers: csrfHeader(),
+    },
+    z.object({
+      taskId: z.string(),
+      status: z.string(),
     }),
   );
 }

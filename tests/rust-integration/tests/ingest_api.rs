@@ -8,6 +8,7 @@ use knowledge_server::config::AppConfig;
 use knowledge_server::tasks::{scheduler, store};
 use knowledge_server::{bootstrap_state, build_app};
 use serde_json::{json, Value};
+use support::mock_openai::{MockOpenAiServer, MockScenario};
 use support::TestEnvironment;
 use tempfile::tempdir;
 use tower::util::ServiceExt;
@@ -79,7 +80,7 @@ async fn ingest_source_generates_summary_and_updates_indexes() {
 
   let summary = fs::read_to_string(project_root.join("wiki/sources/attention.md")).unwrap();
   assert!(summary.contains("type: source"));
-  assert!(summary.contains("sources: [attention.md]"));
+  assert!(summary.contains("sources: [\"attention.md\"]"));
   assert!(summary.contains("# Attention"));
 
   let index = fs::read_to_string(project_root.join("wiki/index.md")).unwrap();
@@ -103,6 +104,93 @@ async fn ingest_source_generates_summary_and_updates_indexes() {
 }
 
 #[tokio::test]
+async fn ingest_source_uses_provider_two_stage_generation_and_writes_multiple_pages() {
+  let temp = tempdir().unwrap();
+  let _env = TestEnvironment::start("ingest-provider").await.unwrap();
+  let mock = MockOpenAiServer::start(MockScenario::ingest_success()).await.unwrap();
+  let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let (cookie, csrf) = login_and_csrf(state.clone()).await;
+  let project_root = temp.path().join("ingest-provider-project");
+  let project_id = create_project(state.clone(), &cookie, &csrf, project_root.clone()).await;
+  configure_provider(&state, &mock.base_url(), "mock-model").await;
+
+  fs::write(
+    project_root.join("raw/sources/attention.md"),
+    "# Attention\n\nTransformers use attention mechanisms.\n",
+  )
+  .unwrap();
+
+  let ingest_response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri(format!("/api/projects/{project_id}/ingest"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::COOKIE, &cookie)
+        .header("x-csrf-token", &csrf)
+        .body(Body::from(json!({ "relativePath": "raw/sources/attention.md" }).to_string()))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+  assert_eq!(ingest_response.status(), StatusCode::ACCEPTED);
+  let payload = read_json(ingest_response.into_body()).await;
+  let task_id = payload.get("taskId").and_then(Value::as_str).unwrap().to_string();
+  wait_for_task_terminal(&state, &task_id).await;
+
+  let detail = store::get_task_by_id(&state, &task_id).await.unwrap();
+  assert_eq!(detail.status, "succeeded");
+  assert_eq!(
+    detail.result.as_ref().unwrap()["summaryPath"],
+    Value::String("wiki/sources/attention.md".to_string())
+  );
+  assert_eq!(detail.result.as_ref().unwrap()["cacheHit"], Value::Bool(false));
+
+  let summary = fs::read_to_string(project_root.join("wiki/sources/attention.md")).unwrap();
+  assert!(summary.contains("Transformers use attention mechanisms."));
+
+  let concept =
+    fs::read_to_string(project_root.join("wiki/concepts/attention-mechanism.md")).unwrap();
+  assert!(concept.contains("# Attention Mechanism"));
+  assert!(concept.contains("sources: [\"attention.md\"]"));
+
+  assert_eq!(mock.request_count(), 2);
+}
+
+#[tokio::test]
+async fn ingest_source_skips_provider_when_source_content_hash_is_unchanged() {
+  let temp = tempdir().unwrap();
+  let _env = TestEnvironment::start("ingest-cache-hit").await.unwrap();
+  let mock = MockOpenAiServer::start(MockScenario::ingest_success()).await.unwrap();
+  let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let (cookie, csrf) = login_and_csrf(state.clone()).await;
+  let project_root = temp.path().join("ingest-cache-project");
+  let project_id = create_project(state.clone(), &cookie, &csrf, project_root.clone()).await;
+  configure_provider(&state, &mock.base_url(), "mock-model").await;
+
+  fs::write(
+    project_root.join("raw/sources/attention.md"),
+    "# Attention\n\nTransformers use attention mechanisms.\n",
+  )
+  .unwrap();
+
+  let first_task_id = enqueue_ingest(&state, &cookie, &csrf, &project_id).await;
+  wait_for_task_terminal(&state, &first_task_id).await;
+  assert_eq!(mock.request_count(), 2);
+
+  let second_task_id = enqueue_ingest(&state, &cookie, &csrf, &project_id).await;
+  wait_for_task_terminal(&state, &second_task_id).await;
+  assert_eq!(mock.request_count(), 2);
+
+  let detail = store::get_task_by_id(&state, &second_task_id).await.unwrap();
+  assert_eq!(detail.status, "succeeded");
+  assert_eq!(detail.result.as_ref().unwrap()["cacheHit"], Value::Bool(true));
+}
+
+#[tokio::test]
 async fn query_api_returns_answer_and_citations_from_search_context() {
   let temp = tempdir().unwrap();
   let _env = TestEnvironment::start("query-answer").await.unwrap();
@@ -114,7 +202,7 @@ async fn query_api_returns_answer_and_citations_from_search_context() {
 
   fs::write(
     project_root.join("wiki/concepts/attention.md"),
-    "---\ntype: concept\ntitle: Attention\nsources: [attention.md]\n---\n\n# Attention\n\nAttention lets models focus on relevant tokens.\n",
+    "---\ntype: concept\ntitle: Attention\nsources: [\"attention.md\"]\n---\n\n# Attention\n\nAttention lets models focus on relevant tokens.\n",
   )
   .unwrap();
 
@@ -218,6 +306,54 @@ async fn create_project(
 async fn read_json(body: Body) -> Value {
   let bytes = to_bytes(body, usize::MAX).await.unwrap();
   serde_json::from_slice(&bytes).unwrap()
+}
+
+async fn enqueue_ingest(
+  state: &knowledge_server::app::state::AppState,
+  cookie: &str,
+  csrf: &str,
+  project_id: &str,
+) -> String {
+  let ingest_response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri(format!("/api/projects/{project_id}/ingest"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::COOKIE, cookie)
+        .header("x-csrf-token", csrf)
+        .body(Body::from(json!({ "relativePath": "raw/sources/attention.md" }).to_string()))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+  assert_eq!(ingest_response.status(), StatusCode::ACCEPTED);
+  let payload = read_json(ingest_response.into_body()).await;
+  payload.get("taskId").and_then(Value::as_str).unwrap().to_string()
+}
+
+async fn configure_provider(
+  state: &knowledge_server::app::state::AppState,
+  base_url: &str,
+  model: &str,
+) {
+  sqlx::query(
+    "UPDATE system_settings
+     SET provider_mode = $1,
+         provider_base_url = $2,
+         provider_api_key = $3,
+         provider_model = $4,
+         provider_timeout_seconds = $5",
+  )
+  .bind("openai-compatible")
+  .bind(base_url)
+  .bind("test-key")
+  .bind(model)
+  .bind(30_i64)
+  .execute(&state.pool)
+  .await
+  .unwrap();
 }
 
 async fn wait_for_task_terminal(state: &knowledge_server::app::state::AppState, task_id: &str) {

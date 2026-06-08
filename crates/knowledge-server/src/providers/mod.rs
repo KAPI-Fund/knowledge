@@ -3,5 +3,6 @@ mod types;
 
 pub use openai_compatible::OpenAiCompatibleProvider;
 pub use types::{
-    ProviderAnswer, ProviderCitation, ProviderError, ProviderQueryRequest, ProviderUsage,
+    ProviderAnswer, ProviderCitation, ProviderError, ProviderQueryRequest, ProviderTextRequest,
+    ProviderTextResponse, ProviderUsage,
 };

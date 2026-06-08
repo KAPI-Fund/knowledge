@@ -6,6 +6,7 @@ use knowledge_server::config::AppConfig;
 use knowledge_server::tasks::{scheduler, store};
 use knowledge_server::{bootstrap_state, build_app};
 use serde_json::{json, Value};
+use support::mock_openai::{MockOpenAiServer, MockScenario};
 use support::TestEnvironment;
 use tempfile::tempdir;
 use tower::util::ServiceExt;
@@ -191,6 +192,291 @@ async fn ingest_creates_review_items_and_review_endpoint_can_update_status() {
   );
 }
 
+#[tokio::test]
+async fn provider_generated_review_blocks_are_persisted_during_ingest() {
+  let temp = tempdir().unwrap();
+  let _env = TestEnvironment::start("provider-review-items").await.unwrap();
+  let mock = MockOpenAiServer::start(MockScenario::ingest_with_review_success()).await.unwrap();
+  let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let (cookie, csrf) = login_and_csrf(state.clone()).await;
+  let project_root = temp.path().join("provider-review-project");
+  let project_id = create_project(state.clone(), &cookie, &csrf, project_root.clone()).await;
+  configure_provider(&state, &mock.base_url(), "mock-model").await;
+
+  let import_response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri(format!("/api/projects/{project_id}/sources:import"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::COOKIE, &cookie)
+        .header("x-csrf-token", &csrf)
+        .body(Body::from(
+          json!({
+            "fileName": "attention.md",
+            "contentBase64": "IyBBdHRlbnRpb24KClRyYW5zZm9ybWVycyB1c2UgYXR0ZW50aW9uIG1lY2hhbmlzbXMuCg=="
+          })
+          .to_string(),
+        ))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(import_response.status(), StatusCode::ACCEPTED);
+  let import_payload = read_json(import_response.into_body()).await;
+  wait_for_task_terminal(
+    &state,
+    import_payload.get("taskId").and_then(Value::as_str).unwrap(),
+  )
+  .await;
+
+  let ingest_response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri(format!("/api/projects/{project_id}/ingest"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::COOKIE, &cookie)
+        .header("x-csrf-token", &csrf)
+        .body(Body::from(json!({ "relativePath": "raw/sources/attention.md" }).to_string()))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(ingest_response.status(), StatusCode::ACCEPTED);
+  let ingest_payload = read_json(ingest_response.into_body()).await;
+  wait_for_task_terminal(
+    &state,
+    ingest_payload.get("taskId").and_then(Value::as_str).unwrap(),
+  )
+  .await;
+
+  let reviews_response = build_app(state)
+    .oneshot(
+      Request::builder()
+        .uri(format!("/api/projects/{project_id}/reviews"))
+        .header(header::COOKIE, &cookie)
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+  assert_eq!(reviews_response.status(), StatusCode::OK);
+  let reviews_payload = read_json(reviews_response.into_body()).await;
+  let reviews = reviews_payload.get("reviews").and_then(Value::as_array).unwrap();
+  assert_eq!(reviews.len(), 1);
+  assert_eq!(
+    reviews[0].get("title").and_then(Value::as_str),
+    Some("Missing evaluation page")
+  );
+  assert_eq!(
+    reviews[0].get("type").and_then(Value::as_str),
+    Some("missing-page")
+  );
+  assert_eq!(
+    reviews[0].get("sourcePath").and_then(Value::as_str),
+    Some("raw/sources/attention.md")
+  );
+  assert_eq!(
+    reviews[0]
+      .get("affectedPages")
+      .and_then(Value::as_array)
+      .map(Vec::len),
+    Some(1)
+  );
+  assert_eq!(
+    reviews[0]
+      .get("searchQueries")
+      .and_then(Value::as_array)
+      .map(Vec::len),
+    Some(2)
+  );
+  assert_eq!(
+    reviews[0]
+      .get("options")
+      .and_then(Value::as_array)
+      .map(Vec::len),
+    Some(2)
+  );
+  assert!(
+    reviews[0]
+      .get("description")
+      .and_then(Value::as_str)
+      .unwrap()
+      .contains("Create a dedicated page")
+  );
+}
+
+#[tokio::test]
+async fn final_ingest_triggers_review_sweep_for_existing_missing_page_items() {
+  let temp = tempdir().unwrap();
+  let _env = TestEnvironment::start("review-sweep").await.unwrap();
+  let mock = MockOpenAiServer::start(MockScenario::ingest_success()).await.unwrap();
+  let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let (cookie, csrf) = login_and_csrf(state.clone()).await;
+  let project_root = temp.path().join("review-sweep-project");
+  let project_id = create_project(state.clone(), &cookie, &csrf, project_root.clone()).await;
+  configure_provider(&state, &mock.base_url(), "mock-model").await;
+
+  std::fs::write(
+    project_root.join(".knowledge/reviews/items.json"),
+    json!({
+      "reviews": [
+        {
+          "id": "review-missing-attention-mechanism",
+          "status": "open",
+          "type": "missing-page",
+          "title": "Missing page: attention mechanism",
+          "description": "The concept page does not exist yet.",
+          "options": [
+            { "label": "Approve", "action": "Approve" },
+            { "label": "Skip", "action": "Skip" }
+          ]
+        }
+      ]
+    })
+    .to_string(),
+  )
+  .unwrap();
+
+  std::fs::write(
+    project_root.join("raw/sources/attention.md"),
+    "# Attention\n\nTransformers use attention mechanisms.\n",
+  )
+  .unwrap();
+
+  let ingest_response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri(format!("/api/projects/{project_id}/ingest"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::COOKIE, &cookie)
+        .header("x-csrf-token", &csrf)
+        .body(Body::from(json!({ "relativePath": "raw/sources/attention.md" }).to_string()))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(ingest_response.status(), StatusCode::ACCEPTED);
+  let ingest_payload = read_json(ingest_response.into_body()).await;
+  let task_id = ingest_payload.get("taskId").and_then(Value::as_str).unwrap().to_string();
+  wait_for_task_terminal(&state, &task_id).await;
+
+  let task = store::get_task_by_id(&state, &task_id).await.unwrap();
+  assert_eq!(task.status, "succeeded");
+  assert_eq!(
+    task.result.as_ref().and_then(|result| result.get("reviewSweep")),
+    Some(&json!({
+      "resolvedIds": ["review-missing-attention-mechanism"],
+      "unresolvedIds": []
+    })),
+  );
+
+  let reviews_response = build_app(state)
+    .oneshot(
+      Request::builder()
+        .uri(format!("/api/projects/{project_id}/reviews"))
+        .header(header::COOKIE, &cookie)
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(reviews_response.status(), StatusCode::OK);
+  let reviews_payload = read_json(reviews_response.into_body()).await;
+  let reviews = reviews_payload.get("reviews").and_then(Value::as_array).unwrap();
+  assert_eq!(reviews.len(), 1);
+  assert_eq!(reviews[0].get("status").and_then(Value::as_str), Some("resolved"));
+}
+
+#[tokio::test]
+async fn final_ingest_uses_provider_to_semantically_resolve_remaining_reviews() {
+  let temp = tempdir().unwrap();
+  let _env = TestEnvironment::start("review-sweep-llm").await.unwrap();
+  let mock = MockOpenAiServer::start(MockScenario::ingest_then_sweep_llm_success()).await.unwrap();
+  let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let (cookie, csrf) = login_and_csrf(state.clone()).await;
+  let project_root = temp.path().join("review-sweep-llm-project");
+  let project_id = create_project(state.clone(), &cookie, &csrf, project_root.clone()).await;
+  configure_provider(&state, &mock.base_url(), "mock-model").await;
+
+  std::fs::write(
+    project_root.join(".knowledge/reviews/items.json"),
+    json!({
+      "reviews": [
+        {
+          "id": "review-context-window",
+          "status": "open",
+          "type": "missing-page",
+          "title": "Missing page: Context Window",
+          "description": "The wiki might already cover this concept indirectly.",
+          "options": [
+            { "label": "Approve", "action": "Approve" },
+            { "label": "Skip", "action": "Skip" }
+          ]
+        }
+      ]
+    })
+    .to_string(),
+  )
+  .unwrap();
+
+  std::fs::write(
+    project_root.join("raw/sources/attention.md"),
+    "# Attention\n\nAttention defines an effective context window for transformer models.\n",
+  )
+  .unwrap();
+
+  let ingest_response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri(format!("/api/projects/{project_id}/ingest"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::COOKIE, &cookie)
+        .header("x-csrf-token", &csrf)
+        .body(Body::from(json!({ "relativePath": "raw/sources/attention.md" }).to_string()))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(ingest_response.status(), StatusCode::ACCEPTED);
+  let ingest_payload = read_json(ingest_response.into_body()).await;
+  let task_id = ingest_payload.get("taskId").and_then(Value::as_str).unwrap().to_string();
+  wait_for_task_terminal(&state, &task_id).await;
+
+  let task = store::get_task_by_id(&state, &task_id).await.unwrap();
+  assert_eq!(task.status, "succeeded");
+  assert_eq!(
+    task.result.as_ref().and_then(|result| result.get("reviewSweep")),
+    Some(&json!({
+      "resolvedIds": ["review-context-window"],
+      "unresolvedIds": []
+    })),
+  );
+
+  let reviews_response = build_app(state)
+    .oneshot(
+      Request::builder()
+        .uri(format!("/api/projects/{project_id}/reviews"))
+        .header(header::COOKIE, &cookie)
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(reviews_response.status(), StatusCode::OK);
+  let reviews_payload = read_json(reviews_response.into_body()).await;
+  let reviews = reviews_payload.get("reviews").and_then(Value::as_array).unwrap();
+  assert_eq!(reviews.len(), 1);
+  assert_eq!(reviews[0].get("status").and_then(Value::as_str), Some("resolved"));
+}
+
 async fn wait_for_task_terminal(state: &knowledge_server::app::state::AppState, task_id: &str) {
   for _ in 0..20 {
     let progressed = scheduler::run_scheduler_tick(state).await.unwrap_or(false);
@@ -204,6 +490,29 @@ async fn wait_for_task_terminal(state: &knowledge_server::app::state::AppState, 
   }
 
   panic!("task did not reach a terminal state");
+}
+
+async fn configure_provider(
+  state: &knowledge_server::app::state::AppState,
+  base_url: &str,
+  model: &str,
+) {
+  sqlx::query(
+    "UPDATE system_settings
+     SET provider_mode = $1,
+         provider_base_url = $2,
+         provider_api_key = $3,
+         provider_model = $4,
+         provider_timeout_seconds = $5",
+  )
+  .bind("openai-compatible")
+  .bind(base_url)
+  .bind("test-key")
+  .bind(model)
+  .bind(30_i64)
+  .execute(&state.pool)
+  .await
+  .unwrap();
 }
 
 async fn login_and_csrf(state: knowledge_server::app::state::AppState) -> (String, String) {

@@ -52,10 +52,28 @@ vi.mock("../sources/queries", () => ({
 
 vi.mock("../reviews/queries", () => ({
   useProjectReviewsQuery: () => ({
-    data: [{ id: "review-1", status: "open", title: "Review demo.md" }],
+    data: [
+      {
+        id: "review-1",
+        status: "open",
+        title: "Review demo.md",
+        type: "missing-page",
+        description: "Create a dedicated page for evaluation details.",
+        sourcePath: "raw/sources/demo.md",
+        affectedPages: ["wiki/evaluation.md"],
+        searchQueries: ["demo evaluation", "demo benchmarks"],
+        options: [
+          { label: "Approve", action: "Approve" },
+          { label: "Skip", action: "Skip" },
+        ],
+      },
+    ],
     isLoading: false,
   }),
   useUpdateReviewMutation: () => ({
+    mutateAsync: vi.fn(),
+  }),
+  useSweepReviewsMutation: () => ({
     mutateAsync: vi.fn(),
   }),
 }));
@@ -103,9 +121,16 @@ vi.mock("../graph/queries", () => ({
           label: "Demo",
           nodeType: "source",
           path: "wiki/sources/demo.md",
+          linkCount: 1,
         },
       ],
-      edges: [],
+      edges: [
+        {
+          source: "demo",
+          target: "peer",
+          weight: 1,
+        },
+      ],
     },
     isLoading: false,
   }),
@@ -116,6 +141,7 @@ vi.mock("../graph/queries", () => ({
         label: "Demo",
         nodeType: "source",
         path: "wiki/sources/demo.md",
+        linkCount: 1,
       },
       neighbors: [],
     },
@@ -161,6 +187,12 @@ describe("project operation pages", () => {
     await user.click(screen.getByRole("link", { name: "Reviews" }));
     expect(await screen.findByRole("heading", { name: "Reviews" })).toBeInTheDocument();
     expect(screen.getByText("Review demo.md")).toBeInTheDocument();
+    expect(screen.getByText("missing-page")).toBeInTheDocument();
+    expect(screen.getByText("Create a dedicated page for evaluation details.")).toBeInTheDocument();
+    expect(screen.getByText("raw/sources/demo.md")).toBeInTheDocument();
+    expect(screen.getByText("wiki/evaluation.md")).toBeInTheDocument();
+    expect(screen.getByText("demo evaluation")).toBeInTheDocument();
+    expect(screen.getByText("Approve")).toBeInTheDocument();
 
     await user.click(screen.getByRole("link", { name: "Audit" }));
     expect(await screen.findByRole("heading", { name: "Audit" })).toBeInTheDocument();

@@ -162,6 +162,78 @@ async fn rescan_and_delete_source_update_catalog_and_task_log() {
   assert!(queue_json.contains("\"taskType\":\"source_delete\""));
 }
 
+#[tokio::test]
+async fn delete_source_cleans_single_source_pages_and_rewrites_multi_source_pages() {
+  let temp = tempdir().unwrap();
+  let _env = TestEnvironment::start("source-delete-cleanup").await.unwrap();
+  let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let (cookie, csrf) = login_and_csrf(state.clone()).await;
+  let project_root = temp.path().join("wiki-delete-cleanup");
+  let project_id = create_project(state.clone(), &cookie, &csrf, project_root.clone()).await;
+
+  fs::write(
+    project_root.join("raw/sources/manual.md"),
+    "# Manual\n\nPrimary source.\n",
+  )
+  .unwrap();
+  fs::write(
+    project_root.join("wiki/sources/manual.md"),
+    "---\ntype: source\ntitle: Manual\nsources: [\"manual.md\"]\n---\n\n# Manual\n",
+  )
+  .unwrap();
+  fs::write(
+    project_root.join("wiki/concepts/manual-only.md"),
+    "---\ntype: concept\ntitle: Manual Only\nsources: [\"manual.md\"]\n---\n\n# Manual Only\n",
+  )
+  .unwrap();
+  fs::write(
+    project_root.join("wiki/concepts/shared.md"),
+    "---\ntype: concept\ntitle: Shared\nsources:\n  - manual.md\n  - other.md\n---\n\n# Shared\n",
+  )
+  .unwrap();
+  fs::write(
+    project_root.join("wiki/concepts/false-positive.md"),
+    "---\ntitle: Analysis of manual.md\nsources: [\"other.md\"]\n---\n\n# False Positive\n",
+  )
+  .unwrap();
+
+  let delete_response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("DELETE")
+        .uri(format!("/api/projects/{project_id}/sources/manual.md"))
+        .header(header::COOKIE, &cookie)
+        .header("x-csrf-token", &csrf)
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+  assert_eq!(delete_response.status(), StatusCode::ACCEPTED);
+  let delete_payload = read_json(delete_response.into_body()).await;
+  wait_for_task_terminal(
+    &state,
+    delete_payload.get("taskId").and_then(Value::as_str).unwrap(),
+  )
+  .await;
+
+  assert!(!project_root.join("raw/sources/manual.md").exists());
+  assert!(!project_root.join("wiki/sources/manual.md").exists());
+  assert!(!project_root.join("wiki/concepts/manual-only.md").exists());
+  assert!(project_root.join("wiki/concepts/shared.md").exists());
+  assert!(project_root.join("wiki/concepts/false-positive.md").exists());
+
+  let shared = fs::read_to_string(project_root.join("wiki/concepts/shared.md")).unwrap();
+  assert!(shared.contains("sources: [\"other.md\"]"));
+  assert!(!shared.contains("manual.md"));
+
+  let false_positive =
+    fs::read_to_string(project_root.join("wiki/concepts/false-positive.md")).unwrap();
+  assert!(false_positive.contains("sources: [\"other.md\"]"));
+}
+
 async fn login_and_csrf(state: knowledge_server::app::state::AppState) -> (String, String) {
   let login = build_app(state)
     .oneshot(

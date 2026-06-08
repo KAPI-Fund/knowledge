@@ -4,7 +4,10 @@ use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::providers::types::{ProviderAnswer, ProviderError, ProviderQueryRequest, ProviderUsage};
+use crate::providers::types::{
+    ProviderAnswer, ProviderError, ProviderQueryRequest, ProviderTextRequest,
+    ProviderTextResponse, ProviderUsage,
+};
 
 #[derive(Debug, Clone)]
 pub struct OpenAiCompatibleProvider {
@@ -40,10 +43,39 @@ impl OpenAiCompatibleProvider {
         request: ProviderQueryRequest,
     ) -> Result<ProviderAnswer, ProviderError> {
         let response = self
+            .complete_text(ProviderTextRequest {
+                system_prompt: format!(
+                    "You answer questions using only the provided wiki context. Respond in {}. If the context is insufficient, say so plainly.",
+                    request.language
+                ),
+                user_prompt: format!(
+                    "Question:\n{}\n\nContext:\n{}",
+                    request.query,
+                    if request.context_blocks.is_empty() {
+                        "No relevant wiki context was retrieved.".to_string()
+                    } else {
+                        request.context_blocks.join("\n\n")
+                    }
+                ),
+            })
+            .await?;
+
+        Ok(ProviderAnswer {
+            answer: response.text,
+            citations: Vec::new(),
+            usage: response.usage,
+        })
+    }
+
+    pub async fn complete_text(
+        &self,
+        request: ProviderTextRequest,
+    ) -> Result<ProviderTextResponse, ProviderError> {
+        let response = self
             .client
             .post(chat_completions_url(&self.base_url))
             .headers(self.auth_headers()?)
-            .json(&ChatCompletionRequest::from_query(&self.model, request))
+            .json(&ChatCompletionRequest::from_text(&self.model, request))
             .send()
             .await
             .map_err(map_transport_error)?;
@@ -87,9 +119,8 @@ impl OpenAiCompatibleProvider {
 
         let usage = response.usage.unwrap_or_default();
 
-        Ok(ProviderAnswer {
-            answer: content.to_string(),
-            citations: Vec::new(),
+        Ok(ProviderTextResponse {
+            text: content.to_string(),
             usage: ProviderUsage {
                 prompt_tokens: usage.prompt_tokens.unwrap_or_default(),
                 completion_tokens: usage.completion_tokens.unwrap_or_default(),
@@ -190,26 +221,17 @@ struct ChatCompletionRequest {
 }
 
 impl ChatCompletionRequest {
-    fn from_query(model: &str, request: ProviderQueryRequest) -> Self {
-        let context = if request.context_blocks.is_empty() {
-            "No relevant wiki context was retrieved.".to_string()
-        } else {
-            request.context_blocks.join("\n\n")
-        };
-
+    fn from_text(model: &str, request: ProviderTextRequest) -> Self {
         Self {
             model: model.to_string(),
             messages: vec![
                 ChatMessage {
                     role: "system".to_string(),
-                    content: format!(
-                        "You answer questions using only the provided wiki context. Respond in {}. If the context is insufficient, say so plainly.",
-                        request.language
-                    ),
+                    content: request.system_prompt,
                 },
                 ChatMessage {
                     role: "user".to_string(),
-                    content: format!("Question:\n{}\n\nContext:\n{}", request.query, context),
+                    content: request.user_prompt,
                 },
             ],
             temperature: 0.0,

@@ -14,6 +14,7 @@ import { TasksPage } from "../tasks/page";
 const retryTask = vi.fn();
 const cancelTask = vi.fn();
 const updateReview = vi.fn();
+const sweepReviews = vi.fn();
 const updateSettings = vi.fn();
 const importSource = vi.fn();
 const ingestSource = vi.fn();
@@ -87,6 +88,9 @@ vi.mock("../reviews/queries", () => ({
   useUpdateReviewMutation: () => ({
     mutateAsync: updateReview,
   }),
+  useSweepReviewsMutation: () => ({
+    mutateAsync: sweepReviews,
+  }),
 }));
 
 vi.mock("../settings/queries", () => ({
@@ -139,7 +143,7 @@ vi.mock("../search/queries", () => ({
 }));
 
 vi.mock("../graph/queries", () => ({
-  useProjectGraphQuery: () => ({
+  useProjectGraphQuery: (_projectId: string, query?: string, limit?: number) => ({
     data: {
       nodes: [
         {
@@ -147,11 +151,19 @@ vi.mock("../graph/queries", () => ({
           label: "Demo",
           nodeType: "source",
           path: "wiki/sources/demo.md",
+          linkCount: 2,
         },
       ],
-      edges: [],
+      edges: [
+        {
+          source: "demo",
+          target: "peer",
+          weight: 1,
+        },
+      ],
     },
     isLoading: false,
+    meta: { query, limit },
   }),
   useProjectGraphNeighborsQuery: () => ({
     data: {
@@ -160,6 +172,7 @@ vi.mock("../graph/queries", () => ({
         label: "Demo",
         nodeType: "source",
         path: "wiki/sources/demo.md",
+        linkCount: 2,
       },
       neighbors: [],
     },
@@ -168,7 +181,7 @@ vi.mock("../graph/queries", () => ({
 }));
 
 describe("operations actions", () => {
-  it("imports, rescans, deletes, ingests, searches, retries, cancels, resolves, and saves settings", async () => {
+  it("imports, rescans, deletes, ingests, searches, retries, cancels, sweeps reviews, resolves, and saves settings", async () => {
     const user = userEvent.setup();
     const queryClient = new QueryClient();
 
@@ -235,6 +248,12 @@ describe("operations actions", () => {
     );
 
     expect(screen.getByText("Nodes: 1")).toBeInTheDocument();
+    expect(screen.getByText("Edges: 1")).toBeInTheDocument();
+    expect(screen.getByText("Links 2")).toBeInTheDocument();
+    await user.type(screen.getByLabelText("Graph Filter"), "demo");
+    await user.clear(screen.getByLabelText("Node Limit"));
+    await user.type(screen.getByLabelText("Node Limit"), "25");
+    await user.click(screen.getByRole("button", { name: "Apply Graph Filters" }));
 
     render(
       <QueryClientProvider client={queryClient}>
@@ -265,6 +284,11 @@ describe("operations actions", () => {
         </MemoryRouter>
       </QueryClientProvider>,
     );
+
+    await user.click(screen.getByRole("button", { name: "Sweep Reviews" }));
+    expect(sweepReviews).toHaveBeenCalledWith({
+      projectId: "project-1",
+    });
 
     await user.click(screen.getByRole("button", { name: "Resolve" }));
     expect(updateReview).toHaveBeenCalledWith({

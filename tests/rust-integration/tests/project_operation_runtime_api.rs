@@ -199,6 +199,97 @@ async fn review_update_is_enqueued_and_completed_by_worker() {
   );
 }
 
+#[tokio::test]
+async fn review_sweep_is_enqueued_and_completed_by_worker() {
+  let env = TestEnvironment::start("project-review-sweep-op-exec").await.unwrap();
+  let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let (cookie, csrf) = login_and_csrf(state.clone()).await;
+  let project_root = tempdir().unwrap().path().join("project-review-sweep-op-exec");
+  let project_id = create_project(state.clone(), &cookie, &csrf, project_root.clone()).await;
+
+  fs::write(
+    project_root.join("wiki/concepts/attention.md"),
+    [
+      "---",
+      "type: concept",
+      "title: Attention",
+      "sources: []",
+      "---",
+      "",
+      "# Attention",
+    ]
+    .join("\n"),
+  )
+  .unwrap();
+  fs::write(
+    project_root.join(".knowledge/reviews/items.json"),
+    json!({
+      "reviews": [
+        {
+          "id": "review-attention",
+          "status": "open",
+          "type": "missing-page",
+          "title": "Missing page: attention",
+          "description": "This page now exists.",
+          "options": [
+            { "label": "Approve", "action": "Approve" },
+            { "label": "Skip", "action": "Skip" }
+          ]
+        }
+      ]
+    })
+    .to_string(),
+  )
+  .unwrap();
+
+  let sweep = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri(format!("/api/projects/{project_id}/reviews:sweep"))
+        .header(header::COOKIE, &cookie)
+        .header("x-csrf-token", &csrf)
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+  assert_eq!(sweep.status(), StatusCode::ACCEPTED);
+  let payload = read_json(sweep.into_body()).await;
+  let task_id = payload.get("taskId").and_then(Value::as_str).unwrap().to_string();
+  wait_for_task_terminal(&state, &task_id).await;
+
+  let detail = store::get_task_by_id(&state, &task_id).await.unwrap();
+  assert_eq!(detail.status, "succeeded");
+  assert_eq!(
+    detail.result.as_ref().and_then(|result| result.get("resolvedIds")),
+    Some(&json!(["review-attention"])),
+  );
+
+  let reviews_after = build_app(state)
+    .oneshot(
+      Request::builder()
+        .uri(format!("/api/projects/{project_id}/reviews"))
+        .header(header::COOKIE, &cookie)
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  let after_payload = read_json(reviews_after.into_body()).await;
+  assert_eq!(
+    after_payload
+      .get("reviews")
+      .and_then(Value::as_array)
+      .and_then(|items| items.first())
+      .and_then(|item| item.get("status"))
+      .and_then(Value::as_str),
+    Some("resolved"),
+  );
+}
+
 async fn wait_for_task_terminal(state: &knowledge_server::app::state::AppState, task_id: &str) {
   for _ in 0..20 {
     let progressed = scheduler::run_scheduler_tick(state).await.unwrap_or(false);

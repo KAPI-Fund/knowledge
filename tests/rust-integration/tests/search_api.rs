@@ -97,6 +97,81 @@ async fn graph_returns_nodes_and_edges_from_wikilinks() {
 }
 
 #[tokio::test]
+async fn graph_supports_link_counts_weights_query_filter_and_limit() {
+  let temp = tempdir().unwrap();
+  let _env = TestEnvironment::start("graph-filter-query").await.unwrap();
+  let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let (cookie, csrf) = login_and_csrf(state.clone()).await;
+  let project_root = temp.path().join("graph-filter-project");
+  let project_id = create_project(state.clone(), &cookie, &csrf, project_root.clone()).await;
+
+  fs::write(
+    project_root.join("wiki/concepts/chain-of-thought.md"),
+    "---\ntype: concept\ntitle: Chain of Thought\nsources: []\n---\n\nSee [[reasoning-models]] and [[source-paper]].\n",
+  )
+  .unwrap();
+  fs::write(
+    project_root.join("wiki/entities/reasoning-models.md"),
+    "---\ntype: entity\ntitle: Reasoning Models\nsources: []\n---\n\nConnects back to [[chain-of-thought]].\n",
+  )
+  .unwrap();
+  fs::write(
+    project_root.join("wiki/sources/source-paper.md"),
+    "---\ntype: source\ntitle: Source Paper\nsources: []\n---\n\nReferenced by [[chain-of-thought]].\n",
+  )
+  .unwrap();
+
+  let graph_response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .uri(format!("/api/projects/{project_id}/graph"))
+        .header(header::COOKIE, &cookie)
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+  assert_eq!(graph_response.status(), StatusCode::OK);
+  let graph_payload = read_json(graph_response.into_body()).await;
+  let nodes = graph_payload.get("nodes").and_then(Value::as_array).unwrap();
+  let edges = graph_payload.get("edges").and_then(Value::as_array).unwrap();
+  assert_eq!(nodes.len(), 3);
+  assert_eq!(edges.len(), 2);
+  assert!(
+    nodes
+      .iter()
+      .all(|node| node.get("linkCount").and_then(Value::as_u64).is_some())
+  );
+  assert!(
+    edges
+      .iter()
+      .all(|edge| edge.get("weight").and_then(Value::as_f64).is_some())
+  );
+
+  let filtered_response = build_app(state)
+    .oneshot(
+      Request::builder()
+        .uri(format!("/api/projects/{project_id}/graph?q=reason&limit=1"))
+        .header(header::COOKIE, &cookie)
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+  assert_eq!(filtered_response.status(), StatusCode::OK);
+  let filtered_payload = read_json(filtered_response.into_body()).await;
+  let filtered_nodes = filtered_payload.get("nodes").and_then(Value::as_array).unwrap();
+  assert_eq!(filtered_nodes.len(), 1);
+  assert_eq!(
+    filtered_nodes[0].get("label").and_then(Value::as_str),
+    Some("Reasoning Models")
+  );
+}
+
+#[tokio::test]
 async fn task_endpoint_returns_source_task_queue() {
   let temp = tempdir().unwrap();
   let _env = TestEnvironment::start("task-queue").await.unwrap();

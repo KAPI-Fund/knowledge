@@ -1,4 +1,4 @@
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::{delete, get, patch, post};
@@ -15,7 +15,7 @@ use crate::projects::tasks::{
   create_queued_task, get_task, list_tasks, update_task_status,
   CreateTaskRecord,
 };
-use knowledge_core::graph::{build_graph, neighbors_for_node};
+use knowledge_core::graph::{build_graph_view, neighbors_for_node};
 use knowledge_core::project::reviews::load_reviews;
 use knowledge_core::project::sources::list_sources;
 use knowledge_core::query::answer_from_results;
@@ -43,6 +43,7 @@ pub fn router() -> Router<AppState> {
     .route("/api/projects/{project_id}/ingest", post(ingest_handler))
     .route("/api/projects/{project_id}/query", post(query_handler))
     .route("/api/projects/{project_id}/reviews", get(list_reviews_handler))
+    .route("/api/projects/{project_id}/reviews:sweep", post(sweep_reviews_handler))
     .route("/api/projects/{project_id}/reviews/{review_id}", patch(update_review_handler))
     .route("/api/projects/{project_id}/audit-logs", get(audit_logs_handler))
 }
@@ -87,6 +88,14 @@ pub struct IngestRequest {
 #[derive(Debug, Clone, Deserialize)]
 pub struct UpdateReviewRequest {
   pub status: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct GraphRequest {
+  #[serde(default, rename = "q")]
+  pub query: Option<String>,
+  #[serde(default)]
+  pub limit: Option<usize>,
 }
 
 async fn create_project_handler(
@@ -328,11 +337,16 @@ async fn graph_handler(
   State(state): State<AppState>,
   headers: HeaderMap,
   Path(project_id): Path<String>,
+  Query(params): Query<GraphRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
   let _session = authorized_session(&state, &headers, Some(&project_id)).await?;
   let root = project_root_for_id(&state, &project_id).await?;
-  let (nodes, edges) =
-    build_graph(root.as_path()).map_err(|error| ApiError::bad_request(error.to_string()))?;
+  let (nodes, edges) = build_graph_view(
+    root.as_path(),
+    params.query.as_deref(),
+    params.limit,
+  )
+  .map_err(|error| ApiError::bad_request(error.to_string()))?;
   Ok(Json(json!({ "nodes": nodes, "edges": edges })))
 }
 
@@ -612,6 +626,49 @@ async fn list_reviews_handler(
   let root = project_root_for_id(&state, &project_id).await?;
   let store = load_reviews(&root).map_err(|error| ApiError::bad_request(error.to_string()))?;
   Ok(Json(json!({ "reviews": store.reviews })))
+}
+
+async fn sweep_reviews_handler(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Path(project_id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+  let session = authorized_session(&state, &headers, Some(&project_id)).await?;
+  validate_csrf(&headers, &session.csrf_token)?;
+  let task = create_queued_task(
+    &state,
+    CreateTaskRecord {
+      project_id: project_id.clone(),
+      task_type: "project.sweep_reviews".to_string(),
+      title: "Sweep reviews".to_string(),
+      relative_path: None,
+      detail: json!({}),
+      created_by: session.user_id.clone(),
+    },
+    json!({}),
+  )
+  .await?;
+  append_audit_log(
+    &state,
+    CreateAuditLog {
+      project_id: Some(project_id),
+      actor_id: session.user_id,
+      action: "review.sweep.enqueued".to_string(),
+      target_type: "review".to_string(),
+      target_id: "batch".to_string(),
+      task_id: Some(task.id.clone()),
+      summary: "Queued review sweep".to_string(),
+      metadata: json!({}),
+    },
+  )
+  .await?;
+  Ok((
+    StatusCode::ACCEPTED,
+    Json(json!({
+      "taskId": task.id,
+      "status": task.status
+    })),
+  ))
 }
 
 async fn update_review_handler(

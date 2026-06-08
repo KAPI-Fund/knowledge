@@ -8,9 +8,21 @@ pub struct ProviderQueryRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderTextRequest {
+    pub system_prompt: String,
+    pub user_prompt: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderAnswer {
     pub answer: String,
     pub citations: Vec<ProviderCitation>,
+    pub usage: ProviderUsage,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderTextResponse {
+    pub text: String,
     pub usage: ProviderUsage,
 }
 

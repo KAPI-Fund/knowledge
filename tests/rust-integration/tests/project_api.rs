@@ -61,6 +61,20 @@ async fn admin_can_create_project_with_absolute_root() {
   assert!(project_root.join("raw/sources").is_dir());
   assert!(project_root.join("raw/assets").is_dir());
   assert!(project_root.join(".knowledge/ingest").is_dir());
+  assert!(project_root.join(".obsidian/app.json").is_file());
+  assert!(project_root.join(".obsidian/appearance.json").is_file());
+  assert!(project_root.join(".obsidian/core-plugins.json").is_file());
+
+  let schema = std::fs::read_to_string(project_root.join("schema.md")).unwrap();
+  assert!(schema.contains("| entity | wiki/entities/ |"));
+  assert!(schema.contains("## Cross-referencing Rules"));
+
+  let purpose = std::fs::read_to_string(project_root.join("purpose.md")).unwrap();
+  assert!(purpose.contains("## Scope"));
+  assert!(purpose.contains("## Thesis"));
+
+  let log = std::fs::read_to_string(project_root.join("wiki/log.md")).unwrap();
+  assert!(log.contains("Project created"));
 }
 
 #[tokio::test]
