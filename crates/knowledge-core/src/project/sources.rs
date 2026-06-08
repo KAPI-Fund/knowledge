@@ -7,6 +7,10 @@ use serde::{Deserialize, Serialize};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
+use crate::project::source_identity::{
+  source_checkpoint_stem, source_file_name, source_file_stem, source_identity_from_reference,
+  source_reference_path, source_summary_path,
+};
 use crate::project::root::{ProjectRoot, ProjectRootError};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -34,8 +38,12 @@ pub fn import_source(
   file_name: &str,
   content_base64: &str,
 ) -> Result<SourceEntry, ProjectRootError> {
-  let relative = format!("raw/sources/{file_name}");
+  let source_identity = source_identity_from_reference(file_name);
+  let relative = source_reference_path(&source_identity);
   let target = root.safe_join(&relative)?;
+  if let Some(parent) = target.parent() {
+    fs::create_dir_all(parent)?;
+  }
   let bytes = STANDARD
     .decode(content_base64)
     .map_err(|error| ProjectRootError::InvalidSourcePayload(error.to_string()))?;
@@ -52,12 +60,7 @@ pub fn list_sources(root: &ProjectRoot) -> Result<Vec<SourceEntry>, ProjectRootE
     return Ok(entries);
   }
 
-  for entry in fs::read_dir(sources_root)? {
-    let entry = entry?;
-    if entry.file_type()?.is_file() {
-      entries.push(build_source_entry(root.as_path(), &entry.path())?);
-    }
-  }
+  collect_source_entries(root.as_path(), &sources_root, &mut entries)?;
 
   entries.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
   Ok(entries)
@@ -72,13 +75,14 @@ pub fn rescan_sources(root: &ProjectRoot) -> Result<usize, ProjectRootError> {
 }
 
 pub fn delete_source(root: &ProjectRoot, relative_path: &str) -> Result<(), ProjectRootError> {
-  let normalized = format!("raw/sources/{relative_path}");
+  let source_identity = source_identity_from_reference(relative_path);
+  let normalized = source_reference_path(&source_identity);
   let target = root.safe_join(&normalized)?;
   if target.exists() {
     fs::remove_file(target)?;
   }
-  cleanup_related_wiki_pages(root, relative_path)?;
-  cleanup_source_checkpoints(root, relative_path)?;
+  cleanup_related_wiki_pages(root, &source_identity)?;
+  cleanup_source_checkpoints(root, &source_identity)?;
   append_task(root, "source_delete", &normalized)?;
   Ok(())
 }
@@ -129,22 +133,42 @@ fn build_source_entry(root: &Path, path: &PathBuf) -> Result<SourceEntry, Projec
   })
 }
 
+fn collect_source_entries(
+  project_root: &Path,
+  dir: &Path,
+  entries: &mut Vec<SourceEntry>,
+) -> Result<(), ProjectRootError> {
+  for entry in fs::read_dir(dir)? {
+    let entry = entry?;
+    let path = entry.path();
+    if entry.file_type()?.is_dir() {
+      collect_source_entries(project_root, &path, entries)?;
+      continue;
+    }
+    if entry.file_type()?.is_file() {
+      entries.push(build_source_entry(project_root, &path)?);
+    }
+  }
+
+  Ok(())
+}
+
 fn cleanup_related_wiki_pages(
   root: &ProjectRoot,
-  relative_path: &str,
+  source_identity: &str,
 ) -> Result<(), ProjectRootError> {
   let wiki_root = root.safe_join("wiki")?;
   if !wiki_root.exists() {
     return Ok(());
   }
 
-  let related_pages = find_related_wiki_pages(&wiki_root, relative_path)?;
+  let related_pages = find_related_wiki_pages(root.as_path(), source_identity)?;
   let mut deleted_refs = Vec::new();
 
   for page_path in related_pages {
     let content = fs::read_to_string(&page_path)?;
     let sources = parse_sources(&content);
-    let decision = decide_page_fate(&sources, relative_path);
+    let decision = decide_page_fate(&sources, source_identity);
 
     match decision {
       DeleteDecision::Keep { updated_sources } => {
@@ -170,10 +194,9 @@ fn cleanup_related_wiki_pages(
 
 fn cleanup_source_checkpoints(
   root: &ProjectRoot,
-  relative_path: &str,
+  source_identity: &str,
 ) -> Result<(), ProjectRootError> {
-  let source_name = source_file_name(relative_path);
-  let stem = source_name.trim_end_matches(".md");
+  let stem = source_checkpoint_stem(source_identity);
   if stem.is_empty() {
     return Ok(());
   }
@@ -226,21 +249,22 @@ fn index_line_matches_deleted_ref(line: &str, deleted_refs: &[DeletedPageRef]) -
 }
 
 fn find_related_wiki_pages(
-  wiki_root: &Path,
-  source_name: &str,
+  project_root: &Path,
+  source_identity: &str,
 ) -> Result<Vec<PathBuf>, ProjectRootError> {
   let mut related = Vec::new();
-  collect_related_pages(wiki_root, source_name, &mut related)?;
+  collect_related_pages(project_root, &project_root.join("wiki"), source_identity, &mut related)?;
   Ok(related)
 }
 
 fn collect_related_pages(
+  project_root: &Path,
   dir: &Path,
-  source_name: &str,
+  source_identity: &str,
   results: &mut Vec<PathBuf>,
 ) -> Result<(), ProjectRootError> {
   let entries = fs::read_dir(dir)?;
-  let file_name = source_file_name(source_name);
+  let file_name = source_file_name(source_identity);
   let file_name_lower = file_name.to_lowercase();
   let file_stem = source_file_stem(&file_name);
   let file_stem_lower = if file_stem.is_empty() {
@@ -248,12 +272,16 @@ fn collect_related_pages(
   } else {
     file_stem.to_lowercase()
   };
+  let normalized_identity = source_identity.replace('\\', "/");
+  let identity_key = normalized_identity.to_lowercase();
+  let allow_basename_fallback = !normalized_identity.contains('/');
+  let canonical_summary_path = source_summary_path(source_identity);
 
   for entry in entries {
     let entry = entry?;
     let path = entry.path();
     if entry.file_type()?.is_dir() {
-      collect_related_pages(&path, source_name, results)?;
+      collect_related_pages(project_root, &path, source_identity, results)?;
       continue;
     }
     if path.extension().and_then(|ext| ext.to_str()) != Some("md") {
@@ -266,50 +294,36 @@ fn collect_related_pages(
     }
 
     let content = fs::read_to_string(&path)?;
-    let content_lower = content.to_lowercase();
-    let sources_match = content_lower.contains(&format!("\"{file_name_lower}\""))
-      || content_lower.contains(&format!("'{file_name_lower}'"));
+    let sources = parse_sources(&content);
+    let sources_match = sources.iter().any(|source| {
+      let normalized = source_identity_from_reference(source).to_lowercase();
+      normalized == identity_key
+        || (allow_basename_fallback
+          && !source.contains('/')
+          && source_file_name(source).to_lowercase() == file_name_lower)
+    });
+    let relative_path = path
+      .strip_prefix(project_root)
+      .unwrap_or(&path)
+      .to_string_lossy()
+      .replace('\\', "/");
     let is_in_sources_dir = path.components().any(|component| component.as_os_str() == "sources");
-    let is_source_summary =
-      is_in_sources_dir && file_name.to_lowercase().starts_with(&file_stem_lower);
-    let frontmatter_match = frontmatter_sources_block_contains(&content, &file_name_lower);
+    let is_source_summary = relative_path == canonical_summary_path
+      || (allow_basename_fallback
+        && is_in_sources_dir
+        && path
+          .file_name()
+          .and_then(|name| name.to_str())
+          .unwrap_or_default()
+          .to_lowercase()
+          .starts_with(&file_stem_lower));
 
-    if sources_match || is_source_summary || frontmatter_match {
+    if sources_match || is_source_summary {
       results.push(path);
     }
   }
 
   Ok(())
-}
-
-fn frontmatter_sources_block_contains(content: &str, source_name_lower: &str) -> bool {
-  let Some(frontmatter) = extract_frontmatter(content) else {
-    return false;
-  };
-
-  let mut in_sources_block = false;
-  for line in frontmatter.lines() {
-    let trimmed = line.trim_end();
-    if trimmed.starts_with("sources:") {
-      if trimmed.to_lowercase().contains(source_name_lower) {
-        return true;
-      }
-      in_sources_block = true;
-      continue;
-    }
-
-    if in_sources_block {
-      if trimmed.is_empty() || line.starts_with(' ') || line.starts_with('\t') {
-        if trimmed.to_lowercase().contains(source_name_lower) {
-          return true;
-        }
-      } else {
-        in_sources_block = false;
-      }
-    }
-  }
-
-  false
 }
 
 fn parse_sources(content: &str) -> Vec<String> {
@@ -479,28 +493,16 @@ fn split_frontmatter_lines(content: &str) -> Option<(Vec<&str>, &str, &str)> {
   Some((frontmatter_lines, Box::leak(rest.into_boxed_str()), newline))
 }
 
-fn source_file_name(relative_path: &str) -> String {
-  Path::new(relative_path)
-    .file_name()
-    .and_then(|name| name.to_str())
-    .unwrap_or(relative_path)
-    .to_string()
-}
-
-fn source_file_stem(file_name: &str) -> String {
-  Path::new(file_name)
-    .file_stem()
-    .and_then(|stem| stem.to_str())
-    .unwrap_or("")
-    .to_string()
-}
-
 fn decide_page_fate(frontmatter_sources: &[String], deleting_source: &str) -> DeleteDecision {
+  let deleting_identity = source_identity_from_reference(deleting_source).to_lowercase();
   let deleting_name = source_file_name(deleting_source).to_lowercase();
-  let deleting_identity = deleting_source.to_lowercase();
+  let allow_basename_fallback = !deleting_identity.contains('/');
   let in_list = frontmatter_sources.iter().any(|source| {
-    let normalized = source.to_lowercase();
-    normalized == deleting_name || normalized == deleting_identity
+    let normalized = source_identity_from_reference(source).to_lowercase();
+    normalized == deleting_identity
+      || (allow_basename_fallback
+        && !source.contains('/')
+        && source_file_name(source).to_lowercase() == deleting_name)
   });
 
   if !in_list {
@@ -510,8 +512,11 @@ fn decide_page_fate(frontmatter_sources: &[String], deleting_source: &str) -> De
   let survivors = frontmatter_sources
     .iter()
     .filter(|source| {
-      let normalized = source.to_lowercase();
-      normalized != deleting_name && normalized != deleting_identity
+      let normalized = source_identity_from_reference(source).to_lowercase();
+      normalized != deleting_identity
+        && !(allow_basename_fallback
+          && !source.contains('/')
+          && source_file_name(source).to_lowercase() == deleting_name)
     })
     .cloned()
     .collect::<Vec<_>>();

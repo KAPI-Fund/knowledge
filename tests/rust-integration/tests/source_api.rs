@@ -80,6 +80,69 @@ async fn import_source_writes_file_lists_source_and_records_task() {
 }
 
 #[tokio::test]
+async fn import_source_supports_nested_relative_paths() {
+  let temp = tempdir().unwrap();
+  let _env = TestEnvironment::start("source-import-nested").await.unwrap();
+  let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let (cookie, csrf) = login_and_csrf(state.clone()).await;
+  let project_root = temp.path().join("wiki-import-nested");
+  let project_id = create_project(state.clone(), &cookie, &csrf, project_root.clone()).await;
+
+  let import_response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri(format!("/api/projects/{project_id}/sources:import"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::COOKIE, &cookie)
+        .header("x-csrf-token", &csrf)
+        .body(Body::from(
+          json!({
+            "fileName": "project-a/config.yaml",
+            "contentBase64": "bmFtZTogYWxwaGEK"
+          })
+          .to_string(),
+        ))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+  assert_eq!(import_response.status(), StatusCode::ACCEPTED);
+  let import_payload = read_json(import_response.into_body()).await;
+  wait_for_task_terminal(
+    &state,
+    import_payload.get("taskId").and_then(Value::as_str).unwrap(),
+  )
+  .await;
+
+  let list_response = build_app(state)
+    .oneshot(
+      Request::builder()
+        .uri(format!("/api/projects/{project_id}/sources"))
+        .header(header::COOKIE, &cookie)
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+  assert_eq!(list_response.status(), StatusCode::OK);
+  let payload = read_json(list_response.into_body()).await;
+  let sources = payload.get("sources").and_then(Value::as_array).unwrap();
+  assert_eq!(sources.len(), 1);
+  assert_eq!(
+    sources[0].get("relativePath").and_then(Value::as_str),
+    Some("raw/sources/project-a/config.yaml")
+  );
+  assert_eq!(
+    fs::read_to_string(project_root.join("raw/sources/project-a/config.yaml")).unwrap(),
+    "name: alpha\n"
+  );
+}
+
+#[tokio::test]
 async fn rescan_and_delete_source_update_catalog_and_task_log() {
   let temp = tempdir().unwrap();
   let _env = TestEnvironment::start("source-rescan").await.unwrap();

@@ -308,6 +308,71 @@ async fn ingest_source_extracts_text_from_docx_sources() {
   assert!(summary.contains("sources: [\"attention.docx\"]"));
 }
 
+#[tokio::test]
+async fn ingest_source_keeps_nested_source_identity_in_summary_paths_and_sources() {
+  let temp = tempdir().unwrap();
+  let _env = TestEnvironment::start("ingest-nested-source-identity").await.unwrap();
+  let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let (cookie, csrf) = login_and_csrf(state.clone()).await;
+  let project_root = temp.path().join("ingest-nested-source-project");
+  let project_id = create_project(state.clone(), &cookie, &csrf, project_root.clone()).await;
+
+  fs::create_dir_all(project_root.join("raw/sources/project-a")).unwrap();
+  fs::create_dir_all(project_root.join("raw/sources/project-b")).unwrap();
+  fs::write(
+    project_root.join("raw/sources/project-a/config.yaml"),
+    "name: alpha\nsetting: one\n",
+  )
+  .unwrap();
+  fs::write(
+    project_root.join("raw/sources/project-b/config.yaml"),
+    "name: beta\nsetting: two\n",
+  )
+  .unwrap();
+
+  let first_task_id = enqueue_custom_ingest(
+    &state,
+    &cookie,
+    &csrf,
+    &project_id,
+    "raw/sources/project-a/config.yaml",
+  )
+  .await;
+  wait_for_task_terminal(&state, &first_task_id).await;
+
+  let second_task_id = enqueue_custom_ingest(
+    &state,
+    &cookie,
+    &csrf,
+    &project_id,
+    "raw/sources/project-b/config.yaml",
+  )
+  .await;
+  wait_for_task_terminal(&state, &second_task_id).await;
+
+  let first_detail = store::get_task_by_id(&state, &first_task_id).await.unwrap();
+  let second_detail = store::get_task_by_id(&state, &second_task_id).await.unwrap();
+  assert_ne!(
+    first_detail.result.as_ref().unwrap()["summaryPath"],
+    second_detail.result.as_ref().unwrap()["summaryPath"]
+  );
+
+  let first_summary_path = first_detail.result.as_ref().unwrap()["summaryPath"]
+    .as_str()
+    .unwrap()
+    .to_string();
+  let second_summary_path = second_detail.result.as_ref().unwrap()["summaryPath"]
+    .as_str()
+    .unwrap()
+    .to_string();
+
+  let first_summary = fs::read_to_string(project_root.join(&first_summary_path)).unwrap();
+  let second_summary = fs::read_to_string(project_root.join(&second_summary_path)).unwrap();
+  assert!(first_summary.contains("sources: [\"project-a/config.yaml\"]"));
+  assert!(second_summary.contains("sources: [\"project-b/config.yaml\"]"));
+}
+
 async fn login_and_csrf(state: knowledge_server::app::state::AppState) -> (String, String) {
   let login = build_app(state)
     .oneshot(
@@ -385,6 +450,16 @@ async fn enqueue_ingest(
   csrf: &str,
   project_id: &str,
 ) -> String {
+  enqueue_custom_ingest(state, cookie, csrf, project_id, "raw/sources/attention.md").await
+}
+
+async fn enqueue_custom_ingest(
+  state: &knowledge_server::app::state::AppState,
+  cookie: &str,
+  csrf: &str,
+  project_id: &str,
+  relative_path: &str,
+) -> String {
   let ingest_response = build_app(state.clone())
     .oneshot(
       Request::builder()
@@ -393,7 +468,7 @@ async fn enqueue_ingest(
         .header(header::CONTENT_TYPE, "application/json")
         .header(header::COOKIE, cookie)
         .header("x-csrf-token", csrf)
-        .body(Body::from(json!({ "relativePath": "raw/sources/attention.md" }).to_string()))
+        .body(Body::from(json!({ "relativePath": relative_path }).to_string()))
         .unwrap(),
     )
     .await
