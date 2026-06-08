@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { GraphPage } from "../graph/page";
 import { ReviewsPage } from "../reviews/page";
@@ -195,6 +195,10 @@ vi.mock("../graph/queries", () => ({
   }),
 }));
 
+afterEach(() => {
+  vi.clearAllMocks();
+});
+
 describe("operations actions", () => {
   it("imports, rescans, deletes, ingests, searches, retries, cancels, sweeps reviews, resolves, and saves settings", async () => {
     const user = userEvent.setup();
@@ -341,6 +345,58 @@ describe("operations actions", () => {
       providerModel: "",
       providerEmbeddingModel: "",
       providerTimeoutSeconds: 60,
+    });
+  });
+
+  it("uploads binary files and preserves nested folder paths", async () => {
+    const user = userEvent.setup();
+    const queryClient = new QueryClient();
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={["/projects/project-1/sources"]}>
+          <Routes>
+            <Route path="projects/:projectId/sources" element={<SourcesPage />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    const binaryFile = new File([new Uint8Array([0, 1, 2, 255])], "slides.docx", {
+      type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    });
+    await user.upload(screen.getByLabelText("Files to Upload"), binaryFile);
+    await user.click(screen.getByRole("button", { name: "Upload Files" }));
+
+    expect(importSource).toHaveBeenCalledWith({
+      projectId: "project-1",
+      fileName: "slides.docx",
+      contentBase64: "AAEC/w==",
+    });
+
+    const nestedFile = new File(["# Child\n"], "child.md", { type: "text/markdown" });
+    const peerFile = new File(["# Peer\n"], "peer.md", { type: "text/markdown" });
+    Object.defineProperty(nestedFile, "webkitRelativePath", {
+      configurable: true,
+      value: "team-a/child.md",
+    });
+    Object.defineProperty(peerFile, "webkitRelativePath", {
+      configurable: true,
+      value: "team-a/docs/peer.md",
+    });
+
+    await user.upload(screen.getByLabelText("Folder to Import"), [nestedFile, peerFile]);
+    await user.click(screen.getByRole("button", { name: "Import Folder" }));
+
+    expect(importSource).toHaveBeenNthCalledWith(2, {
+      projectId: "project-1",
+      fileName: "team-a/child.md",
+      contentBase64: "IyBDaGlsZAo=",
+    });
+    expect(importSource).toHaveBeenNthCalledWith(3, {
+      projectId: "project-1",
+      fileName: "team-a/docs/peer.md",
+      contentBase64: "IyBQZWVyCg==",
     });
   });
 });

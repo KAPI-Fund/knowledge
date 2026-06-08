@@ -315,16 +315,26 @@ export async function getProjectFileContent(input: { projectId: string; path: st
   );
 }
 
+function encodeBytesBase64(bytes: Uint8Array) {
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    const chunk = bytes.subarray(index, index + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+  return window.btoa(binary);
+}
+
 function encodeContentBase64(content: string) {
   const bytes = new TextEncoder().encode(content);
-  const binary = Array.from(bytes, (byte) => String.fromCharCode(byte)).join("");
-  return window.btoa(binary);
+  return encodeBytesBase64(bytes);
 }
 
 export async function importProjectSource(input: {
   projectId: string;
   fileName: string;
-  content: string;
+  content?: string;
+  contentBase64?: string;
 }) {
   return apiFetch(
     `/api/projects/${input.projectId}/sources:import`,
@@ -333,7 +343,7 @@ export async function importProjectSource(input: {
       headers: csrfHeader(),
       body: JSON.stringify({
         fileName: input.fileName,
-        contentBase64: encodeContentBase64(input.content),
+        contentBase64: input.contentBase64 ?? encodeContentBase64(input.content ?? ""),
       }),
     },
     z.object({
@@ -341,6 +351,33 @@ export async function importProjectSource(input: {
       status: z.string(),
     }),
   );
+}
+
+export async function fileToBase64(file: File) {
+  const buffer = await readFileArrayBuffer(file);
+  return encodeBytesBase64(new Uint8Array(buffer));
+}
+
+async function readFileArrayBuffer(file: File) {
+  if (typeof file.arrayBuffer === "function") {
+    return file.arrayBuffer();
+  }
+
+  return new Promise<ArrayBuffer>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.addEventListener("load", () => {
+      if (reader.result instanceof ArrayBuffer) {
+        resolve(reader.result);
+        return;
+      }
+
+      reject(new Error("File reader did not produce binary content."));
+    });
+    reader.addEventListener("error", () => {
+      reject(reader.error ?? new Error("Failed to read file."));
+    });
+    reader.readAsArrayBuffer(file);
+  });
 }
 
 export async function ingestProjectSource(input: {
