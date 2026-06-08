@@ -71,6 +71,7 @@ impl MockOpenAiServer {
         };
         let app = Router::new()
             .route("/v1/chat/completions", post(chat_completions))
+            .route("/v1/embeddings", post(embeddings))
             .with_state(state);
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let addr = listener.local_addr()?;
@@ -279,4 +280,49 @@ async fn chat_completions(
             })),
         ),
     }
+}
+
+async fn embeddings(
+    State(state): State<MockState>,
+    Json(payload): Json<Value>,
+) -> (StatusCode, Json<Value>) {
+    let _ = state.request_count.fetch_add(1, Ordering::SeqCst);
+    let text = payload
+        .get("input")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+
+    let embedding = fake_embedding_for_text(text);
+    (
+        StatusCode::OK,
+        Json(json!({
+          "object": "list",
+          "data": [
+            {
+              "object": "embedding",
+              "index": 0,
+              "embedding": embedding
+            }
+          ],
+          "model": payload.get("model").and_then(Value::as_str).unwrap_or("mock-embedding"),
+          "usage": {
+            "prompt_tokens": 8,
+            "total_tokens": 8
+          }
+        })),
+    )
+}
+
+fn fake_embedding_for_text(text: &str) -> Vec<f32> {
+    let lower = text.to_lowercase();
+    if lower.contains("rope") {
+        return vec![1.0, 0.0, 0.0];
+    }
+    if lower.contains("rotary position embeddings") || lower.contains("rotary positional embeddings") {
+        return vec![1.0, 0.0, 0.0];
+    }
+    if lower.contains("attention") {
+        return vec![0.0, 1.0, 0.0];
+    }
+    vec![0.0, 0.0, 1.0]
 }

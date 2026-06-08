@@ -14,6 +14,11 @@ pub struct ProviderTextRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderEmbeddingRequest {
+    pub text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderAnswer {
     pub answer: String,
     pub citations: Vec<ProviderCitation>,

@@ -9,6 +9,7 @@ use crate::providers::{
 };
 use crate::projects::audit::{append_audit_log, CreateAuditLog};
 use crate::projects::service::project_root_for_id;
+use crate::retrieval::service::search_project_hybrid;
 use crate::tasks::model::TaskRecord;
 use crate::tasks::store;
 use knowledge_core::ingest::{
@@ -22,7 +23,7 @@ use knowledge_core::project::reviews::{
   sweep_resolved_reviews, update_review_status,
 };
 use knowledge_core::project::sources::{delete_source, import_source, rescan_sources};
-use knowledge_core::search::search_project;
+use knowledge_core::search::SearchOptions;
 
 const REVIEW_SWEEP_MAX_PAGES: usize = 300;
 const REVIEW_SWEEP_SYSTEM_PROMPT: &str = "You judge whether stale wiki review items have already been resolved by the current wiki state. Return JSON only.";
@@ -127,9 +128,19 @@ async fn execute_query(state: &AppState, task: &TaskRecord) -> Result<Value, Tas
     .unwrap_or("en")
     .to_string();
   let root = project_root_for_id(state, &task.project_id).await?;
-  let results = search_project(root.as_path(), &query)
-    .map_err(|error| ApiError::internal(error.to_string()))?;
-  let selected_results = results.into_iter().take(top_k).collect::<Vec<_>>();
+  let results = search_project_hybrid(
+    state,
+    &task.project_id,
+    &root,
+    &query,
+    SearchOptions {
+      top_k,
+      include_content: false,
+    },
+  )
+  .await
+  .map_err(|error| ApiError::internal(error.to_string()))?;
+  let selected_results = results.results;
   let context_blocks = build_context_blocks(&selected_results);
   let context_summary = build_context_summary(&selected_results);
   let provider = OpenAiCompatibleProvider::new(

@@ -15,6 +15,7 @@ use crate::projects::tasks::{
   create_queued_task, get_task, list_tasks, update_task_status,
   CreateTaskRecord,
 };
+use crate::retrieval::service::search_project_hybrid;
 use knowledge_core::graph::{build_graph_view, neighbors_for_node};
 use knowledge_core::project::files::{
   clamp_max_files, list_project_files, parse_project_file_root, read_project_file_content,
@@ -23,7 +24,7 @@ use knowledge_core::project::files::{
 use knowledge_core::project::reviews::load_reviews;
 use knowledge_core::project::sources::list_sources;
 use knowledge_core::query::answer_from_results;
-use knowledge_core::search::{search_project, search_project_with_options, SearchOptions};
+use knowledge_core::search::SearchOptions;
 
 pub fn router() -> Router<AppState> {
   Router::new()
@@ -403,15 +404,17 @@ async fn search_handler(
 ) -> Result<impl IntoResponse, ApiError> {
   let _session = authorized_session(&state, &headers, Some(&project_id)).await?;
   let root = project_root_for_id(&state, &project_id).await?;
-  let response = search_project_with_options(
-    root.as_path(),
+  let response = search_project_hybrid(
+    &state,
+    &project_id,
+    &root,
     &payload.query,
     SearchOptions {
       top_k: payload.top_k.unwrap_or(10),
       include_content: payload.include_content.unwrap_or(false),
     },
   )
-    .map_err(|error| ApiError::bad_request(error.to_string()))?;
+  .await?;
   Ok(Json(json!({
     "mode": response.mode,
     "tokenHits": response.token_hits,
@@ -699,9 +702,15 @@ async fn query_handler(
 ) -> Result<impl IntoResponse, ApiError> {
   let _session = authorized_session(&state, &headers, Some(&project_id)).await?;
   let root = project_root_for_id(&state, &project_id).await?;
-  let results = search_project(root.as_path(), &payload.query)
-    .map_err(|error| ApiError::bad_request(error.to_string()))?;
-  let answer = answer_from_results(&payload.query, &results);
+  let results = search_project_hybrid(
+    &state,
+    &project_id,
+    &root,
+    &payload.query,
+    SearchOptions::default(),
+  )
+  .await?;
+  let answer = answer_from_results(&payload.query, &results.results);
   Ok(Json(json!(answer)))
 }
 

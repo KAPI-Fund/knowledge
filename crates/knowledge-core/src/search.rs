@@ -4,12 +4,12 @@ use std::path::Path;
 
 use serde::Serialize;
 
-const FILENAME_EXACT_BONUS: usize = 200;
-const PHRASE_IN_TITLE_BONUS: usize = 50;
-const PHRASE_IN_CONTENT_PER_OCCURRENCE: usize = 20;
+const FILENAME_EXACT_BONUS: f64 = 200.0;
+const PHRASE_IN_TITLE_BONUS: f64 = 50.0;
+const PHRASE_IN_CONTENT_PER_OCCURRENCE: f64 = 20.0;
 const MAX_PHRASE_OCCURRENCES: usize = 10;
-const TITLE_TOKEN_WEIGHT: usize = 5;
-const CONTENT_TOKEN_WEIGHT: usize = 1;
+const TITLE_TOKEN_WEIGHT: f64 = 5.0;
+const CONTENT_TOKEN_WEIGHT: f64 = 1.0;
 const SNIPPET_CONTEXT: usize = 80;
 const DEFAULT_RESULTS: usize = 10;
 const MAX_RESULTS: usize = 100;
@@ -43,7 +43,9 @@ pub struct SearchResult {
   pub title: String,
   pub snippet: String,
   pub title_match: bool,
-  pub score: usize,
+  pub score: f64,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub vector_score: Option<f32>,
   pub images: Vec<SearchImageRef>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub content: Option<String>,
@@ -99,7 +101,13 @@ pub fn search_project_with_options(
     Ok(())
   })?;
 
-  results.sort_by(|left, right| right.score.cmp(&left.score).then(left.path.cmp(&right.path)));
+  results.sort_by(|left, right| {
+    right
+      .score
+      .partial_cmp(&left.score)
+      .unwrap_or(std::cmp::Ordering::Equal)
+      .then(left.path.cmp(&right.path))
+  });
   let token_hits = results.len();
   results.truncate(top_k);
 
@@ -282,11 +290,11 @@ fn score_file(
     return None;
   }
 
-  let score = (if filename_exact { FILENAME_EXACT_BONUS } else { 0 })
-    + (if title_has_phrase { PHRASE_IN_TITLE_BONUS } else { 0 })
-    + content_phrase_occurrences * PHRASE_IN_CONTENT_PER_OCCURRENCE
-    + title_token_score * TITLE_TOKEN_WEIGHT
-    + content_token_score * CONTENT_TOKEN_WEIGHT;
+  let score = (if filename_exact { FILENAME_EXACT_BONUS } else { 0.0 })
+    + (if title_has_phrase { PHRASE_IN_TITLE_BONUS } else { 0.0 })
+    + content_phrase_occurrences as f64 * PHRASE_IN_CONTENT_PER_OCCURRENCE
+    + title_token_score as f64 * TITLE_TOKEN_WEIGHT
+    + content_token_score as f64 * CONTENT_TOKEN_WEIGHT;
 
   let snippet_anchor = if content_phrase_occurrences > 0 && !query_phrase.is_empty() {
     query_phrase.to_string()
@@ -304,6 +312,7 @@ fn score_file(
     snippet: build_snippet(content, &snippet_anchor),
     title_match: filename_exact || title_has_phrase || title_token_score > 0,
     score,
+    vector_score: None,
     images: extract_image_refs(content),
     content: include_content.then_some(content.to_string()),
   })

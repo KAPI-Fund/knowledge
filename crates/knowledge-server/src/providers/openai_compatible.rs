@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::providers::types::{
-    ProviderAnswer, ProviderError, ProviderQueryRequest, ProviderTextRequest,
+    ProviderAnswer, ProviderEmbeddingRequest, ProviderError, ProviderQueryRequest, ProviderTextRequest,
     ProviderTextResponse, ProviderUsage,
 };
 
@@ -65,6 +65,68 @@ impl OpenAiCompatibleProvider {
             citations: Vec::new(),
             usage: response.usage,
         })
+    }
+
+    pub async fn embed_text(
+        &self,
+        request: ProviderEmbeddingRequest,
+    ) -> Result<Vec<f32>, ProviderError> {
+        let response = self
+            .client
+            .post(embeddings_url(&self.base_url))
+            .headers(self.auth_headers()?)
+            .json(&EmbeddingRequest {
+                model: self.model.clone(),
+                input: request.text,
+            })
+            .send()
+            .await
+            .map_err(map_transport_error)?;
+
+        let status = response.status();
+        let body = response.text().await.map_err(map_transport_error)?;
+        let payload: Value = serde_json::from_str(&body).map_err(|error| {
+            ProviderError::new(
+                "provider_invalid_response",
+                format!("provider returned invalid JSON: {error}"),
+                false,
+            )
+        })?;
+
+        if !status.is_success() {
+            return Err(map_provider_error(status, &payload));
+        }
+
+        let response: EmbeddingResponse = serde_json::from_value(payload).map_err(|error| {
+            ProviderError::new(
+                "provider_invalid_response",
+                format!("provider returned unsupported embedding response shape: {error}"),
+                false,
+            )
+        })?;
+
+        let embedding = response
+            .data
+            .first()
+            .map(|item| item.embedding.clone())
+            .filter(|embedding| !embedding.is_empty())
+            .ok_or_else(|| {
+                ProviderError::new(
+                    "provider_invalid_response",
+                    "provider did not return an embedding vector",
+                    false,
+                )
+            })?;
+
+        if embedding.iter().any(|value| !value.is_finite()) {
+            return Err(ProviderError::new(
+                "provider_invalid_response",
+                "provider returned a non-finite embedding value",
+                false,
+            ));
+        }
+
+        Ok(embedding)
     }
 
     pub async fn complete_text(
@@ -157,6 +219,15 @@ fn chat_completions_url(base_url: &str) -> String {
     }
 }
 
+fn embeddings_url(base_url: &str) -> String {
+    let trimmed = base_url.trim_end_matches('/');
+    if trimmed.ends_with("/v1") {
+        format!("{trimmed}/embeddings")
+    } else {
+        format!("{trimmed}/v1/embeddings")
+    }
+}
+
 fn map_transport_error(error: reqwest::Error) -> ProviderError {
     if error.is_timeout() {
         return ProviderError::new("provider_timeout", "provider request timed out", true);
@@ -245,6 +316,12 @@ struct ChatMessage {
     content: String,
 }
 
+#[derive(Debug, Serialize)]
+struct EmbeddingRequest {
+    model: String,
+    input: String,
+}
+
 #[derive(Debug, Deserialize)]
 struct ChatCompletionResponse {
     choices: Vec<ChatChoice>,
@@ -266,4 +343,14 @@ struct ChatUsage {
     prompt_tokens: Option<u64>,
     completion_tokens: Option<u64>,
     total_tokens: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct EmbeddingResponse {
+    data: Vec<EmbeddingResponseItem>,
+}
+
+#[derive(Debug, Deserialize)]
+struct EmbeddingResponseItem {
+    embedding: Vec<f32>,
 }
