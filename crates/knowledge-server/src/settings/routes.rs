@@ -19,6 +19,11 @@ pub struct UpdateSettingsRequest {
   pub provider_mode: String,
   pub language: String,
   pub default_query_limit: i64,
+  pub provider_base_url: Option<String>,
+  pub provider_api_key: Option<String>,
+  pub provider_model: Option<String>,
+  pub provider_embedding_model: Option<String>,
+  pub provider_timeout_seconds: Option<i64>,
 }
 
 async fn get_settings(
@@ -26,8 +31,36 @@ async fn get_settings(
   headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, ApiError> {
   require_session(&state, &headers).await?;
-  let (provider_mode, language, default_query_limit) = sqlx::query_as::<_, (String, String, i64)>(
-    "SELECT provider_mode, language, default_query_limit FROM system_settings WHERE id = 1",
+  let (
+    provider_mode,
+    language,
+    default_query_limit,
+    provider_base_url,
+    provider_api_key,
+    provider_model,
+    provider_embedding_model,
+    provider_timeout_seconds,
+  ) = sqlx::query_as::<_, (
+    String,
+    String,
+    i64,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<i64>,
+  )>(
+    "SELECT
+      provider_mode,
+      language,
+      default_query_limit,
+      provider_base_url,
+      provider_api_key,
+      provider_model,
+      provider_embedding_model,
+      provider_timeout_seconds
+     FROM system_settings
+     WHERE id = 1",
   )
   .fetch_one(&state.pool)
   .await
@@ -36,7 +69,12 @@ async fn get_settings(
   Ok(Json(json!({
     "providerMode": provider_mode,
     "language": language,
-    "defaultQueryLimit": default_query_limit
+    "defaultQueryLimit": default_query_limit,
+    "providerBaseUrl": provider_base_url,
+    "providerApiKeyConfigured": provider_api_key.as_deref().is_some_and(|value| !value.is_empty()),
+    "providerModel": provider_model,
+    "providerEmbeddingModel": provider_embedding_model,
+    "providerTimeoutSeconds": provider_timeout_seconds
   })))
 }
 
@@ -47,11 +85,25 @@ async fn update_settings(
 ) -> Result<Json<serde_json::Value>, ApiError> {
   require_session(&state, &headers).await?;
   sqlx::query(
-    "UPDATE system_settings SET provider_mode = $1, language = $2, default_query_limit = $3 WHERE id = 1",
+    "UPDATE system_settings
+     SET provider_mode = $1,
+         language = $2,
+         default_query_limit = $3,
+         provider_base_url = $4,
+         provider_api_key = COALESCE(NULLIF($5, ''), provider_api_key),
+         provider_model = $6,
+         provider_embedding_model = $7,
+         provider_timeout_seconds = $8
+     WHERE id = 1",
   )
   .bind(&payload.provider_mode)
   .bind(&payload.language)
   .bind(payload.default_query_limit)
+  .bind(&payload.provider_base_url)
+  .bind(payload.provider_api_key.as_deref())
+  .bind(&payload.provider_model)
+  .bind(&payload.provider_embedding_model)
+  .bind(payload.provider_timeout_seconds)
   .execute(&state.pool)
   .await
   .map_err(ApiError::from)?;
@@ -59,7 +111,12 @@ async fn update_settings(
   Ok(Json(json!({
     "providerMode": payload.provider_mode,
     "language": payload.language,
-    "defaultQueryLimit": payload.default_query_limit
+    "defaultQueryLimit": payload.default_query_limit,
+    "providerBaseUrl": payload.provider_base_url,
+    "providerApiKeyConfigured": payload.provider_api_key.as_deref().is_some_and(|value| !value.is_empty()),
+    "providerModel": payload.provider_model,
+    "providerEmbeddingModel": payload.provider_embedding_model,
+    "providerTimeoutSeconds": payload.provider_timeout_seconds
   })))
 }
 

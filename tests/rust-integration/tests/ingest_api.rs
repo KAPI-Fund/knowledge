@@ -5,6 +5,7 @@ use std::fs;
 use axum::body::{to_bytes, Body};
 use axum::http::{header, Request, StatusCode};
 use knowledge_server::config::AppConfig;
+use knowledge_server::tasks::{scheduler, store};
 use knowledge_server::{bootstrap_state, build_app};
 use serde_json::{json, Value};
 use support::TestEnvironment;
@@ -21,7 +22,7 @@ async fn ingest_source_generates_summary_and_updates_indexes() {
   let project_root = temp.path().join("ingest-project");
   let project_id = create_project(state.clone(), &cookie, &csrf, project_root.clone()).await;
 
-  let _ = build_app(state.clone())
+  let import_response = build_app(state.clone())
     .oneshot(
       Request::builder()
         .method("POST")
@@ -40,6 +41,13 @@ async fn ingest_source_generates_summary_and_updates_indexes() {
     )
     .await
     .unwrap();
+  assert_eq!(import_response.status(), StatusCode::ACCEPTED);
+  let import_payload = read_json(import_response.into_body()).await;
+  wait_for_task_terminal(
+    &state,
+    import_payload.get("taskId").and_then(Value::as_str).unwrap(),
+  )
+  .await;
 
   let ingest_response = build_app(state.clone())
     .oneshot(
@@ -55,9 +63,19 @@ async fn ingest_source_generates_summary_and_updates_indexes() {
     .await
     .unwrap();
 
-  assert_eq!(ingest_response.status(), StatusCode::OK);
+  assert_eq!(ingest_response.status(), StatusCode::ACCEPTED);
   let payload = read_json(ingest_response.into_body()).await;
-  assert_eq!(payload.get("summaryPath").and_then(Value::as_str), Some("wiki/sources/attention.md"));
+  let task_id = payload.get("taskId").and_then(Value::as_str).unwrap().to_string();
+  wait_for_task_terminal(&state, &task_id).await;
+  let detail = store::get_task_by_id(&state, &task_id).await.unwrap();
+  assert_eq!(
+    detail
+      .result
+      .as_ref()
+      .and_then(|result| result.get("summaryPath"))
+      .and_then(Value::as_str),
+    Some("wiki/sources/attention.md"),
+  );
 
   let summary = fs::read_to_string(project_root.join("wiki/sources/attention.md")).unwrap();
   assert!(summary.contains("type: source"));
@@ -200,4 +218,19 @@ async fn create_project(
 async fn read_json(body: Body) -> Value {
   let bytes = to_bytes(body, usize::MAX).await.unwrap();
   serde_json::from_slice(&bytes).unwrap()
+}
+
+async fn wait_for_task_terminal(state: &knowledge_server::app::state::AppState, task_id: &str) {
+  for _ in 0..20 {
+    let progressed = scheduler::run_scheduler_tick(state).await.unwrap_or(false);
+    let task = store::get_task_by_id(state, task_id).await.unwrap();
+    if matches!(task.status.as_str(), "succeeded" | "failed" | "cancelled") {
+      return;
+    }
+    if !progressed {
+      tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+  }
+
+  panic!("task did not reach a terminal state");
 }

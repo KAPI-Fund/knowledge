@@ -1,4 +1,3 @@
-use serde::Serialize;
 use serde_json::Value;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
@@ -6,6 +5,8 @@ use uuid::Uuid;
 
 use crate::app::state::AppState;
 use crate::http::error::ApiError;
+use crate::tasks::model::TaskRecord;
+use crate::tasks::store::{create_task, get_task_by_id, CreateTaskInput};
 
 #[derive(Debug, Clone)]
 pub struct CreateTaskRecord {
@@ -15,19 +16,6 @@ pub struct CreateTaskRecord {
   pub relative_path: Option<String>,
   pub detail: Value,
   pub created_by: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TaskRecord {
-  pub id: String,
-  pub task_type: String,
-  pub status: String,
-  pub title: String,
-  pub relative_path: Option<String>,
-  pub detail: Value,
-  pub created_at: String,
-  pub updated_at: String,
 }
 
 pub async fn create_completed_task(
@@ -40,8 +28,15 @@ pub async fn create_completed_task(
     .map_err(|error| ApiError::internal(error.to_string()))?;
 
   sqlx::query(
-    "INSERT INTO project_tasks (id, project_id, task_type, status, title, relative_path, detail, created_by, created_at, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10)",
+    "INSERT INTO project_tasks (
+      id, project_id, task_type, status, title, relative_path, detail, payload, result, error,
+      attempt_count, max_attempts, created_by, created_at, updated_at, started_at, finished_at,
+      lease_owner, lease_expires_at, next_retry_at
+    ) VALUES (
+      $1, $2, $3, $4, $5, $6, $7::jsonb, '{}'::jsonb, NULL, NULL,
+      0, 3, $8, $9, $10, NULL, $11,
+      NULL, NULL, NULL
+    )",
   )
   .bind(&id)
   .bind(&input.project_id)
@@ -53,25 +48,41 @@ pub async fn create_completed_task(
   .bind(&input.created_by)
   .bind(&now)
   .bind(&now)
+  .bind(&now)
   .execute(&state.pool)
   .await
   .map_err(ApiError::from)?;
 
-  Ok(TaskRecord {
-    id,
-    task_type: input.task_type,
-    status: "completed".to_string(),
-    title: input.title,
-    relative_path: input.relative_path,
-    detail: input.detail,
-    created_at: now.clone(),
-    updated_at: now,
-  })
+  get_task_by_id(state, &id).await
+}
+
+pub async fn create_queued_task(
+  state: &AppState,
+  input: CreateTaskRecord,
+  payload: Value,
+) -> Result<TaskRecord, ApiError> {
+  create_task(
+    state,
+    CreateTaskInput {
+      project_id: input.project_id,
+      task_type: input.task_type,
+      title: input.title,
+      relative_path: input.relative_path,
+      detail: input.detail,
+      payload,
+      created_by: input.created_by,
+      max_attempts: 3,
+    },
+  )
+  .await
 }
 
 pub async fn list_tasks(state: &AppState, project_id: &str) -> Result<Vec<TaskRecord>, ApiError> {
-  let rows = sqlx::query_as::<_, (String, String, String, String, Option<String>, Value, String, String)>(
-    "SELECT id, task_type, status, title, relative_path, detail, created_at, updated_at
+  sqlx::query_as::<_, TaskRecord>(
+    "SELECT
+      id, project_id, task_type, status, title, relative_path, detail, payload, result, error,
+      attempt_count, max_attempts, created_by, created_at, updated_at, started_at, finished_at,
+      lease_owner, lease_expires_at, next_retry_at
      FROM project_tasks
      WHERE project_id = $1
      ORDER BY created_at ASC",
@@ -79,23 +90,7 @@ pub async fn list_tasks(state: &AppState, project_id: &str) -> Result<Vec<TaskRe
   .bind(project_id)
   .fetch_all(&state.pool)
   .await
-  .map_err(ApiError::from)?;
-
-  Ok(rows
-    .into_iter()
-    .map(
-      |(id, task_type, status, title, relative_path, detail, created_at, updated_at)| TaskRecord {
-        id,
-        task_type,
-        status,
-        title,
-        relative_path,
-        detail,
-        created_at,
-        updated_at,
-      },
-    )
-    .collect())
+  .map_err(ApiError::from)
 }
 
 pub async fn get_task(
@@ -103,28 +98,11 @@ pub async fn get_task(
   project_id: &str,
   task_id: &str,
 ) -> Result<TaskRecord, ApiError> {
-  let row = sqlx::query_as::<_, (String, String, String, String, Option<String>, Value, String, String)>(
-    "SELECT id, task_type, status, title, relative_path, detail, created_at, updated_at
-     FROM project_tasks
-     WHERE project_id = $1 AND id = $2",
-  )
-  .bind(project_id)
-  .bind(task_id)
-  .fetch_optional(&state.pool)
-  .await
-  .map_err(ApiError::from)?
-  .ok_or_else(|| ApiError::bad_request("unknown task"))?;
-
-  Ok(TaskRecord {
-    id: row.0,
-    task_type: row.1,
-    status: row.2,
-    title: row.3,
-    relative_path: row.4,
-    detail: row.5,
-    created_at: row.6,
-    updated_at: row.7,
-  })
+  let task = get_task_by_id(state, task_id).await?;
+  if task.project_id != project_id {
+    return Err(ApiError::bad_request("unknown task"));
+  }
+  Ok(task)
 }
 
 pub async fn update_task_status(
@@ -134,31 +112,30 @@ pub async fn update_task_status(
   status: &str,
 ) -> Result<TaskRecord, ApiError> {
   let updated_at = now_rfc3339()?;
-  let row = sqlx::query_as::<_, (String, String, String, String, Option<String>, Value, String, String)>(
+  let finished_at = if matches!(status, "succeeded" | "failed" | "cancelled" | "completed") {
+    Some(updated_at.clone())
+  } else {
+    None
+  };
+
+  sqlx::query_as::<_, TaskRecord>(
     "UPDATE project_tasks
-     SET status = $3, updated_at = $4
+     SET status = $3, updated_at = $4, finished_at = COALESCE($5, finished_at)
      WHERE project_id = $1 AND id = $2
-     RETURNING id, task_type, status, title, relative_path, detail, created_at, updated_at",
+     RETURNING
+      id, project_id, task_type, status, title, relative_path, detail, payload, result, error,
+      attempt_count, max_attempts, created_by, created_at, updated_at, started_at, finished_at,
+      lease_owner, lease_expires_at, next_retry_at",
   )
   .bind(project_id)
   .bind(task_id)
   .bind(status)
   .bind(&updated_at)
+  .bind(&finished_at)
   .fetch_optional(&state.pool)
   .await
   .map_err(ApiError::from)?
-  .ok_or_else(|| ApiError::bad_request("unknown task"))?;
-
-  Ok(TaskRecord {
-    id: row.0,
-    task_type: row.1,
-    status: row.2,
-    title: row.3,
-    relative_path: row.4,
-    detail: row.5,
-    created_at: row.6,
-    updated_at: row.7,
-  })
+  .ok_or_else(|| ApiError::bad_request("unknown task"))
 }
 
 fn now_rfc3339() -> Result<String, ApiError> {

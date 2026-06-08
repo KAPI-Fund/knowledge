@@ -12,6 +12,7 @@ export function useProjectSourcesQuery(projectId: string) {
   return useQuery({
     queryKey: ["project-sources", projectId],
     queryFn: () => listProjectSources(projectId),
+    refetchInterval: 1000,
   });
 }
 

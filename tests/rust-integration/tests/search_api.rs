@@ -5,6 +5,7 @@ use std::fs;
 use axum::body::{to_bytes, Body};
 use axum::http::{header, Request, StatusCode};
 use knowledge_server::config::AppConfig;
+use knowledge_server::tasks::{scheduler, store};
 use knowledge_server::{bootstrap_state, build_app};
 use serde_json::{json, Value};
 use support::TestEnvironment;
@@ -105,7 +106,7 @@ async fn task_endpoint_returns_source_task_queue() {
   let project_root = temp.path().join("tasks-project");
   let project_id = create_project(state.clone(), &cookie, &csrf, project_root.clone()).await;
 
-  let _ = build_app(state.clone())
+  let import_response = build_app(state.clone())
     .oneshot(
       Request::builder()
         .method("POST")
@@ -124,6 +125,13 @@ async fn task_endpoint_returns_source_task_queue() {
     )
     .await
     .unwrap();
+  assert_eq!(import_response.status(), StatusCode::ACCEPTED);
+  let import_payload = read_json(import_response.into_body()).await;
+  wait_for_task_terminal(
+    &state,
+    import_payload.get("taskId").and_then(Value::as_str).unwrap(),
+  )
+  .await;
 
   let response = build_app(state)
     .oneshot(
@@ -140,7 +148,10 @@ async fn task_endpoint_returns_source_task_queue() {
   let payload = read_json(response.into_body()).await;
   let tasks = payload.get("tasks").and_then(Value::as_array).unwrap();
   assert_eq!(tasks.len(), 1);
-  assert_eq!(tasks[0].get("taskType").and_then(Value::as_str), Some("source_import"));
+  assert_eq!(
+    tasks[0].get("taskType").and_then(Value::as_str),
+    Some("project.import_source"),
+  );
 }
 
 async fn login_and_csrf(state: knowledge_server::app::state::AppState) -> (String, String) {
@@ -212,4 +223,19 @@ async fn create_project(
 async fn read_json(body: Body) -> Value {
   let bytes = to_bytes(body, usize::MAX).await.unwrap();
   serde_json::from_slice(&bytes).unwrap()
+}
+
+async fn wait_for_task_terminal(state: &knowledge_server::app::state::AppState, task_id: &str) {
+  for _ in 0..20 {
+    let progressed = scheduler::run_scheduler_tick(state).await.unwrap_or(false);
+    let task = store::get_task_by_id(state, task_id).await.unwrap();
+    if matches!(task.status.as_str(), "succeeded" | "failed" | "cancelled") {
+      return;
+    }
+    if !progressed {
+      tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+  }
+
+  panic!("task did not reach a terminal state");
 }

@@ -6,6 +6,7 @@ pub mod db;
 pub mod http;
 pub mod projects;
 pub mod settings;
+pub mod tasks;
 pub mod users;
 
 use app::state::AppState;
@@ -25,11 +26,14 @@ pub async fn bootstrap_state(config: &AppConfig) -> anyhow::Result<AppState> {
   let pool = db::pool::connect_pool(&config.database_url).await?;
   db::migrate::run(&pool).await?;
   let cache = CacheStore::connect(&config.redis_url).await?;
-  Ok(AppState {
+  let state = AppState {
     pool,
     cache,
     session_ttl_hours: config.session_ttl_hours,
-  })
+  };
+  tasks::recovery::recover_tasks(&state).await?;
+  tasks::scheduler::spawn_scheduler(state.clone());
+  Ok(state)
 }
 
 pub fn build_app(state: AppState) -> axum::Router {

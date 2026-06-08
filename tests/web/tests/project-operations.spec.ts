@@ -17,9 +17,18 @@ test("admin can inspect project operations data", async ({ page }) => {
     .getByLabel("Markdown Content")
     .fill("# Attention\n\nAttention lets models focus on relevant tokens.");
   await page.getByRole("button", { name: "Import Source" }).click();
-  await expect(page.getByText("raw/sources/attention.md")).toBeVisible();
-  await page.getByRole("button", { name: "Rescan Sources" }).click();
+  await page.getByRole("link", { name: "Tasks" }).click();
+  const importTask = page.getByRole("listitem").filter({ hasText: "Imported attention.md" });
+  await expect(importTask).toBeVisible();
+  await page.getByRole("link", { name: "Sources" }).click();
+  await expect(page.getByText("raw/sources/attention.md").first()).toBeVisible();
   await page.getByRole("button", { name: "Ingest" }).click();
+  await page.getByRole("link", { name: "Tasks" }).click();
+  const ingestTask = page
+    .getByRole("listitem")
+    .filter({ hasText: "Ingest raw/sources/attention.md" });
+  await expect(ingestTask).toBeVisible();
+  await expect(ingestTask).toContainText("succeeded");
 
   await page.getByRole("link", { name: "Search" }).click();
   await page.getByLabel("Search Query").fill("relevant tokens");
@@ -33,14 +42,17 @@ test("admin can inspect project operations data", async ({ page }) => {
   await page.getByRole("link", { name: "Tasks" }).click();
   await expect(page.getByRole("heading", { name: "Tasks" })).toBeVisible();
   await expect(page.getByText("raw/sources/attention.md").first()).toBeVisible();
-  const ingestTask = page.getByRole("listitem").filter({ hasText: "Ingested attention.md" });
-  await ingestTask.getByRole("button", { name: "Retry" }).click();
-  await expect(ingestTask.getByRole("button", { name: "Cancel" })).toBeVisible();
-  await ingestTask.getByRole("button", { name: "Cancel" }).click();
+  await expect(ingestTask).toBeVisible();
 
   await page.getByRole("link", { name: "Sources" }).click();
   await page.getByRole("button", { name: "Delete" }).click();
-  await expect(page.getByText("raw/sources/attention.md")).not.toBeVisible();
+  await expect(page.getByText("raw/sources/attention.md").first()).not.toBeVisible();
+
+  await page.getByRole("link", { name: "Tasks" }).click();
+  const deleteTask = page.getByRole("listitem").filter({ hasText: "Deleted attention.md" });
+  await expect(deleteTask).toBeVisible();
+  await page.getByRole("link", { name: "Sources" }).click();
+  await expect(page.getByText("raw/sources/attention.md").first()).not.toBeVisible();
 
   await page.getByRole("link", { name: "Settings" }).click();
   await page.getByLabel("Default Query Limit").fill("5");

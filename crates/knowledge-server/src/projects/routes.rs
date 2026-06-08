@@ -11,13 +11,13 @@ use crate::auth::session::find_session;
 use crate::http::error::ApiError;
 use crate::projects::audit::{append_audit_log, list_audit_logs, CreateAuditLog};
 use crate::projects::service::{create_project, project_detail, project_root_for_id};
-use crate::projects::tasks::{create_completed_task, get_task, list_tasks, update_task_status, CreateTaskRecord};
-use knowledge_core::graph::{build_graph, neighbors_for_node};
-use knowledge_core::ingest::{analyze_source, generate_wiki_from_analysis};
-use knowledge_core::project::reviews::{load_reviews, update_review_status};
-use knowledge_core::project::sources::{
-  delete_source, import_source, list_sources, rescan_sources,
+use crate::projects::tasks::{
+  create_queued_task, get_task, list_tasks, update_task_status,
+  CreateTaskRecord,
 };
+use knowledge_core::graph::{build_graph, neighbors_for_node};
+use knowledge_core::project::reviews::load_reviews;
+use knowledge_core::project::sources::list_sources;
 use knowledge_core::query::answer_from_results;
 use knowledge_core::search::search_project;
 
@@ -37,6 +37,8 @@ pub fn router() -> Router<AppState> {
     .route("/api/projects/{project_id}/tasks/{task_id}", get(task_detail_handler))
     .route("/api/projects/{project_id}/tasks/{task_id}/retry", post(retry_task_handler))
     .route("/api/projects/{project_id}/tasks/{task_id}/cancel", post(cancel_task_handler))
+    .route("/api/projects/{project_id}/query-tasks", post(create_query_task_handler))
+    .route("/api/projects/{project_id}/query-tasks/{task_id}", get(query_task_detail_handler))
     .route("/api/projects/{project_id}/ingest", post(ingest_handler))
     .route("/api/projects/{project_id}/query", post(query_handler))
     .route("/api/projects/{project_id}/reviews", get(list_reviews_handler))
@@ -61,6 +63,13 @@ pub struct ImportSourceRequest {
 #[derive(Debug, Clone, Deserialize)]
 pub struct SearchRequest {
   pub query: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateQueryTaskRequest {
+  pub query: String,
+  pub top_k: i64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -169,21 +178,20 @@ async fn import_source_handler(
 ) -> Result<impl IntoResponse, ApiError> {
   let session = authorized_session(&state, &headers, Some(&project_id)).await?;
   validate_csrf(&headers, &session.csrf_token)?;
-  let root = project_root_for_id(&state, &project_id).await?;
-  let source =
-    import_source(&root, &payload.file_name, &payload.content_base64).map_err(|error| {
-      ApiError::bad_request(error.to_string())
-    })?;
-  let task = create_completed_task(
+  let task = create_queued_task(
     &state,
     CreateTaskRecord {
       project_id: project_id.clone(),
-      task_type: "source_import".to_string(),
+      task_type: "project.import_source".to_string(),
       title: format!("Imported {}", payload.file_name),
-      relative_path: Some(source.relative_path.clone()),
-      detail: json!({ "size": source.size }),
+      relative_path: Some(format!("raw/sources/{}", payload.file_name)),
+      detail: json!({}),
       created_by: session.user_id.clone(),
     },
+    json!({
+      "fileName": payload.file_name,
+      "contentBase64": payload.content_base64
+    }),
   )
   .await?;
   append_audit_log(
@@ -191,16 +199,22 @@ async fn import_source_handler(
     CreateAuditLog {
       project_id: Some(project_id.clone()),
       actor_id: session.user_id.clone(),
-      action: "source.imported".to_string(),
+      action: "source.import.enqueued".to_string(),
       target_type: "source".to_string(),
-      target_id: source.relative_path.clone(),
-      task_id: Some(task.id),
-      summary: format!("Imported source {}", payload.file_name),
-      metadata: json!({ "relativePath": source.relative_path }),
+      target_id: payload.file_name.clone(),
+      task_id: Some(task.id.clone()),
+      summary: format!("Queued source import {}", payload.file_name),
+      metadata: json!({ "fileName": payload.file_name }),
     },
   )
   .await?;
-  Ok((StatusCode::CREATED, Json(source)))
+  Ok((
+    StatusCode::ACCEPTED,
+    Json(json!({
+      "taskId": task.id,
+      "status": task.status
+    })),
+  ))
 }
 
 async fn rescan_sources_handler(
@@ -210,19 +224,17 @@ async fn rescan_sources_handler(
 ) -> Result<impl IntoResponse, ApiError> {
   let session = authorized_session(&state, &headers, Some(&project_id)).await?;
   validate_csrf(&headers, &session.csrf_token)?;
-  let root = project_root_for_id(&state, &project_id).await?;
-  let discovered_count =
-    rescan_sources(&root).map_err(|error| ApiError::bad_request(error.to_string()))?;
-  let task = create_completed_task(
+  let task = create_queued_task(
     &state,
     CreateTaskRecord {
       project_id: project_id.clone(),
-      task_type: "source_rescan".to_string(),
+      task_type: "project.rescan_sources".to_string(),
       title: "Rescanned sources".to_string(),
       relative_path: None,
-      detail: json!({ "discoveredCount": discovered_count }),
+      detail: json!({}),
       created_by: session.user_id.clone(),
     },
+    json!({}),
   )
   .await?;
   append_audit_log(
@@ -230,16 +242,22 @@ async fn rescan_sources_handler(
     CreateAuditLog {
       project_id: Some(project_id.clone()),
       actor_id: session.user_id.clone(),
-      action: "sources.rescanned".to_string(),
+      action: "sources.rescan.enqueued".to_string(),
       target_type: "project".to_string(),
       target_id: project_id.clone(),
-      task_id: Some(task.id),
-      summary: "Rescanned project sources".to_string(),
-      metadata: json!({ "discoveredCount": discovered_count }),
+      task_id: Some(task.id.clone()),
+      summary: "Queued project source rescan".to_string(),
+      metadata: json!({}),
     },
   )
   .await?;
-  Ok(Json(json!({ "discoveredCount": discovered_count })))
+  Ok((
+    StatusCode::ACCEPTED,
+    Json(json!({
+      "taskId": task.id,
+      "status": task.status
+    })),
+  ))
 }
 
 async fn delete_source_handler(
@@ -249,18 +267,19 @@ async fn delete_source_handler(
 ) -> Result<impl IntoResponse, ApiError> {
   let session = authorized_session(&state, &headers, Some(&project_id)).await?;
   validate_csrf(&headers, &session.csrf_token)?;
-  let root = project_root_for_id(&state, &project_id).await?;
-  delete_source(&root, &relative_path).map_err(|error| ApiError::bad_request(error.to_string()))?;
-  let task = create_completed_task(
+  let task = create_queued_task(
     &state,
     CreateTaskRecord {
       project_id: project_id.clone(),
-      task_type: "source_delete".to_string(),
+      task_type: "project.delete_source".to_string(),
       title: format!("Deleted {}", relative_path),
       relative_path: Some(format!("raw/sources/{relative_path}")),
       detail: json!({}),
       created_by: session.user_id.clone(),
     },
+    json!({
+      "relativePath": relative_path
+    }),
   )
   .await?;
   append_audit_log(
@@ -268,16 +287,22 @@ async fn delete_source_handler(
     CreateAuditLog {
       project_id: Some(project_id.clone()),
       actor_id: session.user_id.clone(),
-      action: "source.deleted".to_string(),
+      action: "source.delete.enqueued".to_string(),
       target_type: "source".to_string(),
       target_id: relative_path.clone(),
-      task_id: Some(task.id),
-      summary: format!("Deleted source {}", relative_path),
+      task_id: Some(task.id.clone()),
+      summary: format!("Queued source delete {}", relative_path),
       metadata: json!({ "relativePath": relative_path }),
     },
   )
   .await?;
-  Ok(StatusCode::NO_CONTENT)
+  Ok((
+    StatusCode::ACCEPTED,
+    Json(json!({
+      "taskId": task.id,
+      "status": task.status
+    })),
+  ))
 }
 
 async fn search_handler(
@@ -362,6 +387,67 @@ async fn cancel_task_handler(
   Ok(Json(json!(updated)))
 }
 
+async fn create_query_task_handler(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Path(project_id): Path<String>,
+  Json(payload): Json<CreateQueryTaskRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+  let session = authorized_session(&state, &headers, Some(&project_id)).await?;
+  validate_csrf(&headers, &session.csrf_token)?;
+
+  let (provider_mode, language, default_query_limit) =
+    sqlx::query_as::<_, (String, String, i64)>(
+      "SELECT provider_mode, language, default_query_limit FROM system_settings WHERE id = 1",
+    )
+    .fetch_one(&state.pool)
+    .await
+    .map_err(ApiError::from)?;
+
+  let top_k = if payload.top_k > 0 {
+    payload.top_k
+  } else {
+    default_query_limit
+  };
+
+  let task = create_queued_task(
+    &state,
+    CreateTaskRecord {
+      project_id: project_id.clone(),
+      task_type: "query.answer".to_string(),
+      title: format!("Query: {}", payload.query),
+      relative_path: None,
+      detail: json!({}),
+      created_by: session.user_id.clone(),
+    },
+    json!({
+      "query": payload.query,
+      "topK": top_k,
+      "providerMode": provider_mode,
+      "language": language,
+      "requestedBy": session.user_id
+    }),
+  )
+  .await?;
+
+  Ok((
+    StatusCode::ACCEPTED,
+    Json(json!({
+      "taskId": task.id,
+      "status": task.status
+    })),
+  ))
+}
+
+async fn query_task_detail_handler(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Path((project_id, task_id)): Path<(String, String)>,
+) -> Result<impl IntoResponse, ApiError> {
+  let _session = authorized_session(&state, &headers, Some(&project_id)).await?;
+  Ok(Json(json!(get_task(&state, &project_id, &task_id).await?)))
+}
+
 async fn ingest_handler(
   State(state): State<AppState>,
   headers: HeaderMap,
@@ -370,28 +456,19 @@ async fn ingest_handler(
 ) -> Result<impl IntoResponse, ApiError> {
   let session = authorized_session(&state, &headers, Some(&project_id)).await?;
   validate_csrf(&headers, &session.csrf_token)?;
-  let root = project_root_for_id(&state, &project_id).await?;
-  let source_path = root
-    .safe_join(&payload.relative_path)
-    .map_err(|error| ApiError::bad_request(error.to_string()))?;
-  let content = std::fs::read_to_string(&source_path).map_err(|error| ApiError::bad_request(error.to_string()))?;
-  let source_name = source_path
-    .file_name()
-    .and_then(|name| name.to_str())
-    .ok_or_else(|| ApiError::bad_request("invalid source name"))?;
-  let analysis = analyze_source(source_name, &content);
-  let result = generate_wiki_from_analysis(&root, source_name, &analysis)
-    .map_err(|error| ApiError::bad_request(error.to_string()))?;
-  let task = create_completed_task(
+  let task = create_queued_task(
     &state,
     CreateTaskRecord {
       project_id: project_id.clone(),
-      task_type: "ingest_source".to_string(),
-      title: format!("Ingested {}", source_name),
+      task_type: "project.ingest_source".to_string(),
+      title: format!("Ingest {}", payload.relative_path),
       relative_path: Some(payload.relative_path.clone()),
-      detail: json!({ "summaryPath": result.summary_path }),
+      detail: json!({}),
       created_by: session.user_id.clone(),
     },
+    json!({
+      "relativePath": payload.relative_path
+    }),
   )
   .await?;
   append_audit_log(
@@ -399,16 +476,22 @@ async fn ingest_handler(
     CreateAuditLog {
       project_id: Some(project_id.clone()),
       actor_id: session.user_id.clone(),
-      action: "ingest.completed".to_string(),
+      action: "ingest.enqueued".to_string(),
       target_type: "source".to_string(),
       target_id: payload.relative_path.clone(),
-      task_id: Some(task.id),
-      summary: format!("Ingested source {}", payload.relative_path),
-      metadata: json!({ "summaryPath": result.summary_path }),
+      task_id: Some(task.id.clone()),
+      summary: format!("Queued ingest for {}", payload.relative_path),
+      metadata: json!({ "relativePath": payload.relative_path }),
     },
   )
   .await?;
-  Ok(Json(json!(result)))
+  Ok((
+    StatusCode::ACCEPTED,
+    Json(json!({
+      "taskId": task.id,
+      "status": task.status
+    })),
+  ))
 }
 
 async fn query_handler(
@@ -444,26 +527,43 @@ async fn update_review_handler(
 ) -> Result<impl IntoResponse, ApiError> {
   let session = authorized_session(&state, &headers, Some(&project_id)).await?;
   validate_csrf(&headers, &session.csrf_token)?;
-  let root = project_root_for_id(&state, &project_id).await?;
-  let updated =
-    update_review_status(&root, &review_id, &payload.status).map_err(|error| {
-      ApiError::bad_request(error.to_string())
-    })?;
+  let task = create_queued_task(
+    &state,
+    CreateTaskRecord {
+      project_id: project_id.clone(),
+      task_type: "project.update_review".to_string(),
+      title: format!("Update review {}", review_id),
+      relative_path: None,
+      detail: json!({}),
+      created_by: session.user_id.clone(),
+    },
+    json!({
+      "reviewId": review_id,
+      "status": payload.status
+    }),
+  )
+  .await?;
   append_audit_log(
     &state,
     CreateAuditLog {
       project_id: Some(project_id),
       actor_id: session.user_id,
-      action: "review.updated".to_string(),
+      action: "review.update.enqueued".to_string(),
       target_type: "review".to_string(),
       target_id: review_id,
-      task_id: None,
-      summary: format!("Updated review status to {}", payload.status),
+      task_id: Some(task.id.clone()),
+      summary: format!("Queued review status update to {}", payload.status),
       metadata: json!({ "status": payload.status }),
     },
   )
   .await?;
-  Ok(Json(json!(updated)))
+  Ok((
+    StatusCode::ACCEPTED,
+    Json(json!({
+      "taskId": task.id,
+      "status": task.status
+    })),
+  ))
 }
 
 async fn audit_logs_handler(

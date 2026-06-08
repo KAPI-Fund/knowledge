@@ -7,6 +7,7 @@ import { DashboardPage } from "../features/dashboard/page";
 import { GraphPage } from "../features/graph/page";
 import { ProjectDetailPage } from "../features/projects/detail-page";
 import { ProjectsPage } from "../features/projects/page";
+import { QueryPage } from "../features/query/page";
 import { ReviewsPage } from "../features/reviews/page";
 import { SearchPage } from "../features/search/page";
 import { SettingsPage } from "../features/settings/page";
@@ -25,6 +26,7 @@ export function AppRouter() {
           <Route path="projects/:projectId" element={<ProjectDetailPage />} />
           <Route path="projects/:projectId/sources" element={<SourcesPage />} />
           <Route path="projects/:projectId/search" element={<SearchPage />} />
+          <Route path="projects/:projectId/query" element={<QueryPage />} />
           <Route path="projects/:projectId/graph" element={<GraphPage />} />
           <Route path="projects/:projectId/tasks" element={<TasksPage />} />
           <Route path="projects/:projectId/reviews" element={<ReviewsPage />} />

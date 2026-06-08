@@ -42,26 +42,42 @@ const tasksSchema = z.object({
   tasks: z.array(
     z.object({
       id: z.string(),
+      projectId: z.string().optional(),
       taskType: z.string(),
       status: z.string(),
       title: z.string(),
       relativePath: z.string().nullable().optional(),
       detail: z.unknown().optional(),
+      payload: z.unknown().optional(),
+      result: z.unknown().nullable().optional(),
+      error: z.unknown().nullable().optional(),
+      attemptCount: z.number().optional(),
+      maxAttempts: z.number().optional(),
       createdAt: z.string().optional(),
       updatedAt: z.string().optional(),
+      startedAt: z.string().nullable().optional(),
+      finishedAt: z.string().nullable().optional(),
     }),
   ),
 });
 
 const taskSchema = z.object({
   id: z.string(),
+  projectId: z.string().optional(),
   taskType: z.string(),
   status: z.string(),
   title: z.string(),
   relativePath: z.string().nullable().optional(),
   detail: z.unknown(),
+  payload: z.unknown().optional(),
+  result: z.unknown().nullable().optional(),
+  error: z.unknown().nullable().optional(),
+  attemptCount: z.number().optional(),
+  maxAttempts: z.number().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
+  startedAt: z.string().nullable().optional(),
+  finishedAt: z.string().nullable().optional(),
 });
 
 const sourcesSchema = z.object({
@@ -100,6 +116,11 @@ const settingsSchema = z.object({
   providerMode: z.string(),
   language: z.string(),
   defaultQueryLimit: z.number(),
+  providerBaseUrl: z.string().nullable().optional(),
+  providerApiKeyConfigured: z.boolean().optional(),
+  providerModel: z.string().nullable().optional(),
+  providerEmbeddingModel: z.string().nullable().optional(),
+  providerTimeoutSeconds: z.number().nullable().optional(),
 });
 
 const searchResultsSchema = z.object({
@@ -234,8 +255,8 @@ export async function importProjectSource(input: {
       }),
     },
     z.object({
-      relativePath: z.string(),
-      size: z.number(),
+      taskId: z.string(),
+      status: z.string(),
     }),
   );
 }
@@ -254,7 +275,8 @@ export async function ingestProjectSource(input: {
       }),
     },
     z.object({
-      summaryPath: z.string(),
+      taskId: z.string(),
+      status: z.string(),
     }),
   );
 }
@@ -267,7 +289,8 @@ export async function rescanProjectSources(input: { projectId: string }) {
       headers: csrfHeader(),
     },
     z.object({
-      discoveredCount: z.number(),
+      taskId: z.string(),
+      status: z.string(),
     }),
   );
 }
@@ -282,7 +305,10 @@ export async function deleteProjectSource(input: {
       method: "DELETE",
       headers: csrfHeader(),
     },
-    z.any(),
+    z.object({
+      taskId: z.string(),
+      status: z.string(),
+    }),
   );
 }
 
@@ -325,6 +351,36 @@ export async function listProjectAuditLogs(projectId: string) {
 
 export async function getSystemSettings() {
   return apiFetch("/api/system/settings", { method: "GET" }, settingsSchema);
+}
+
+export async function createQueryTask(input: {
+  projectId: string;
+  query: string;
+  topK: number;
+}) {
+  return apiFetch(
+    `/api/projects/${input.projectId}/query-tasks`,
+    {
+      method: "POST",
+      headers: csrfHeader(),
+      body: JSON.stringify({
+        query: input.query,
+        topK: input.topK,
+      }),
+    },
+    z.object({
+      taskId: z.string(),
+      status: z.string(),
+    }),
+  );
+}
+
+export async function getQueryTaskDetail(input: { projectId: string; taskId: string }) {
+  return apiFetch(
+    `/api/projects/${input.projectId}/query-tasks/${input.taskId}`,
+    { method: "GET" },
+    taskSchema,
+  );
 }
 
 export async function retryProjectTask(input: { projectId: string; taskId: string }) {
@@ -382,6 +438,11 @@ export async function updateSystemSettings(input: {
   providerMode: string;
   language: string;
   defaultQueryLimit: number;
+  providerBaseUrl?: string;
+  providerApiKey?: string;
+  providerModel?: string;
+  providerEmbeddingModel?: string;
+  providerTimeoutSeconds?: number;
 }) {
   return apiFetch(
     "/api/system/settings",

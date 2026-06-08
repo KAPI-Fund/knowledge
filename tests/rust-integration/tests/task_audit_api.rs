@@ -5,6 +5,7 @@ use std::fs;
 use axum::body::{to_bytes, Body};
 use axum::http::{header, Request, StatusCode};
 use knowledge_server::config::AppConfig;
+use knowledge_server::tasks::{scheduler, store};
 use knowledge_server::{bootstrap_state, build_app};
 use serde_json::{json, Value};
 use support::TestEnvironment;
@@ -31,7 +32,7 @@ async fn import_and_ingest_create_persisted_task_summaries() {
   .await;
   ingest_source_via_api(state.clone(), &cookie, &csrf, &project_id, "raw/sources/task.md").await;
 
-  let response = build_app(state)
+  let response = build_app(state.clone())
     .oneshot(
       Request::builder()
         .uri(format!("/api/projects/{project_id}/tasks"))
@@ -46,7 +47,7 @@ async fn import_and_ingest_create_persisted_task_summaries() {
   let payload = read_json(response.into_body()).await;
   let tasks = payload.get("tasks").and_then(Value::as_array).unwrap();
   assert_eq!(tasks.len(), 2);
-  assert_eq!(tasks[0].get("status").and_then(Value::as_str), Some("completed"));
+  assert_eq!(tasks[0].get("status").and_then(Value::as_str), Some("succeeded"));
   assert!(tasks[0].get("id").and_then(Value::as_str).is_some());
 }
 
@@ -101,7 +102,7 @@ async fn task_detail_and_retry_endpoints_return_operational_state() {
     .unwrap();
   assert_eq!(detail_response.status(), StatusCode::OK);
   let detail_payload = read_json(detail_response.into_body()).await;
-  assert_eq!(detail_payload.get("status").and_then(Value::as_str), Some("completed"));
+  assert_eq!(detail_payload.get("status").and_then(Value::as_str), Some("succeeded"));
 
   let retry_response = build_app(state.clone())
     .oneshot(
@@ -139,7 +140,7 @@ async fn project_operations_are_recorded_in_audit_log() {
   )
   .await;
 
-  let response = build_app(state)
+  let response = build_app(state.clone())
     .oneshot(
       Request::builder()
         .uri(format!("/api/projects/{project_id}/audit-logs"))
@@ -154,7 +155,11 @@ async fn project_operations_are_recorded_in_audit_log() {
   let payload = read_json(response.into_body()).await;
   let items = payload.get("items").and_then(Value::as_array).unwrap();
   assert!(items.iter().any(|item| item.get("action").and_then(Value::as_str) == Some("project.created")));
-  assert!(items.iter().any(|item| item.get("action").and_then(Value::as_str) == Some("source.imported")));
+  assert!(
+    items
+      .iter()
+      .any(|item| item.get("action").and_then(Value::as_str) == Some("source.import.enqueued"))
+  );
 }
 
 #[tokio::test]
@@ -293,7 +298,7 @@ async fn import_source_via_api(
   file_name: &str,
   content_base64: &str,
 ) {
-  let response = build_app(state)
+  let response = build_app(state.clone())
     .oneshot(
       Request::builder()
         .method("POST")
@@ -313,7 +318,9 @@ async fn import_source_via_api(
     .await
     .unwrap();
 
-  assert_eq!(response.status(), StatusCode::CREATED);
+  assert_eq!(response.status(), StatusCode::ACCEPTED);
+  let payload = read_json(response.into_body()).await;
+  wait_for_task_terminal(&state, payload.get("taskId").and_then(Value::as_str).unwrap()).await;
 }
 
 async fn ingest_source_via_api(
@@ -323,7 +330,7 @@ async fn ingest_source_via_api(
   project_id: &str,
   relative_path: &str,
 ) {
-  let response = build_app(state)
+  let response = build_app(state.clone())
     .oneshot(
       Request::builder()
         .method("POST")
@@ -337,10 +344,27 @@ async fn ingest_source_via_api(
     .await
     .unwrap();
 
-  assert_eq!(response.status(), StatusCode::OK);
+  assert_eq!(response.status(), StatusCode::ACCEPTED);
+  let payload = read_json(response.into_body()).await;
+  wait_for_task_terminal(&state, payload.get("taskId").and_then(Value::as_str).unwrap()).await;
 }
 
 async fn read_json(body: Body) -> Value {
   let bytes = to_bytes(body, usize::MAX).await.unwrap();
   serde_json::from_slice(&bytes).unwrap()
+}
+
+async fn wait_for_task_terminal(state: &knowledge_server::app::state::AppState, task_id: &str) {
+  for _ in 0..20 {
+    let progressed = scheduler::run_scheduler_tick(state).await.unwrap_or(false);
+    let task = store::get_task_by_id(state, task_id).await.unwrap();
+    if matches!(task.status.as_str(), "succeeded" | "failed" | "cancelled") {
+      return;
+    }
+    if !progressed {
+      tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+  }
+
+  panic!("task did not reach a terminal state");
 }

@@ -6,6 +6,7 @@ export function ProjectNav({ projectId }: { projectId: string }) {
       <NavLink to={`/projects/${projectId}`}>Overview</NavLink>
       <NavLink to={`/projects/${projectId}/sources`}>Sources</NavLink>
       <NavLink to={`/projects/${projectId}/search`}>Search</NavLink>
+      <NavLink to={`/projects/${projectId}/query`}>Query</NavLink>
       <NavLink to={`/projects/${projectId}/graph`}>Graph</NavLink>
       <NavLink to={`/projects/${projectId}/tasks`}>Tasks</NavLink>
       <NavLink to={`/projects/${projectId}/reviews`}>Reviews</NavLink>

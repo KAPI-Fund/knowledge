@@ -37,6 +37,8 @@ vi.mock("../tasks/queries", () => ({
         taskType: "source_import",
         status: "queued",
         relativePath: "raw/sources/demo.md",
+        attemptCount: 0,
+        maxAttempts: 3,
         detail: {
           size: 42,
         },
@@ -47,15 +49,17 @@ vi.mock("../tasks/queries", () => ({
     isLoading: false,
   }),
   useTaskDetailQuery: () => ({
-    data: {
-      id: "task-1",
-      title: "Imported note.md",
-      taskType: "source_import",
-      status: "queued",
-      relativePath: "raw/sources/demo.md",
-      detail: {
-        size: 42,
-      },
+      data: {
+        id: "task-1",
+        title: "Imported note.md",
+        taskType: "source_import",
+        status: "queued",
+        relativePath: "raw/sources/demo.md",
+        attemptCount: 0,
+        maxAttempts: 3,
+        detail: {
+          size: 42,
+        },
       createdAt: "2026-06-05T00:00:00Z",
       updatedAt: "2026-06-05T00:00:01Z",
     },
@@ -91,6 +95,11 @@ vi.mock("../settings/queries", () => ({
       providerMode: "deterministic",
       language: "en",
       defaultQueryLimit: 3,
+      providerBaseUrl: "",
+      providerApiKeyConfigured: false,
+      providerModel: "",
+      providerEmbeddingModel: "",
+      providerTimeoutSeconds: 60,
     },
     isLoading: false,
   }),
@@ -281,6 +290,11 @@ describe("operations actions", () => {
       providerMode: "deterministic",
       language: "en",
       defaultQueryLimit: 5,
+      providerBaseUrl: "",
+      providerApiKey: "",
+      providerModel: "",
+      providerEmbeddingModel: "",
+      providerTimeoutSeconds: 60,
     });
   });
 });

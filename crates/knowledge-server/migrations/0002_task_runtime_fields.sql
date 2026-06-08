@@ -1,0 +1,10 @@
+ALTER TABLE project_tasks ADD COLUMN payload JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE project_tasks ADD COLUMN result JSONB;
+ALTER TABLE project_tasks ADD COLUMN error JSONB;
+ALTER TABLE project_tasks ADD COLUMN attempt_count BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE project_tasks ADD COLUMN max_attempts BIGINT NOT NULL DEFAULT 3;
+ALTER TABLE project_tasks ADD COLUMN started_at TEXT;
+ALTER TABLE project_tasks ADD COLUMN finished_at TEXT;
+ALTER TABLE project_tasks ADD COLUMN lease_owner TEXT;
+ALTER TABLE project_tasks ADD COLUMN lease_expires_at TEXT;
+ALTER TABLE project_tasks ADD COLUMN next_retry_at TEXT;

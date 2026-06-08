@@ -42,4 +42,8 @@ impl CacheStore {
     let _: usize = connection.del(key).await?;
     Ok(())
   }
+
+  pub async fn signal_task_wakeup(&self) -> anyhow::Result<()> {
+    self.set_json("tasks:wakeup", &"queued", 30).await
+  }
 }

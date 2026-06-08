@@ -6,6 +6,7 @@ use std::path::Path;
 use axum::body::{to_bytes, Body};
 use axum::http::{header, Request, StatusCode};
 use knowledge_server::config::AppConfig;
+use knowledge_server::tasks::{scheduler, store};
 use knowledge_server::{bootstrap_state, build_app};
 use serde_json::{json, Value};
 use support::TestEnvironment;
@@ -42,7 +43,13 @@ async fn import_source_writes_file_lists_source_and_records_task() {
     .await
     .unwrap();
 
-  assert_eq!(import_response.status(), StatusCode::CREATED);
+  assert_eq!(import_response.status(), StatusCode::ACCEPTED);
+  let import_payload = read_json(import_response.into_body()).await;
+  wait_for_task_terminal(
+    &state,
+    import_payload.get("taskId").and_then(Value::as_str).unwrap(),
+  )
+  .await;
 
   let list_response = build_app(state.clone())
     .oneshot(
@@ -101,9 +108,13 @@ async fn rescan_and_delete_source_update_catalog_and_task_log() {
     .await
     .unwrap();
 
-  assert_eq!(rescan_response.status(), StatusCode::OK);
+  assert_eq!(rescan_response.status(), StatusCode::ACCEPTED);
   let rescan_payload = read_json(rescan_response.into_body()).await;
-  assert_eq!(rescan_payload.get("discoveredCount").and_then(Value::as_u64), Some(1));
+  wait_for_task_terminal(
+    &state,
+    rescan_payload.get("taskId").and_then(Value::as_str).unwrap(),
+  )
+  .await;
 
   let delete_response = build_app(state.clone())
     .oneshot(
@@ -118,7 +129,13 @@ async fn rescan_and_delete_source_update_catalog_and_task_log() {
     .await
     .unwrap();
 
-  assert_eq!(delete_response.status(), StatusCode::NO_CONTENT);
+  assert_eq!(delete_response.status(), StatusCode::ACCEPTED);
+  let delete_payload = read_json(delete_response.into_body()).await;
+  wait_for_task_terminal(
+    &state,
+    delete_payload.get("taskId").and_then(Value::as_str).unwrap(),
+  )
+  .await;
   assert!(!Path::new(&project_root.join("raw/sources/manual.md")).exists());
 
   let list_response = build_app(state.clone())
@@ -215,4 +232,19 @@ async fn create_project(
 async fn read_json(body: Body) -> Value {
   let bytes = to_bytes(body, usize::MAX).await.unwrap();
   serde_json::from_slice(&bytes).unwrap()
+}
+
+async fn wait_for_task_terminal(state: &knowledge_server::app::state::AppState, task_id: &str) {
+  for _ in 0..20 {
+    let progressed = scheduler::run_scheduler_tick(state).await.unwrap_or(false);
+    let task = store::get_task_by_id(state, task_id).await.unwrap();
+    if matches!(task.status.as_str(), "succeeded" | "failed" | "cancelled") {
+      return;
+    }
+    if !progressed {
+      tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+  }
+
+  panic!("task did not reach a terminal state");
 }

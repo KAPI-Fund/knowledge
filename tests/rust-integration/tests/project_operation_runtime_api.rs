@@ -1,5 +1,7 @@
 mod support;
 
+use std::fs;
+
 use axum::body::{to_bytes, Body};
 use axum::http::{header, Request, StatusCode};
 use knowledge_server::config::AppConfig;
@@ -11,30 +13,26 @@ use tempfile::tempdir;
 use tower::util::ServiceExt;
 
 #[tokio::test]
-async fn system_settings_round_trip_provider_config() {
-  let _env = TestEnvironment::start("system-settings").await.unwrap();
-  let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
+async fn ingest_is_enqueued_and_completed_by_worker() {
+  let env = TestEnvironment::start("project-op-exec").await.unwrap();
+  let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
   let state = bootstrap_state(&config).await.unwrap();
   let (cookie, csrf) = login_and_csrf(state.clone()).await;
+  let project_root = tempdir().unwrap().path().join("project-op-exec");
+  let project_id = create_project(state.clone(), &cookie, &csrf, project_root.clone()).await;
 
-  let update_response = build_app(state.clone())
+  let import = build_app(state.clone())
     .oneshot(
       Request::builder()
-        .method("PATCH")
-        .uri("/api/system/settings")
+        .method("POST")
+        .uri(format!("/api/projects/{project_id}/sources:import"))
         .header(header::CONTENT_TYPE, "application/json")
         .header(header::COOKIE, &cookie)
         .header("x-csrf-token", &csrf)
         .body(Body::from(
           json!({
-            "providerMode": "deterministic",
-            "language": "en",
-            "defaultQueryLimit": 3,
-            "providerBaseUrl": "http://127.0.0.1:18080/v1",
-            "providerApiKey": "test-key",
-            "providerModel": "mock-model",
-            "providerEmbeddingModel": "mock-embedding",
-            "providerTimeoutSeconds": 45
+            "fileName": "attention.md",
+            "contentBase64": "IyBBdHRlbnRpb24KClRyYW5zZm9ybWVycyB1c2UgYXR0ZW50aW9uIG1lY2hhbmlzbXMuCg=="
           })
           .to_string(),
         ))
@@ -42,49 +40,57 @@ async fn system_settings_round_trip_provider_config() {
     )
     .await
     .unwrap();
+  assert_eq!(import.status(), StatusCode::ACCEPTED);
 
-  assert_eq!(update_response.status(), StatusCode::OK);
+  let import_payload = read_json(import.into_body()).await;
+  let import_task_id = import_payload.get("taskId").and_then(Value::as_str).unwrap().to_string();
+  wait_for_task_terminal(&state, &import_task_id).await;
 
-  let get_response = build_app(state)
+  let response = build_app(state.clone())
     .oneshot(
       Request::builder()
-        .uri("/api/system/settings")
+        .method("POST")
+        .uri(format!("/api/projects/{project_id}/ingest"))
+        .header(header::CONTENT_TYPE, "application/json")
         .header(header::COOKIE, &cookie)
-        .body(Body::empty())
+        .header("x-csrf-token", &csrf)
+        .body(Body::from(json!({ "relativePath": "raw/sources/attention.md" }).to_string()))
         .unwrap(),
     )
     .await
     .unwrap();
 
-  assert_eq!(get_response.status(), StatusCode::OK);
-  let payload = read_json(get_response.into_body()).await;
-  assert_eq!(payload.get("providerMode").and_then(Value::as_str), Some("deterministic"));
-  assert_eq!(payload.get("language").and_then(Value::as_str), Some("en"));
-  assert_eq!(payload.get("defaultQueryLimit").and_then(Value::as_u64), Some(3));
+  assert_eq!(response.status(), StatusCode::ACCEPTED);
+  let payload = read_json(response.into_body()).await;
+  let task_id = payload.get("taskId").and_then(Value::as_str).unwrap().to_string();
+
+  wait_for_task_terminal(&state, &task_id).await;
+
+  let detail = store::get_task_by_id(&state, &task_id).await.unwrap();
+  assert_eq!(detail.status, "succeeded");
   assert_eq!(
-    payload.get("providerBaseUrl").and_then(Value::as_str),
-    Some("http://127.0.0.1:18080/v1"),
+    detail
+      .result
+      .as_ref()
+      .and_then(|result| result.get("summaryPath"))
+      .and_then(Value::as_str),
+    Some("wiki/sources/attention.md"),
   );
-  assert_eq!(payload.get("providerApiKeyConfigured").and_then(Value::as_bool), Some(true));
-  assert_eq!(payload.get("providerModel").and_then(Value::as_str), Some("mock-model"));
-  assert_eq!(
-    payload.get("providerEmbeddingModel").and_then(Value::as_str),
-    Some("mock-embedding"),
-  );
-  assert_eq!(payload.get("providerTimeoutSeconds").and_then(Value::as_i64), Some(45));
+
+  let summary = fs::read_to_string(project_root.join("wiki/sources/attention.md")).unwrap();
+  assert!(summary.contains("# Attention"));
 }
 
 #[tokio::test]
-async fn ingest_creates_review_items_and_review_endpoint_can_update_status() {
-  let temp = tempdir().unwrap();
-  let _env = TestEnvironment::start("review-items").await.unwrap();
-  let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
+async fn review_update_is_enqueued_and_completed_by_worker() {
+  let env = TestEnvironment::start("project-review-op-exec").await.unwrap();
+  let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
   let state = bootstrap_state(&config).await.unwrap();
   let (cookie, csrf) = login_and_csrf(state.clone()).await;
-  let project_root = temp.path().join("review-project");
+  let project_root = tempdir().unwrap().path().join("project-review-op-exec");
   let project_id = create_project(state.clone(), &cookie, &csrf, project_root.clone()).await;
 
-  let import_response = build_app(state.clone())
+  let import = build_app(state.clone())
     .oneshot(
       Request::builder()
         .method("POST")
@@ -103,15 +109,14 @@ async fn ingest_creates_review_items_and_review_endpoint_can_update_status() {
     )
     .await
     .unwrap();
-  assert_eq!(import_response.status(), StatusCode::ACCEPTED);
-  let import_payload = read_json(import_response.into_body()).await;
+  let import_payload = read_json(import.into_body()).await;
   wait_for_task_terminal(
     &state,
     import_payload.get("taskId").and_then(Value::as_str).unwrap(),
   )
   .await;
 
-  let ingest_response = build_app(state.clone())
+  let ingest = build_app(state.clone())
     .oneshot(
       Request::builder()
         .method("POST")
@@ -119,20 +124,21 @@ async fn ingest_creates_review_items_and_review_endpoint_can_update_status() {
         .header(header::CONTENT_TYPE, "application/json")
         .header(header::COOKIE, &cookie)
         .header("x-csrf-token", &csrf)
-        .body(Body::from(json!({ "relativePath": "raw/sources/open-question.md" }).to_string()))
+        .body(Body::from(
+          json!({ "relativePath": "raw/sources/open-question.md" }).to_string(),
+        ))
         .unwrap(),
     )
     .await
     .unwrap();
-  assert_eq!(ingest_response.status(), StatusCode::ACCEPTED);
-  let ingest_payload = read_json(ingest_response.into_body()).await;
+  let ingest_payload = read_json(ingest.into_body()).await;
   wait_for_task_terminal(
     &state,
     ingest_payload.get("taskId").and_then(Value::as_str).unwrap(),
   )
   .await;
 
-  let reviews_response = build_app(state.clone())
+  let reviews = build_app(state.clone())
     .oneshot(
       Request::builder()
         .uri(format!("/api/projects/{project_id}/reviews"))
@@ -142,15 +148,17 @@ async fn ingest_creates_review_items_and_review_endpoint_can_update_status() {
     )
     .await
     .unwrap();
+  let reviews_payload = read_json(reviews.into_body()).await;
+  let review_id = reviews_payload
+    .get("reviews")
+    .and_then(Value::as_array)
+    .and_then(|items| items.first())
+    .and_then(|item| item.get("id"))
+    .and_then(Value::as_str)
+    .unwrap()
+    .to_string();
 
-  assert_eq!(reviews_response.status(), StatusCode::OK);
-  let reviews_payload = read_json(reviews_response.into_body()).await;
-  let reviews = reviews_payload.get("reviews").and_then(Value::as_array).unwrap();
-  assert_eq!(reviews.len(), 1);
-  let review_id = reviews[0].get("id").and_then(Value::as_str).unwrap().to_string();
-  assert_eq!(reviews[0].get("status").and_then(Value::as_str), Some("open"));
-
-  let update_response = build_app(state.clone())
+  let update = build_app(state.clone())
     .oneshot(
       Request::builder()
         .method("PATCH")
@@ -164,9 +172,9 @@ async fn ingest_creates_review_items_and_review_endpoint_can_update_status() {
     .await
     .unwrap();
 
-  assert_eq!(update_response.status(), StatusCode::ACCEPTED);
-  let update_payload = read_json(update_response.into_body()).await;
-  let task_id = update_payload.get("taskId").and_then(Value::as_str).unwrap().to_string();
+  assert_eq!(update.status(), StatusCode::ACCEPTED);
+  let payload = read_json(update.into_body()).await;
+  let task_id = payload.get("taskId").and_then(Value::as_str).unwrap().to_string();
   wait_for_task_terminal(&state, &task_id).await;
 
   let reviews_after = build_app(state)

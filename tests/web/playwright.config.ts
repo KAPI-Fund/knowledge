@@ -1,4 +1,16 @@
+import { execFileSync } from "node:child_process";
+import { dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { defineConfig } from "@playwright/test";
+
+const configDir = dirname(fileURLToPath(import.meta.url));
+const databaseUrl =
+  process.env.KNOWLEDGE_DATABASE_URL ??
+  execFileSync("node", ["./setup-db.mjs"], {
+    cwd: configDir,
+    encoding: "utf8",
+  }).trim();
 
 export default defineConfig({
   testDir: "./tests",
@@ -13,9 +25,7 @@ export default defineConfig({
       cwd: "../..",
       env: {
         KNOWLEDGE_BIND_ADDR: "127.0.0.1:4001",
-        KNOWLEDGE_DATABASE_URL:
-          process.env.KNOWLEDGE_DATABASE_URL ??
-          "postgres://postgres:postgres@127.0.0.1:55432/knowledge?sslmode=disable",
+        KNOWLEDGE_DATABASE_URL: databaseUrl,
         KNOWLEDGE_REDIS_URL: process.env.KNOWLEDGE_REDIS_URL ?? "redis://127.0.0.1:56379/",
       },
     },
