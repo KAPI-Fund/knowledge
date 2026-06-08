@@ -9,14 +9,17 @@ export function GraphPage() {
   const { projectId = "" } = useParams();
   const [query, setQuery] = useState("");
   const [graphQuery, setGraphQuery] = useState("");
+  const [nodeTypeInput, setNodeTypeInput] = useState("");
+  const [graphNodeType, setGraphNodeType] = useState("");
   const [limitInput, setLimitInput] = useState("100");
   const [graphLimit, setGraphLimit] = useState(100);
-  const graph = useProjectGraphQuery(projectId, graphQuery, graphLimit);
+  const graph = useProjectGraphQuery(projectId, graphQuery, graphNodeType, graphLimit);
   const [selectedNodeId, setSelectedNodeId] = useState("");
   const neighbors = useProjectGraphNeighborsQuery(projectId, selectedNodeId);
 
   function applyFilters() {
     setGraphQuery(query.trim());
+    setGraphNodeType(nodeTypeInput.trim().toLowerCase());
     setGraphLimit(Number(limitInput) || 100);
   }
 
@@ -28,6 +31,17 @@ export function GraphPage() {
         <label>
           Graph Filter
           <input value={query} onChange={(event) => setQuery(event.target.value)} />
+        </label>
+        <label>
+          Node Type
+          <select value={nodeTypeInput} onChange={(event) => setNodeTypeInput(event.target.value)}>
+            <option value="">all</option>
+            <option value="concept">concept</option>
+            <option value="entity">entity</option>
+            <option value="source">source</option>
+            <option value="query">query</option>
+            <option value="other">other</option>
+          </select>
         </label>
         <label>
           Node Limit

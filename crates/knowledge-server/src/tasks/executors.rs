@@ -150,7 +150,7 @@ async fn execute_query(state: &AppState, task: &TaskRecord) -> Result<Value, Tas
   Ok(json!({
     "answer": answer.answer,
     "citations": selected_results
-      .first()
+      .iter()
       .map(|result| {
         json!({
           "path": result.path,
@@ -159,7 +159,6 @@ async fn execute_query(state: &AppState, task: &TaskRecord) -> Result<Value, Tas
           "score": result.score
         })
       })
-      .into_iter()
       .collect::<Vec<_>>(),
     "contextSummary": context_summary,
     "model": provider_model.unwrap_or_default(),

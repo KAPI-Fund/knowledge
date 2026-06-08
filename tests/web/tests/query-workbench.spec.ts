@@ -14,8 +14,7 @@ test("admin can run a provider-backed query and save it to the wiki", async ({ p
 
   await page.getByRole("link", { name: "Projects" }).click();
   await page.getByRole("button", { name: "Create Demo Project" }).click();
-  await page.getByRole("link", { name: "seed-project" }).last().click();
-  await expect(page.getByRole("heading", { name: "seed-project" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /seed-project-/ })).toBeVisible();
 
   await page.getByRole("link", { name: "Sources" }).click();
   await page.getByLabel("File Name").fill("attention.md");

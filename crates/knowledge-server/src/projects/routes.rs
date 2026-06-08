@@ -23,7 +23,7 @@ use knowledge_core::project::files::{
 use knowledge_core::project::reviews::load_reviews;
 use knowledge_core::project::sources::list_sources;
 use knowledge_core::query::answer_from_results;
-use knowledge_core::search::search_project;
+use knowledge_core::search::{search_project, search_project_with_options, SearchOptions};
 
 pub fn router() -> Router<AppState> {
   Router::new()
@@ -69,8 +69,13 @@ pub struct ImportSourceRequest {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SearchRequest {
   pub query: String,
+  #[serde(default)]
+  pub top_k: Option<usize>,
+  #[serde(default)]
+  pub include_content: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -116,6 +121,8 @@ pub struct UpdateReviewRequest {
 pub struct GraphRequest {
   #[serde(default, rename = "q")]
   pub query: Option<String>,
+  #[serde(default, rename = "nodeType")]
+  pub node_type: Option<String>,
   #[serde(default)]
   pub limit: Option<usize>,
 }
@@ -396,9 +403,21 @@ async fn search_handler(
 ) -> Result<impl IntoResponse, ApiError> {
   let _session = authorized_session(&state, &headers, Some(&project_id)).await?;
   let root = project_root_for_id(&state, &project_id).await?;
-  let results = search_project(root.as_path(), &payload.query)
+  let response = search_project_with_options(
+    root.as_path(),
+    &payload.query,
+    SearchOptions {
+      top_k: payload.top_k.unwrap_or(10),
+      include_content: payload.include_content.unwrap_or(false),
+    },
+  )
     .map_err(|error| ApiError::bad_request(error.to_string()))?;
-  Ok(Json(json!({ "results": results })))
+  Ok(Json(json!({
+    "mode": response.mode,
+    "tokenHits": response.token_hits,
+    "vectorHits": response.vector_hits,
+    "results": response.results
+  })))
 }
 
 async fn graph_handler(
@@ -412,6 +431,7 @@ async fn graph_handler(
   let (nodes, edges) = build_graph_view(
     root.as_path(),
     params.query.as_deref(),
+    params.node_type.as_deref(),
     params.limit,
   )
   .map_err(|error| ApiError::bad_request(error.to_string()))?;

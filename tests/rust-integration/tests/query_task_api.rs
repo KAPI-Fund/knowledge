@@ -107,7 +107,7 @@ async fn query_task_runs_to_completion_and_persists_answer_and_citations() {
   let (cookie, csrf) = login_and_csrf(state.clone()).await;
   let project_root = tempdir().unwrap().path().join("query-exec-project");
   let project_id = create_project(state.clone(), &cookie, &csrf, project_root.clone()).await;
-  seed_search_page(&project_root).await;
+  seed_multiple_search_pages(&project_root).await;
   sqlx::query(
     "UPDATE system_settings
      SET provider_mode = $1,
@@ -171,8 +171,20 @@ async fn query_task_runs_to_completion_and_persists_answer_and_citations() {
       .and_then(|result| result.get("citations"))
       .and_then(Value::as_array)
       .map(Vec::len),
-    Some(1),
+    Some(2),
   );
+  let citations = detail
+    .result
+    .as_ref()
+    .and_then(|result| result.get("citations"))
+    .and_then(Value::as_array)
+    .unwrap();
+  let citation_paths = citations
+    .iter()
+    .filter_map(|item| item.get("path").and_then(Value::as_str))
+    .collect::<Vec<_>>();
+  assert!(citation_paths.contains(&"wiki/concepts/attention.md"));
+  assert!(citation_paths.contains(&"wiki/concepts/attention-patterns.md"));
 }
 
 #[tokio::test]
@@ -377,6 +389,19 @@ async fn seed_search_page(project_root: &std::path::Path) {
   fs::write(
     project_root.join("wiki/concepts/attention.md"),
     "---\ntype: concept\ntitle: Attention\nsources: [attention.md]\n---\n\n# Attention\n\nAttention lets models focus on relevant tokens.\n",
+  )
+  .unwrap();
+}
+
+async fn seed_multiple_search_pages(project_root: &std::path::Path) {
+  fs::write(
+    project_root.join("wiki/concepts/attention.md"),
+    "---\ntype: concept\ntitle: Attention\nsources: [attention.md]\n---\n\n# Attention\n\nAttention lets models focus on relevant tokens.\n",
+  )
+  .unwrap();
+  fs::write(
+    project_root.join("wiki/concepts/attention-patterns.md"),
+    "---\ntype: concept\ntitle: Attention Patterns\nsources: [attention-patterns.md]\n---\n\n# Attention Patterns\n\nAttention patterns shape token routing across a sequence.\n",
   )
   .unwrap();
 }

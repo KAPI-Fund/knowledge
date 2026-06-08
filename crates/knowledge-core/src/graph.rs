@@ -43,18 +43,19 @@ struct PageRecord {
 }
 
 pub fn build_graph(project_root: &Path) -> Result<(Vec<GraphNode>, Vec<GraphEdge>), io::Error> {
-  build_graph_view(project_root, None, None)
+  build_graph_view(project_root, None, None, None)
 }
 
 pub fn build_graph_view(
   project_root: &Path,
   query: Option<&str>,
+  node_type: Option<&str>,
   limit: Option<usize>,
 ) -> Result<(Vec<GraphNode>, Vec<GraphEdge>), io::Error> {
   let wiki_root = project_root.join("wiki");
   let mut pages = Vec::new();
   collect_pages(&wiki_root, project_root, &mut pages)?;
-  Ok(materialize_graph(pages, query, limit))
+  Ok(materialize_graph(pages, query, node_type, limit))
 }
 
 pub fn neighbors_for_node(
@@ -92,6 +93,7 @@ pub fn neighbors_for_node(
 fn materialize_graph(
   pages: Vec<PageRecord>,
   query: Option<&str>,
+  node_type: Option<&str>,
   limit: Option<usize>,
 ) -> (Vec<GraphNode>, Vec<GraphEdge>) {
   let aliases = pages
@@ -150,6 +152,20 @@ fn materialize_graph(
     let visible_ids = nodes
       .iter()
       .filter(|node| node_matches_query(node, &query_tokens))
+      .map(|node| node.id.clone())
+      .collect::<BTreeSet<_>>();
+    nodes.retain(|node| visible_ids.contains(&node.id));
+    edges.retain(|edge| visible_ids.contains(&edge.source) && visible_ids.contains(&edge.target));
+  }
+
+  if let Some(expected_type) = node_type
+    .map(str::trim)
+    .filter(|value| !value.is_empty())
+    .map(str::to_lowercase)
+  {
+    let visible_ids = nodes
+      .iter()
+      .filter(|node| node.node_type == expected_type)
       .map(|node| node.id.clone())
       .collect::<BTreeSet<_>>();
     nodes.retain(|node| visible_ids.contains(&node.id));

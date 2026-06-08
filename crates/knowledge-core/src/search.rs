@@ -11,6 +11,23 @@ const MAX_PHRASE_OCCURRENCES: usize = 10;
 const TITLE_TOKEN_WEIGHT: usize = 5;
 const CONTENT_TOKEN_WEIGHT: usize = 1;
 const SNIPPET_CONTEXT: usize = 80;
+const DEFAULT_RESULTS: usize = 10;
+const MAX_RESULTS: usize = 100;
+
+#[derive(Debug, Clone, Copy)]
+pub struct SearchOptions {
+  pub top_k: usize,
+  pub include_content: bool,
+}
+
+impl Default for SearchOptions {
+  fn default() -> Self {
+    Self {
+      top_k: DEFAULT_RESULTS,
+      include_content: false,
+    }
+  }
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -18,22 +35,56 @@ pub struct SearchResult {
   pub path: String,
   pub title: String,
   pub snippet: String,
+  pub title_match: bool,
   pub score: usize,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub content: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectSearchResponse {
+  pub mode: String,
+  pub results: Vec<SearchResult>,
+  pub token_hits: usize,
+  pub vector_hits: usize,
 }
 
 pub fn search_project(project_root: &Path, query: &str) -> Result<Vec<SearchResult>, std::io::Error> {
+  Ok(search_project_with_options(project_root, query, SearchOptions::default())?.results)
+}
+
+pub fn search_project_with_options(
+  project_root: &Path,
+  query: &str,
+  options: SearchOptions,
+) -> Result<ProjectSearchResponse, std::io::Error> {
   let wiki_root = project_root.join("wiki");
   let mut results = Vec::new();
   let query_tokens = tokenize_query(query);
   let query_phrase = trim_query_punctuation(&query.to_lowercase());
+  let top_k = options.top_k.clamp(1, MAX_RESULTS);
 
   if !wiki_root.exists() {
-    return Ok(results);
+    return Ok(ProjectSearchResponse {
+      mode: "keyword".to_string(),
+      results,
+      token_hits: 0,
+      vector_hits: 0,
+    });
   }
 
   walk_markdown(&wiki_root, &mut |path| {
     let content = fs::read_to_string(path)?;
-    if let Some(result) = score_file(project_root, path, &content, &query_tokens, &query_phrase, query) {
+    if let Some(result) = score_file(
+      project_root,
+      path,
+      &content,
+      &query_tokens,
+      &query_phrase,
+      query,
+      options.include_content,
+    ) {
       results.push(result);
     }
 
@@ -41,7 +92,15 @@ pub fn search_project(project_root: &Path, query: &str) -> Result<Vec<SearchResu
   })?;
 
   results.sort_by(|left, right| right.score.cmp(&left.score).then(left.path.cmp(&right.path)));
-  Ok(results)
+  let token_hits = results.len();
+  results.truncate(top_k);
+
+  Ok(ProjectSearchResponse {
+    mode: "keyword".to_string(),
+    results,
+    token_hits,
+    vector_hits: 0,
+  })
 }
 
 pub fn tokenize_query(query: &str) -> Vec<String> {
@@ -163,6 +222,7 @@ fn score_file(
   tokens: &[String],
   query_phrase: &str,
   query: &str,
+  include_content: bool,
 ) -> Option<SearchResult> {
   let file_name = path.file_name().and_then(|name| name.to_str()).unwrap_or("");
   let title = extract_title(content, file_name);
@@ -206,7 +266,9 @@ fn score_file(
     path: relative_to_project(project_root, path),
     title,
     snippet: build_snippet(content, &snippet_anchor),
+    title_match: filename_exact || title_has_phrase || title_token_score > 0,
     score,
+    content: include_content.then_some(content.to_string()),
   })
 }
 

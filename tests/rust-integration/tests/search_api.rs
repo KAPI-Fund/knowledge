@@ -27,6 +27,11 @@ async fn search_returns_matching_wiki_pages_and_snippets() {
     "---\ntype: concept\ntitle: Chain of Thought\nsources: []\n---\n\n# Chain of Thought\n\nReasoning traces improve stepwise problem solving.\n",
   )
   .unwrap();
+  fs::write(
+    project_root.join("wiki/concepts/debugging-notes.md"),
+    "---\ntype: concept\ntitle: Debugging Notes\nsources: []\n---\n\n# Debugging Notes\n\nReasoning traces also help debugging.\n",
+  )
+  .unwrap();
 
   let response = build_app(state)
     .oneshot(
@@ -35,7 +40,14 @@ async fn search_returns_matching_wiki_pages_and_snippets() {
         .uri(format!("/api/projects/{project_id}/search"))
         .header(header::CONTENT_TYPE, "application/json")
         .header(header::COOKIE, &cookie)
-        .body(Body::from(json!({ "query": "reasoning traces" }).to_string()))
+        .body(Body::from(
+          json!({
+            "query": "reasoning traces",
+            "topK": 1,
+            "includeContent": true
+          })
+          .to_string(),
+        ))
         .unwrap(),
     )
     .await
@@ -43,6 +55,9 @@ async fn search_returns_matching_wiki_pages_and_snippets() {
 
   assert_eq!(response.status(), StatusCode::OK);
   let payload = read_json(response.into_body()).await;
+  assert_eq!(payload.get("mode").and_then(Value::as_str), Some("keyword"));
+  assert_eq!(payload.get("tokenHits").and_then(Value::as_u64), Some(2));
+  assert_eq!(payload.get("vectorHits").and_then(Value::as_u64), Some(0));
   let results = payload.get("results").and_then(Value::as_array).unwrap();
   assert_eq!(results.len(), 1);
   assert_eq!(
@@ -55,6 +70,13 @@ async fn search_returns_matching_wiki_pages_and_snippets() {
       .and_then(Value::as_str)
       .unwrap()
       .contains("Reasoning traces")
+  );
+  assert!(
+    results[0]
+      .get("content")
+      .and_then(Value::as_str)
+      .unwrap()
+      .contains("Reasoning traces improve")
   );
 }
 
@@ -169,6 +191,55 @@ async fn graph_supports_link_counts_weights_query_filter_and_limit() {
     filtered_nodes[0].get("label").and_then(Value::as_str),
     Some("Reasoning Models")
   );
+}
+
+#[tokio::test]
+async fn graph_supports_node_type_filter() {
+  let temp = tempdir().unwrap();
+  let _env = TestEnvironment::start("graph-node-type-query").await.unwrap();
+  let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let (cookie, csrf) = login_and_csrf(state.clone()).await;
+  let project_root = temp.path().join("graph-node-type-project");
+  let project_id = create_project(state.clone(), &cookie, &csrf, project_root.clone()).await;
+
+  fs::write(
+    project_root.join("wiki/concepts/chain-of-thought.md"),
+    "---\ntype: concept\ntitle: Chain of Thought\nsources: []\n---\n\nSee [[reasoning-models]] and [[source-paper]].\n",
+  )
+  .unwrap();
+  fs::write(
+    project_root.join("wiki/entities/reasoning-models.md"),
+    "---\ntype: entity\ntitle: Reasoning Models\nsources: []\n---\n\nConnects back to [[chain-of-thought]].\n",
+  )
+  .unwrap();
+  fs::write(
+    project_root.join("wiki/sources/source-paper.md"),
+    "---\ntype: source\ntitle: Source Paper\nsources: []\n---\n\nReferenced by [[chain-of-thought]].\n",
+  )
+  .unwrap();
+
+  let response = build_app(state)
+    .oneshot(
+      Request::builder()
+        .uri(format!("/api/projects/{project_id}/graph?nodeType=source"))
+        .header(header::COOKIE, &cookie)
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+  assert_eq!(response.status(), StatusCode::OK);
+  let payload = read_json(response.into_body()).await;
+  let nodes = payload.get("nodes").and_then(Value::as_array).unwrap();
+  let edges = payload.get("edges").and_then(Value::as_array).unwrap();
+  assert_eq!(nodes.len(), 1);
+  assert_eq!(
+    nodes[0].get("nodeType").and_then(Value::as_str),
+    Some("source")
+  );
+  assert_eq!(edges.len(), 0);
 }
 
 #[tokio::test]

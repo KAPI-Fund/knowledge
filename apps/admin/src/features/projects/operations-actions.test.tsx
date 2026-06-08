@@ -20,14 +20,21 @@ const importSource = vi.fn();
 const ingestSource = vi.fn();
 const deleteSource = vi.fn();
 const rescanSources = vi.fn();
-const runSearch = vi.fn().mockResolvedValue([
-  {
-    path: "wiki/sources/demo.md",
-    title: "Demo",
-    snippet: "Demo content",
-    score: 1,
-  },
-]);
+const runSearch = vi.fn().mockResolvedValue({
+  mode: "keyword",
+  tokenHits: 1,
+  vectorHits: 0,
+  results: [
+    {
+      path: "wiki/sources/demo.md",
+      title: "Demo",
+      snippet: "Demo content",
+      score: 1,
+      content: "# Demo",
+    },
+  ],
+});
+const graphQuerySpy = vi.fn();
 
 vi.mock("../tasks/queries", () => ({
   useProjectTasksQuery: () => ({
@@ -143,28 +150,30 @@ vi.mock("../search/queries", () => ({
 }));
 
 vi.mock("../graph/queries", () => ({
-  useProjectGraphQuery: (_projectId: string, query?: string, limit?: number) => ({
-    data: {
-      nodes: [
-        {
-          id: "demo",
-          label: "Demo",
-          nodeType: "source",
-          path: "wiki/sources/demo.md",
-          linkCount: 2,
-        },
-      ],
-      edges: [
-        {
-          source: "demo",
-          target: "peer",
-          weight: 1,
-        },
-      ],
-    },
-    isLoading: false,
-    meta: { query, limit },
-  }),
+  useProjectGraphQuery: (...args: unknown[]) => {
+    graphQuerySpy(...args);
+    return {
+      data: {
+        nodes: [
+          {
+            id: "demo",
+            label: "Demo",
+            nodeType: "source",
+            path: "wiki/sources/demo.md",
+            linkCount: 2,
+          },
+        ],
+        edges: [
+          {
+            source: "demo",
+            target: "peer",
+            weight: 1,
+          },
+        ],
+      },
+      isLoading: false,
+    };
+  },
   useProjectGraphNeighborsQuery: () => ({
     data: {
       node: {
@@ -234,8 +243,11 @@ describe("operations actions", () => {
     expect(runSearch).toHaveBeenCalledWith({
       projectId: "project-1",
       query: "demo",
+      topK: 10,
+      includeContent: false,
     });
     expect(await screen.findByText("wiki/sources/demo.md")).toBeInTheDocument();
+    expect(screen.getByText("Mode: keyword")).toBeInTheDocument();
 
     render(
       <QueryClientProvider client={queryClient}>
@@ -253,7 +265,9 @@ describe("operations actions", () => {
     await user.type(screen.getByLabelText("Graph Filter"), "demo");
     await user.clear(screen.getByLabelText("Node Limit"));
     await user.type(screen.getByLabelText("Node Limit"), "25");
+    await user.selectOptions(screen.getByLabelText("Node Type"), "source");
     await user.click(screen.getByRole("button", { name: "Apply Graph Filters" }));
+    expect(graphQuerySpy).toHaveBeenLastCalledWith("project-1", "demo", "source", 25);
 
     render(
       <QueryClientProvider client={queryClient}>

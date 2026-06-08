@@ -157,12 +157,17 @@ const settingsSchema = z.object({
 });
 
 const searchResultsSchema = z.object({
+  mode: z.string(),
+  tokenHits: z.number(),
+  vectorHits: z.number(),
   results: z.array(
     z.object({
       path: z.string(),
       title: z.string(),
       snippet: z.string(),
       score: z.number(),
+      titleMatch: z.boolean().optional(),
+      content: z.string().optional(),
     }),
   ),
 });
@@ -381,26 +386,38 @@ export async function deleteProjectSource(input: {
   );
 }
 
-export async function searchProject(input: { projectId: string; query: string }) {
-  const response = await apiFetch(
+export async function searchProject(input: {
+  projectId: string;
+  query: string;
+  topK?: number;
+  includeContent?: boolean;
+}) {
+  return apiFetch(
     `/api/projects/${input.projectId}/search`,
     {
       method: "POST",
-      body: JSON.stringify({ query: input.query }),
+      body: JSON.stringify({
+        query: input.query,
+        topK: input.topK,
+        includeContent: input.includeContent,
+      }),
     },
     searchResultsSchema,
   );
-  return response.results;
 }
 
 export async function getProjectGraph(input: {
   projectId: string;
   query?: string;
+  nodeType?: string;
   limit?: number;
 }) {
   const searchParams = new URLSearchParams();
   if (input.query?.trim()) {
     searchParams.set("q", input.query.trim());
+  }
+  if (input.nodeType?.trim()) {
+    searchParams.set("nodeType", input.nodeType.trim());
   }
   if (input.limit && input.limit > 0) {
     searchParams.set("limit", String(input.limit));
