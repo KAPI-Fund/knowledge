@@ -54,9 +54,9 @@ struct IngestCacheStore {
 }
 
 #[derive(Debug, Clone)]
-struct ParsedFileBlock {
-  path: String,
-  content: String,
+pub struct GeneratedFileBlock {
+  pub path: String,
+  pub content: String,
 }
 
 pub fn analyze_source(source_name: &str, content: &str) -> AnalysisResult {
@@ -313,7 +313,7 @@ pub fn generate_wiki_from_analysis(
   generation_text: &str,
 ) -> Result<IngestResult, std::io::Error> {
   let default_summary_path = source_summary_path(source_identity);
-  let parsed_blocks = parse_file_blocks(generation_text);
+  let parsed_blocks = parse_generation_file_blocks(generation_text);
   let mut written_paths = Vec::new();
   let mut wrote_summary = false;
   let mut wrote_index = false;
@@ -481,7 +481,7 @@ fn write_checkpoints(
   )
 }
 
-fn parse_file_blocks(text: &str) -> Vec<ParsedFileBlock> {
+pub fn parse_generation_file_blocks(text: &str) -> Vec<GeneratedFileBlock> {
   let normalized = text.replace("\r\n", "\n");
   let lines = normalized.lines().collect::<Vec<_>>();
   let mut blocks = Vec::new();
@@ -529,13 +529,27 @@ fn parse_file_blocks(text: &str) -> Vec<ParsedFileBlock> {
       continue;
     }
 
-    blocks.push(ParsedFileBlock {
+    blocks.push(GeneratedFileBlock {
       path,
       content: content_lines.join("\n"),
     });
   }
 
   blocks
+}
+
+pub fn render_generation_file_blocks(blocks: &[GeneratedFileBlock]) -> String {
+  blocks
+    .iter()
+    .map(|block| {
+      format!(
+        "---FILE: {}---\n{}\n---END FILE---",
+        block.path,
+        block.content.trim_end()
+      )
+    })
+    .collect::<Vec<_>>()
+    .join("\n\n")
 }
 
 fn parse_file_opener(line: &str) -> Option<String> {

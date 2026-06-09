@@ -16,6 +16,7 @@ pub enum MockScenario {
     IngestSuccess,
     IngestWithReviewSuccess,
     IngestWithDedicatedReviewStageSuccess,
+    IngestWithPageMergeSuccess,
     IngestThenSweepLlmSuccess,
     RetryableError,
     InvalidRequest,
@@ -39,6 +40,11 @@ impl MockScenario {
     #[allow(dead_code)]
     pub fn ingest_with_dedicated_review_stage_success() -> Self {
         Self::IngestWithDedicatedReviewStageSuccess
+    }
+
+    #[allow(dead_code)]
+    pub fn ingest_with_page_merge_success() -> Self {
+        Self::IngestWithPageMergeSuccess
     }
 
     #[allow(dead_code)]
@@ -132,6 +138,7 @@ async fn chat_completions(
         MockScenario::IngestSuccess
         | MockScenario::IngestWithReviewSuccess
         | MockScenario::IngestWithDedicatedReviewStageSuccess
+        | MockScenario::IngestWithPageMergeSuccess
         | MockScenario::IngestThenSweepLlmSuccess => {
             let content = if request_index == 1 {
                 [
@@ -237,6 +244,129 @@ async fn chat_completions(
                     },
                 ]
                 .join("\n")
+            } else if matches!(scenario, MockScenario::IngestWithPageMergeSuccess) && request_index == 4 {
+                [
+                    "## Key Entities",
+                    "- Attention mechanism - extended by a second source",
+                    "",
+                    "## Key Concepts",
+                    "- Attention variants - implementation tradeoffs for attention mechanisms",
+                    "",
+                    "## Main Arguments & Findings",
+                    "- The second source adds optimization tradeoffs.",
+                    "",
+                    "## Connections to Existing Wiki",
+                    "- This should update the existing attention mechanism page.",
+                    "",
+                    "## Contradictions & Tensions",
+                    "- None noted.",
+                    "",
+                    "## Recommendations",
+                    "- Merge new implementation notes into the existing concept page.",
+                ]
+                .join("\n")
+            } else if matches!(scenario, MockScenario::IngestWithPageMergeSuccess) && request_index == 5 {
+                [
+                    "---FILE: wiki/sources/attention-optimizations.md---",
+                    "---",
+                    "type: source",
+                    "title: Attention Optimizations",
+                    "created: 2026-06-08",
+                    "updated: 2026-06-08",
+                    "tags: [transformers, optimization]",
+                    "related: [attention-mechanism]",
+                    "sources: [\"attention-optimizations.md\"]",
+                    "---",
+                    "",
+                    "# Attention Optimizations",
+                    "",
+                    "Optimized attention implementations reduce memory overhead.",
+                    "---END FILE---",
+                    "",
+                    "---FILE: wiki/concepts/attention-mechanism.md---",
+                    "---",
+                    "type: concept",
+                    "title: Attention Mechanism",
+                    "created: 2026-06-08",
+                    "updated: 2026-06-08",
+                    "tags: [optimization, flash-attention]",
+                    "related: [attention, efficient-attention]",
+                    "sources: [\"attention-optimizations.md\"]",
+                    "---",
+                    "",
+                    "# Attention Mechanism",
+                    "",
+                    "Efficient implementations reduce memory overhead and improve throughput.",
+                    "---END FILE---",
+                    "",
+                    "---FILE: wiki/index.md---",
+                    "# Wiki Index",
+                    "",
+                    "## Entities",
+                    "",
+                    "## Concepts",
+                    "- [[attention-mechanism]] - Token relevance mechanism",
+                    "",
+                    "## Sources",
+                    "- [[attention]] - Source summary",
+                    "- [[attention-optimizations]] - Optimization summary",
+                    "",
+                    "## Queries",
+                    "",
+                    "## Comparisons",
+                    "",
+                    "## Synthesis",
+                    "---END FILE---",
+                    "",
+                    "---FILE: wiki/log.md---",
+                    "# Research Log",
+                    "",
+                    "## 2026-06-08",
+                    "",
+                    "- Project created",
+                    "",
+                    "## 2026-06-08 ingest | Attention Optimizations",
+                    "",
+                    "---END FILE---",
+                    "",
+                    "---FILE: wiki/overview.md---",
+                    "---",
+                    "type: overview",
+                    "title: Project Overview",
+                    "tags: []",
+                    "related: []",
+                    "sources: []",
+                    "---",
+                    "",
+                    "# Overview",
+                    "",
+                    "This wiki covers attention mechanisms and efficient variants.",
+                    "---END FILE---",
+                ]
+                .join("\n")
+            } else if matches!(scenario, MockScenario::IngestWithPageMergeSuccess) && request_index == 7 {
+                [
+                    "---",
+                    "type: concept",
+                    "title: Attention Mechanism",
+                    "created: 2026-06-08",
+                    "updated: 2026-06-08",
+                    "tags: [optimization, flash-attention]",
+                    "related: [attention, efficient-attention]",
+                    "sources: [\"attention-optimizations.md\"]",
+                    "---",
+                    "",
+                    "# Attention Mechanism",
+                    "",
+                    "Attention focuses computation on relevant tokens and links back to [[attention]].",
+                    "",
+                    "Efficient implementations reduce memory overhead and improve throughput.",
+                ]
+                .join("\n")
+            } else if matches!(scenario, MockScenario::IngestWithPageMergeSuccess)
+                && (request_index == 3 || request_index == 6)
+            {
+                String::new()
             } else if matches!(scenario, MockScenario::IngestWithDedicatedReviewStageSuccess) {
                 [
                     "---REVIEW: suggestion | Compare attention variants---",

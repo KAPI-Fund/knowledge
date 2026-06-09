@@ -13,8 +13,11 @@ use crate::tasks::store;
 use knowledge_core::ingest::{
   AnalysisResult, analyze_source, build_analysis_prompt, build_analysis_user_prompt,
   build_generation_prompt, build_generation_user_prompt, build_review_suggestion_prompt,
-  check_ingest_cache, generate_wiki_from_analysis, should_run_dedicated_review_stage,
-  source_summary_path,
+  check_ingest_cache, generate_wiki_from_analysis, parse_generation_file_blocks,
+  render_generation_file_blocks, should_run_dedicated_review_stage, source_summary_path,
+};
+use knowledge_core::project::page_merge::{
+  build_page_merge_prompts, finalize_page_merge, prepare_page_merge, PageMergePlan,
 };
 use knowledge_core::project::queries::{save_query_page, SaveQueryPageInput, SavedQueryCitation};
 use knowledge_core::project::reviews::{
@@ -344,6 +347,13 @@ async fn run_ingest_source_executor(
     } else {
       format!("{}\n\n{}", generation.text.trim_end(), review_suggestions.trim())
     };
+    let merged_generation = merge_generated_pages_with_existing_content(
+      &provider,
+      &root,
+      source_name,
+      &combined_generation,
+    )
+    .await?;
 
     generate_wiki_from_analysis(
       &root,
@@ -351,7 +361,7 @@ async fn run_ingest_source_executor(
       source_name,
       &content,
       &analysis,
-      &combined_generation,
+      &merged_generation,
     )
     .map_err(|error| ApiError::bad_request(error.to_string()))?
   } else {
@@ -640,4 +650,78 @@ fn analysis_title_from_text(source_name: &str, source_content: &str, analysis_te
     .filter(|title| !title.is_empty())
     .map(str::to_string)
     .unwrap_or_else(|| analyze_source(source_name, source_content).title)
+}
+
+async fn merge_generated_pages_with_existing_content(
+  provider: &OpenAiCompatibleProvider,
+  root: &knowledge_core::project::root::ProjectRoot,
+  source_name: &str,
+  generation_text: &str,
+) -> Result<String, ApiError> {
+  let review_suffix = review_block_suffix(generation_text);
+  let mut blocks = parse_generation_file_blocks(generation_text);
+
+  for block in &mut blocks {
+    if block.path == "wiki/index.md" || block.path == "wiki/log.md" || block.path == "wiki/overview.md" {
+      continue;
+    }
+
+    let absolute = root.safe_join(&block.path).map_err(|error| ApiError::bad_request(error.to_string()))?;
+    let existing_content = if absolute.exists() {
+      Some(std::fs::read_to_string(&absolute).map_err(|error| ApiError::bad_request(error.to_string()))?)
+    } else {
+      None
+    };
+
+    match prepare_page_merge(&block.content, existing_content.as_deref()) {
+      PageMergePlan::Final(final_content) => {
+        block.content = final_content;
+      }
+      PageMergePlan::NeedsProvider {
+        existing_content,
+        array_merged,
+      } => {
+        let (system_prompt, user_prompt) =
+          build_page_merge_prompts(&existing_content, &array_merged, source_name);
+        let llm_output = provider
+          .complete_text(ProviderTextRequest {
+            system_prompt,
+            user_prompt,
+          })
+          .await
+          .map(|response| response.text)
+          .ok();
+        block.content = finalize_page_merge(
+          &existing_content,
+          &array_merged,
+          llm_output.as_deref(),
+          &today_utc(),
+        );
+      }
+    }
+  }
+
+  let rendered = render_generation_file_blocks(&blocks);
+  if review_suffix.is_empty() {
+    Ok(rendered)
+  } else {
+    Ok(format!("{rendered}\n\n{review_suffix}"))
+  }
+}
+
+fn today_utc() -> String {
+  let now = OffsetDateTime::now_utc().date();
+  format!(
+    "{:04}-{:02}-{:02}",
+    now.year(),
+    u8::from(now.month()),
+    now.day()
+  )
+}
+
+fn review_block_suffix(generation_text: &str) -> String {
+  generation_text
+    .find("---REVIEW:")
+    .map(|index| generation_text[index..].trim().to_string())
+    .unwrap_or_default()
 }

@@ -195,6 +195,55 @@ async fn ingest_source_skips_provider_when_source_content_hash_is_unchanged() {
 }
 
 #[tokio::test]
+async fn repeated_provider_ingest_merges_existing_page_body_and_frontmatter() {
+  let temp = tempdir().unwrap();
+  let _env = TestEnvironment::start("ingest-page-merge").await.unwrap();
+  let mock = MockOpenAiServer::start(MockScenario::ingest_with_page_merge_success())
+    .await
+    .unwrap();
+  let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let (cookie, csrf) = login_and_csrf(state.clone()).await;
+  let project_root = temp.path().join("ingest-page-merge-project");
+  let project_id = create_project(state.clone(), &cookie, &csrf, project_root.clone()).await;
+  configure_provider(&state, &mock.base_url(), "mock-model").await;
+
+  fs::write(
+    project_root.join("raw/sources/attention.md"),
+    "# Attention\n\nTransformers use attention mechanisms.\n",
+  )
+  .unwrap();
+
+  let first_task_id = enqueue_ingest(&state, &cookie, &csrf, &project_id).await;
+  wait_for_task_terminal(&state, &first_task_id).await;
+
+  fs::write(
+    project_root.join("raw/sources/attention-optimizations.md"),
+    "# Attention Optimizations\n\nOptimized attention implementations reduce memory overhead.\n",
+  )
+  .unwrap();
+
+  let second_task_id = enqueue_custom_ingest(
+    &state,
+    &cookie,
+    &csrf,
+    &project_id,
+    "raw/sources/attention-optimizations.md",
+  )
+  .await;
+  wait_for_task_terminal(&state, &second_task_id).await;
+
+  let concept =
+    fs::read_to_string(project_root.join("wiki/concepts/attention-mechanism.md")).unwrap();
+  assert!(concept.contains("Attention focuses computation on relevant tokens and links back to [[attention]]."));
+  assert!(concept.contains("Efficient implementations reduce memory overhead and improve throughput."));
+  assert!(concept.contains("sources: [\"attention.md\", \"attention-optimizations.md\"]"));
+  assert!(concept.contains("tags: [\"transformers\", \"attention\", \"optimization\", \"flash-attention\"]"));
+  assert!(concept.contains("related: [attention, efficient-attention]"));
+  assert_eq!(mock.request_count(), 7);
+}
+
+#[tokio::test]
 async fn query_api_returns_provider_backed_answer_and_citations_from_search_context() {
   let temp = tempdir().unwrap();
   let _env = TestEnvironment::start("query-answer").await.unwrap();
