@@ -2,6 +2,7 @@ pub mod files;
 pub mod enrich;
 pub mod ingest_sanitize;
 pub mod lint;
+pub mod multimodal;
 pub mod page_merge;
 pub mod queries;
 pub mod root;

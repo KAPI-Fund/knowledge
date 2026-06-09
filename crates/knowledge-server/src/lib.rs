@@ -5,6 +5,7 @@ pub mod config;
 pub mod db;
 pub mod http;
 pub mod providers;
+pub mod multimodal;
 pub mod projects;
 pub mod query;
 pub mod retrieval;

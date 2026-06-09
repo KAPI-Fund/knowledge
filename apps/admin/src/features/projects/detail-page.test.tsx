@@ -5,6 +5,14 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 
 import { AppShell } from "../../components/layout/app-shell";
+import { AuditPage } from "../audit/page";
+import { FilesPage } from "../files/page";
+import { GraphPage } from "../graph/page";
+import { ReviewsPage } from "../reviews/page";
+import { SearchPage } from "../search/page";
+import { SettingsPage } from "../settings/page";
+import { SourceWatchPage } from "../source-watch/page";
+import { SourcesPage } from "../sources/page";
 import { TasksPage } from "../tasks/page";
 
 import { ProjectDetailPage } from "./detail-page";
@@ -37,6 +45,18 @@ vi.mock("./detail-queries", () => ({
         reviewCount: 1,
       },
     },
+    isLoading: false,
+  }),
+}));
+
+vi.mock("../sources/queries", () => ({
+  useProjectSourcesQuery: () => ({
+    data: [
+      {
+        relativePath: "raw/sources/demo.md",
+        size: 42,
+      },
+    ],
     isLoading: false,
   }),
 }));
@@ -78,6 +98,121 @@ vi.mock("../tasks/queries", () => ({
   }),
 }));
 
+vi.mock("../reviews/queries", () => ({
+  useProjectReviewsQuery: () => ({
+    data: [
+      {
+        id: "review-1",
+        status: "open",
+        type: "missing-page",
+        title: "Review demo.md",
+        description: "Create a dedicated page for evaluation details.",
+        sourcePath: "raw/sources/demo.md",
+        affectedPages: ["wiki/evaluation.md"],
+        searchQueries: ["demo evaluation"],
+        options: [{ label: "Approve", action: "approve" }],
+      },
+    ],
+    isLoading: false,
+  }),
+  useUpdateReviewMutation: () => ({
+    mutateAsync: vi.fn(),
+  }),
+  useSweepReviewsMutation: () => ({
+    mutateAsync: vi.fn(),
+  }),
+}));
+
+vi.mock("../audit/queries", () => ({
+  useProjectAuditLogsQuery: () => ({
+    data: [
+      {
+        id: "audit-1",
+        action: "project.created",
+        summary: "Created project demo-project",
+      },
+    ],
+    isLoading: false,
+  }),
+}));
+
+vi.mock("../source-watch/queries", () => ({
+  useProjectSourceWatchQuery: () => ({
+    data: {
+      enabled: true,
+      autoIngest: true,
+      path: "E:/watched-sources",
+      includeExtensions: ["md"],
+      excludeExtensions: ["tmp"],
+      excludeDirs: [".git"],
+      excludeGlobs: ["~$*"],
+      maxFileSizeMb: 100,
+      intervalMinutes: 5,
+      lastScanAt: "2026-06-09T00:00:00Z",
+    },
+    isLoading: false,
+  }),
+  useUpdateProjectSourceWatchMutation: () => ({
+    mutateAsync: vi.fn(),
+    isPending: false,
+  }),
+  useScanProjectSourceWatchMutation: () => ({
+    mutateAsync: vi.fn(),
+    isPending: false,
+  }),
+}));
+
+vi.mock("../search/queries", () => ({
+  useProjectSearchMutation: () => ({
+    mutateAsync: vi.fn(),
+  }),
+}));
+
+vi.mock("../graph/queries", () => ({
+  useProjectGraphQuery: () => ({
+    data: {
+      nodes: [
+        {
+          id: "demo",
+          label: "Demo",
+          nodeType: "source",
+          path: "wiki/sources/demo.md",
+          linkCount: 1,
+        },
+      ],
+      edges: [],
+    },
+    isLoading: false,
+  }),
+  useProjectGraphNeighborsQuery: () => ({
+    data: {
+      node: {
+        id: "demo",
+        label: "Demo",
+        nodeType: "source",
+        path: "wiki/sources/demo.md",
+        linkCount: 1,
+      },
+      neighbors: [],
+    },
+    isLoading: false,
+  }),
+}));
+
+vi.mock("../settings/queries", () => ({
+  useSystemSettingsQuery: () => ({
+    data: {
+      providerMode: "deterministic",
+      language: "en",
+      defaultQueryLimit: 3,
+    },
+    isLoading: false,
+  }),
+  useUpdateSystemSettingsMutation: () => ({
+    mutateAsync: vi.fn(),
+  }),
+}));
+
 describe("project operations routing", () => {
   it("navigates from the project list into project operations pages", async () => {
     const user = userEvent.setup();
@@ -90,7 +225,15 @@ describe("project operations routing", () => {
             <Route path="/" element={<AppShell />}>
               <Route path="projects" element={<ProjectsPage />} />
               <Route path="projects/:projectId" element={<ProjectDetailPage />} />
+              <Route path="projects/:projectId/files" element={<FilesPage />} />
+              <Route path="projects/:projectId/sources" element={<SourcesPage />} />
+              <Route path="projects/:projectId/source-watch" element={<SourceWatchPage />} />
+              <Route path="projects/:projectId/search" element={<SearchPage />} />
+              <Route path="projects/:projectId/graph" element={<GraphPage />} />
               <Route path="projects/:projectId/tasks" element={<TasksPage />} />
+              <Route path="projects/:projectId/reviews" element={<ReviewsPage />} />
+              <Route path="projects/:projectId/audit" element={<AuditPage />} />
+              <Route path="settings" element={<SettingsPage />} />
             </Route>
           </Routes>
         </MemoryRouter>
@@ -101,6 +244,16 @@ describe("project operations routing", () => {
 
     expect(await screen.findByRole("heading", { name: "demo-project" })).toBeInTheDocument();
     expect(screen.getByText("2 sources")).toBeInTheDocument();
+    expect(screen.getByText("3 tasks")).toBeInTheDocument();
+    expect(screen.getByText("1 reviews")).toBeInTheDocument();
+    expect(screen.getByText("Recent Sources")).toBeInTheDocument();
+    expect(screen.getByText("raw/sources/demo.md")).toBeInTheDocument();
+    expect(screen.getByText("Recent Tasks")).toBeInTheDocument();
+    expect(screen.getByText("Imported note.md")).toBeInTheDocument();
+    expect(screen.getByText("Recent Reviews")).toBeInTheDocument();
+    expect(screen.getByText("Review demo.md")).toBeInTheDocument();
+    expect(screen.getByText("Recent Audit")).toBeInTheDocument();
+    expect(screen.getByText("Created project demo-project")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Tasks" })).toBeInTheDocument();
 
     await user.click(screen.getByRole("link", { name: "Tasks" }));

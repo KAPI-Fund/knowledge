@@ -405,6 +405,75 @@ async fn ingest_source_extracts_text_from_docx_sources() {
 }
 
 #[tokio::test]
+async fn ingest_source_captions_embedded_docx_images_into_summary() {
+  let temp = tempdir().unwrap();
+  let _env = TestEnvironment::start("ingest-docx-images").await.unwrap();
+  let mock = MockOpenAiServer::start(MockScenario::ingest_success()).await.unwrap();
+  let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let (cookie, csrf) = login_and_csrf(state.clone()).await;
+  let project_root = temp.path().join("ingest-docx-images-project");
+  let project_id = create_project(state.clone(), &cookie, &csrf, project_root.clone()).await;
+  configure_provider(&state, &mock.base_url(), "mock-model").await;
+
+  let docx_bytes = build_minimal_docx_with_image(
+    "Document with a figure.",
+    &sample_png_bytes(),
+  );
+  let import_response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri(format!("/api/projects/{project_id}/sources:import"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::COOKIE, &cookie)
+        .header("x-csrf-token", &csrf)
+        .body(Body::from(
+          json!({
+            "fileName": "vision.docx",
+            "contentBase64": base64::engine::general_purpose::STANDARD.encode(docx_bytes)
+          })
+          .to_string(),
+        ))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(import_response.status(), StatusCode::ACCEPTED);
+  let import_payload = read_json(import_response.into_body()).await;
+  wait_for_task_terminal(
+    &state,
+    import_payload.get("taskId").and_then(Value::as_str).unwrap(),
+  )
+  .await;
+
+  let ingest_response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri(format!("/api/projects/{project_id}/ingest"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::COOKIE, &cookie)
+        .header("x-csrf-token", &csrf)
+        .body(Body::from(json!({ "relativePath": "raw/sources/vision.docx" }).to_string()))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(ingest_response.status(), StatusCode::ACCEPTED);
+  let payload = read_json(ingest_response.into_body()).await;
+  let task_id = payload.get("taskId").and_then(Value::as_str).unwrap().to_string();
+  wait_for_task_terminal(&state, &task_id).await;
+
+  let summary = fs::read_to_string(project_root.join("wiki/sources/vision.md")).unwrap();
+  assert!(summary.contains("Embedded Images"));
+  assert!(summary.contains("A factual caption for an embedded diagram."));
+  assert!(summary.contains("../media/vision/img-1.png"));
+  assert!(project_root.join("wiki/media/vision/img-1.png").exists());
+  assert!(mock.request_count() >= 3);
+}
+
+#[tokio::test]
 async fn ingest_source_keeps_nested_source_identity_in_summary_paths_and_sources() {
   let temp = tempdir().unwrap();
   let _env = TestEnvironment::start("ingest-nested-source-identity").await.unwrap();
@@ -658,4 +727,64 @@ fn build_minimal_docx(text: &str) -> Vec<u8> {
     .unwrap();
 
   zip.finish().unwrap().into_inner()
+}
+
+fn build_minimal_docx_with_image(text: &str, png_bytes: &[u8]) -> Vec<u8> {
+  let cursor = std::io::Cursor::new(Vec::new());
+  let mut zip = ZipWriter::new(cursor);
+  let options: FileOptions<'_, ()> = FileOptions::default();
+
+  zip.start_file("[Content_Types].xml", options).unwrap();
+  zip
+    .write_all(
+      br#"<?xml version="1.0" encoding="UTF-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Default Extension="png" ContentType="image/png"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+</Types>"#,
+    )
+    .unwrap();
+
+  zip.start_file("_rels/.rels", options).unwrap();
+  zip
+    .write_all(
+      br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>"#,
+    )
+    .unwrap();
+
+  zip.start_file("word/document.xml", options).unwrap();
+  zip
+    .write_all(
+      format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p>
+      <w:r><w:t>{text}</w:t></w:r>
+    </w:p>
+  </w:body>
+</w:document>"#
+      )
+      .as_bytes(),
+    )
+    .unwrap();
+
+  zip.start_file("word/media/image1.png", options).unwrap();
+  zip.write_all(png_bytes).unwrap();
+
+  zip.finish().unwrap().into_inner()
+}
+
+fn sample_png_bytes() -> Vec<u8> {
+  let image = image::RgbaImage::from_pixel(128, 128, image::Rgba([255, 0, 0, 255]));
+  let mut cursor = std::io::Cursor::new(Vec::new());
+  image::DynamicImage::ImageRgba8(image)
+    .write_to(&mut cursor, image::ImageFormat::Png)
+    .unwrap();
+  cursor.into_inner()
 }

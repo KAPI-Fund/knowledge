@@ -124,9 +124,35 @@ impl MockOpenAiServer {
 
 async fn chat_completions(
     State(state): State<MockState>,
-    Json(_payload): Json<Value>,
+    Json(payload): Json<Value>,
 ) -> (StatusCode, Json<Value>) {
     let scenario = state.scenario.lock().await.clone();
+    if payload_has_image_block(&payload) {
+        return (
+            StatusCode::OK,
+            Json(json!({
+              "id": "chatcmpl-mock-caption",
+              "object": "chat.completion",
+              "created": 1_717_171_717,
+              "model": "mock-model",
+              "choices": [
+                {
+                  "index": 0,
+                  "message": {
+                    "role": "assistant",
+                    "content": "A factual caption for an embedded diagram."
+                  },
+                  "finish_reason": "stop"
+                }
+              ],
+              "usage": {
+                "prompt_tokens": 17,
+                "completion_tokens": 25,
+                "total_tokens": 42
+              }
+            })),
+        );
+    }
     let request_index = state.request_count.fetch_add(1, Ordering::SeqCst) + 1;
     match scenario {
         MockScenario::Success => (
@@ -554,6 +580,22 @@ async fn chat_completions(
             })),
         ),
     }
+}
+
+fn payload_has_image_block(payload: &Value) -> bool {
+    payload
+        .get("messages")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .any(|message| {
+            message
+                .get("content")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .any(|block| block.get("type").and_then(Value::as_str) == Some("image_url"))
+        })
 }
 
 async fn embeddings(

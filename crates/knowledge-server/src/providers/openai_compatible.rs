@@ -5,8 +5,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::providers::types::{
-    ProviderAnswer, ProviderEmbeddingRequest, ProviderError, ProviderQueryRequest, ProviderTextRequest,
-    ProviderTextResponse, ProviderUsage,
+    ProviderAnswer, ProviderContentBlock, ProviderEmbeddingRequest, ProviderError,
+    ProviderMultimodalRequest, ProviderQueryRequest, ProviderTextRequest, ProviderTextResponse,
+    ProviderUsage,
 };
 
 #[derive(Debug, Clone)]
@@ -191,6 +192,71 @@ impl OpenAiCompatibleProvider {
         })
     }
 
+    pub async fn complete_multimodal(
+      &self,
+      request: ProviderMultimodalRequest,
+    ) -> Result<ProviderTextResponse, ProviderError> {
+      let response = self
+        .client
+        .post(chat_completions_url(&self.base_url))
+        .headers(self.auth_headers()?)
+        .json(&ChatCompletionRequest::from_content_blocks(
+          &self.model,
+          request.system_prompt,
+          request.content_blocks,
+        ))
+        .send()
+        .await
+        .map_err(map_transport_error)?;
+
+      let status = response.status();
+      let body = response.text().await.map_err(map_transport_error)?;
+      let payload: Value = serde_json::from_str(&body).map_err(|error| {
+        ProviderError::new(
+          "provider_invalid_response",
+          format!("provider returned invalid JSON: {error}"),
+          false,
+        )
+      })?;
+
+      if !status.is_success() {
+        return Err(map_provider_error(status, &payload));
+      }
+
+      let response: ChatCompletionResponse = serde_json::from_value(payload).map_err(|error| {
+        ProviderError::new(
+          "provider_invalid_response",
+          format!("provider returned unsupported response shape: {error}"),
+          false,
+        )
+      })?;
+
+      let content = response
+        .choices
+        .first()
+        .and_then(|choice| choice.message.content.as_deref())
+        .map(str::trim)
+        .filter(|content| !content.is_empty())
+        .ok_or_else(|| {
+          ProviderError::new(
+            "provider_invalid_response",
+            "provider did not return assistant content",
+            false,
+          )
+        })?;
+
+      let usage = response.usage.unwrap_or_default();
+
+      Ok(ProviderTextResponse {
+        text: content.to_string(),
+        usage: ProviderUsage {
+          prompt_tokens: usage.prompt_tokens.unwrap_or_default(),
+          completion_tokens: usage.completion_tokens.unwrap_or_default(),
+          total_tokens: usage.total_tokens.unwrap_or_default(),
+        },
+      })
+    }
+
     fn auth_headers(&self) -> Result<reqwest::header::HeaderMap, ProviderError> {
         let mut headers = reqwest::header::HeaderMap::new();
         if self.api_key.trim().is_empty() {
@@ -298,11 +364,45 @@ impl ChatCompletionRequest {
             messages: vec![
                 ChatMessage {
                     role: "system".to_string(),
-                    content: request.system_prompt,
+                    content: ChatMessageContent::Text(request.system_prompt),
                 },
                 ChatMessage {
                     role: "user".to_string(),
-                    content: request.user_prompt,
+                    content: ChatMessageContent::Text(request.user_prompt),
+                },
+            ],
+            temperature: 0.0,
+        }
+    }
+
+    fn from_content_blocks(model: &str, system_prompt: String, content: Vec<ProviderContentBlock>) -> Self {
+        Self {
+            model: model.to_string(),
+            messages: vec![
+                ChatMessage {
+                    role: "system".to_string(),
+                    content: ChatMessageContent::Text(system_prompt),
+                },
+                ChatMessage {
+                    role: "user".to_string(),
+                    content: ChatMessageContent::Blocks(
+                        content
+                            .into_iter()
+                            .map(|block| match block {
+                                ProviderContentBlock::Text { text } => ChatMessageBlock::Text { text },
+                                ProviderContentBlock::Image {
+                                    media_type,
+                                    data_base64,
+                                } => ChatMessageBlock::Image {
+                                    image_url: ChatMessageImageUrl {
+                                        url: format!(
+                                            "data:{media_type};base64,{data_base64}"
+                                        ),
+                                    },
+                                },
+                            })
+                            .collect(),
+                    ),
                 },
             ],
             temperature: 0.0,
@@ -313,7 +413,28 @@ impl ChatCompletionRequest {
 #[derive(Debug, Serialize)]
 struct ChatMessage {
     role: String,
-    content: String,
+    content: ChatMessageContent,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+enum ChatMessageContent {
+  Text(String),
+  Blocks(Vec<ChatMessageBlock>),
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "type")]
+enum ChatMessageBlock {
+  #[serde(rename = "text")]
+  Text { text: String },
+  #[serde(rename = "image_url")]
+  Image { image_url: ChatMessageImageUrl },
+}
+
+#[derive(Debug, Serialize)]
+struct ChatMessageImageUrl {
+  url: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -353,4 +474,33 @@ struct EmbeddingResponse {
 #[derive(Debug, Deserialize)]
 struct EmbeddingResponseItem {
     embedding: Vec<f32>,
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::providers::types::ProviderContentBlock;
+
+  #[test]
+  fn serializes_image_content_block_for_openai_compatible_chat() {
+    let request = ChatCompletionRequest::from_content_blocks(
+      "model",
+      "system".to_string(),
+      vec![
+        ProviderContentBlock::Text {
+          text: "caption this".to_string(),
+        },
+        ProviderContentBlock::Image {
+          media_type: "image/png".to_string(),
+          data_base64: "Zm9v".to_string(),
+        },
+      ],
+    );
+
+    let value = serde_json::to_value(request).unwrap();
+    let content = &value["messages"][1]["content"];
+    assert_eq!(content[0]["type"], "text");
+    assert_eq!(content[1]["type"], "image_url");
+    assert_eq!(content[1]["image_url"]["url"], "data:image/png;base64,Zm9v");
+  }
 }

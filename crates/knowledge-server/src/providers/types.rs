@@ -9,8 +9,20 @@ pub struct ProviderQueryRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderTextRequest {
-    pub system_prompt: String,
-    pub user_prompt: String,
+  pub system_prompt: String,
+  pub user_prompt: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderMultimodalRequest {
+  pub system_prompt: String,
+  pub content_blocks: Vec<ProviderContentBlock>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProviderContentBlock {
+  Text { text: String },
+  Image { media_type: String, data_base64: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

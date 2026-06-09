@@ -6,6 +6,8 @@ use calamine::{open_workbook_auto, Data, Reader};
 use office_oxide::Document;
 use thiserror::Error;
 
+use crate::project::multimodal::extract_pdf_text as extract_pdf_text_multimodal;
+
 const OFFICE_EXTS: &[&str] = &["doc", "docx", "pptx", "xls", "xlsx", "odt", "ods", "odp"];
 
 #[derive(Debug, Error)]
@@ -26,7 +28,7 @@ pub fn read_source_text(path: &Path) -> Result<String, SourceTextError> {
     .to_ascii_lowercase();
 
   if extension == "pdf" {
-    return Err(SourceTextError::UnsupportedFormat("pdf".to_string()));
+    return extract_pdf_text_multimodal(path).map_err(SourceTextError::Parse);
   }
 
   if OFFICE_EXTS.contains(&extension.as_str()) {
@@ -611,6 +613,21 @@ mod tests {
 
     let text = read_source_text(&path).unwrap();
     assert!(text.contains("Attention from DOCX."), "{text}");
+  }
+
+  #[test]
+  fn read_source_text_routes_pdf_to_multimodal_path() {
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("paper.pdf");
+    std::fs::write(&path, b"%PDF-1.4\n").unwrap();
+
+    let error = read_source_text(&path).unwrap_err();
+    match error {
+      super::SourceTextError::Parse(message) => {
+        assert!(message.contains("Failed to open PDF") || message.contains("Pdfium"));
+      }
+      other => panic!("unexpected error: {other:?}"),
+    }
   }
 
   fn build_minimal_docx(text: &str) -> Vec<u8> {

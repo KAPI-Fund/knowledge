@@ -3,6 +3,9 @@ use time::format_description::well_known::Rfc3339;
 use time::{Duration, OffsetDateTime};
 
 use crate::app::state::AppState;
+use crate::multimodal::{
+  caption_image, inject_images_into_source_summary, load_cached_caption, save_cached_caption,
+};
 use crate::http::error::ApiError;
 use crate::providers::{OpenAiCompatibleProvider, ProviderError, ProviderTextRequest};
 use crate::projects::audit::{append_audit_log, CreateAuditLog};
@@ -29,6 +32,10 @@ use knowledge_core::project::reviews::{
   sweep_resolved_reviews, update_review_status,
 };
 use knowledge_core::project::source_text::read_source_text;
+use knowledge_core::project::multimodal::{
+  build_image_markdown_section, extract_office_images, extract_pdf_images, save_extracted_images,
+  ExtractOptions,
+};
 use knowledge_core::project::sources::{delete_source, import_source, rescan_sources};
 
 const REVIEW_SWEEP_MAX_PAGES: usize = 300;
@@ -340,7 +347,60 @@ async fn run_ingest_source_executor(
     .file_name()
     .and_then(|name| name.to_str())
     .ok_or_else(|| ApiError::bad_request("invalid source name"))?;
+  let summary_title = analyze_source(source_name, &content).title;
   let ingest_provider = load_ingest_provider(state).await?;
+  let source_slug = knowledge_core::project::source_identity::source_summary_slug_from_identity(
+    &source_identity,
+  );
+  let wiki_root = root
+    .safe_join("wiki")
+    .map_err(|error| ApiError::bad_request(error.to_string()))?;
+  let media_dir = root
+    .safe_join(&format!("wiki/media/{source_slug}"))
+    .map_err(|error| ApiError::bad_request(error.to_string()))?;
+  let image_options = ExtractOptions::default();
+  let extracted_images = match source_path
+    .extension()
+    .and_then(|value| value.to_str())
+    .unwrap_or_default()
+    .to_ascii_lowercase()
+    .as_str()
+  {
+    "pdf" => extract_pdf_images(&source_path, &image_options).unwrap_or_default(),
+    "pptx" | "docx" | "xlsx" | "xls" | "ods" => {
+      extract_office_images(&source_path, &image_options).unwrap_or_default()
+    }
+    _ => Vec::new(),
+  };
+  let saved_images = save_extracted_images(&extracted_images, &media_dir, &wiki_root)
+    .unwrap_or_default();
+  let mut captions_by_sha = std::collections::HashMap::new();
+
+  if let Some(provider) = ingest_provider.as_ref() {
+    for (saved_image, extracted_image) in saved_images.iter().zip(extracted_images.iter()) {
+      let caption = if let Some(cached) = load_cached_caption(&state.cache, &saved_image.sha256)
+        .await
+        .map_err(|error| ApiError::internal(error.to_string()))?
+      {
+        cached
+      } else {
+        let caption = caption_image(provider, &extracted_image.data_base64, &saved_image.mime_type)
+          .await
+          .map_err(TaskExecutionError::from_provider_error)
+          .map_err(TaskExecutionError::into_api_error)?;
+        let _ = save_cached_caption(&state.cache, &saved_image.sha256, &caption).await;
+        caption
+      };
+      captions_by_sha.insert(saved_image.sha256.clone(), caption);
+    }
+  }
+  let image_section = build_image_markdown_section(&saved_images, Some(&captions_by_sha));
+  let content = if image_section.is_empty() {
+    content
+  } else {
+    format!("{content}\n\n{image_section}")
+  };
+  let summary_path = source_summary_path(&source_identity);
 
   let result = if let Some(cached) = check_ingest_cache(&root, &source_identity, &content)
     .map_err(|error| ApiError::bad_request(error.to_string()))?
@@ -428,6 +488,15 @@ async fn run_ingest_source_executor(
     generate_wiki_from_analysis(&root, &source_identity, source_name, &content, &analysis, "")
       .map_err(|error| ApiError::bad_request(error.to_string()))?
   };
+
+  let _ = inject_images_into_source_summary(
+    root.as_path(),
+    &summary_path,
+    &source_identity,
+    &summary_title,
+    &saved_images,
+    &captions_by_sha,
+  );
 
   let review_sweep = if should_run_review_sweep(state, &task.project_id, &task.id).await? {
     match run_review_sweep(state, task, &root, ingest_provider.as_ref()).await {

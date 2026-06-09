@@ -27,13 +27,36 @@ impl CacheStore {
       .transpose()?)
   }
 
+  pub async fn get_string(&self, key: &str) -> anyhow::Result<Option<String>> {
+    let mut connection = self.client.get_multiplexed_tokio_connection().await?;
+    let value: Option<String> = connection.get(key).await?;
+    Ok(value)
+  }
+
   pub async fn set_json<T>(&self, key: &str, value: &T, ttl_seconds: u64) -> anyhow::Result<()>
   where
     T: Serialize,
   {
     let mut connection = self.client.get_multiplexed_tokio_connection().await?;
     let payload = serde_json::to_string(value)?;
-    let _: () = connection.set_ex(key, payload, ttl_seconds.max(1)).await?;
+    let _: () = connection.set_ex(key, payload, ttl_seconds.max(1)).await?; 
+    Ok(())
+  }
+
+  pub async fn set_string(&self, key: &str, value: &str) -> anyhow::Result<()> {
+    let mut connection = self.client.get_multiplexed_tokio_connection().await?;
+    let _: () = connection.set(key, value).await?;
+    Ok(())
+  }
+
+  pub async fn set_string_ex(
+    &self,
+    key: &str,
+    value: &str,
+    ttl_seconds: u64,
+  ) -> anyhow::Result<()> {
+    let mut connection = self.client.get_multiplexed_tokio_connection().await?;
+    let _: () = connection.set_ex(key, value, ttl_seconds.max(1)).await?;
     Ok(())
   }
 

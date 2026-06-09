@@ -8,8 +8,11 @@ license.workspace = true
 anyhow.workspace = true
 argon2.workspace = true
 axum.workspace = true
+base64.workspace = true
 http.workspace = true
+image.workspace = true
 knowledge-core = { path = "../knowledge-core" }
+pdfium-render.workspace = true
 rand_core.workspace = true
 redis.workspace = true
 reqwest.workspace = true

@@ -3,6 +3,7 @@ mod types;
 
 pub use openai_compatible::OpenAiCompatibleProvider;
 pub use types::{
-    ProviderAnswer, ProviderCitation, ProviderEmbeddingRequest, ProviderError,
-    ProviderQueryRequest, ProviderTextRequest, ProviderTextResponse, ProviderUsage,
+    ProviderAnswer, ProviderCitation, ProviderContentBlock, ProviderEmbeddingRequest,
+    ProviderError, ProviderMultimodalRequest, ProviderQueryRequest, ProviderTextRequest,
+    ProviderTextResponse, ProviderUsage,
 };

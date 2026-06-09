@@ -8,6 +8,7 @@ license.workspace = true
 anyhow.workspace = true
 axum.workspace = true
 base64.workspace = true
+image.workspace = true
 http.workspace = true
 knowledge-server = { path = "../../crates/knowledge-server" }
 redis.workspace = true
