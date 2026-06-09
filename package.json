@@ -10,6 +10,8 @@
     "dev": "npm run dev --workspace @knowledge/admin",
     "build": "npm run build --workspace @knowledge/admin && cargo build --workspace",
     "test": "npm run test --workspace @knowledge/admin && npm run test --workspace @knowledge/api-client && npm run test --workspace @knowledge/web && cargo test --workspace",
-    "lint": "npm run lint --workspace @knowledge/admin && cargo clippy --workspace --all-targets -- -D warnings"
+    "lint": "npm run lint --workspace @knowledge/admin && cargo clippy --workspace --all-targets -- -D warnings",
+    "docker:up": "docker compose up --build",
+    "docker:down": "docker compose down -v"
   }
 }

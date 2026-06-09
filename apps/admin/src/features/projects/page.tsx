@@ -51,8 +51,7 @@ export function ProjectsPage() {
 
 function buildDemoProjectRootPath(projectName: string) {
   const seed = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  const root = window.location.hostname === "127.0.0.1"
-    ? "E:/Projects/Js/knowledge/.e2e"
-    : "E:/Projects/Js/knowledge/.worktrees/platform-foundation/.e2e";
+  const root = import.meta.env.VITE_KNOWLEDGE_PROJECT_ROOT
+    ?? (import.meta.env.PROD ? "/data/projects" : "E:/Projects/Js/knowledge/.e2e");
   return `${root}/${projectName}-${seed}`;
 }

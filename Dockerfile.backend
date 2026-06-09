@@ -1,0 +1,43 @@
+FROM rust:1.89-bookworm AS builder
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+  build-essential \
+  ca-certificates \
+  libssl-dev \
+  pkg-config \
+  && rm -rf /var/lib/apt/lists/*
+
+COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
+COPY crates ./crates
+COPY tests/rust-integration/Cargo.toml tests/rust-integration/Cargo.toml
+COPY tests/rust-integration/src tests/rust-integration/src
+
+RUN cargo build -p knowledge-server --release
+
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+  ca-certificates \
+  curl \
+  libssl3 \
+  && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY --from=builder /app/target/release/knowledge-server /usr/local/bin/knowledge-server
+
+ENV KNOWLEDGE_BIND_ADDR=0.0.0.0:4001
+ENV KNOWLEDGE_DATABASE_URL=postgres://postgres:postgres@postgres:5432/knowledge?sslmode=disable
+ENV KNOWLEDGE_REDIS_URL=redis://redis:6379/
+ENV KNOWLEDGE_PROVIDER_MODE=openai-compatible
+ENV KNOWLEDGE_PROVIDER_BASE_URL=https://backend.intelalloc.com
+ENV KNOWLEDGE_PROVIDER_MODEL=gpt-5.4
+ENV KNOWLEDGE_PROVIDER_TIMEOUT_SECONDS=180
+
+EXPOSE 4001
+
+HEALTHCHECK --interval=5s --timeout=5s --retries=20 CMD curl -fsS http://127.0.0.1:4001/api/health
+
+CMD ["knowledge-server"]
