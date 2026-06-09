@@ -613,6 +613,26 @@ export async function createQueryTask(input: {
   );
 }
 
+export async function createLintTask(input: {
+  projectId: string;
+  mode: string;
+}) {
+  return apiFetch(
+    `/api/projects/${input.projectId}/lint-tasks`,
+    {
+      method: "POST",
+      headers: csrfHeader(),
+      body: JSON.stringify({
+        mode: input.mode,
+      }),
+    },
+    z.object({
+      taskId: z.string(),
+      status: z.string(),
+    }),
+  );
+}
+
 export async function getQueryTaskDetail(input: { projectId: string; taskId: string }) {
   return apiFetch(
     `/api/projects/${input.projectId}/query-tasks/${input.taskId}`,

@@ -13,6 +13,7 @@ use tokio::sync::Mutex;
 #[derive(Debug, Clone)]
 pub enum MockScenario {
     Success,
+    SemanticLintSuccess,
     IngestSuccess,
     IngestSanitizeSuccess,
     IngestWithReviewSuccess,
@@ -26,6 +27,11 @@ pub enum MockScenario {
 impl MockScenario {
     pub fn success() -> Self {
         Self::Success
+    }
+
+    #[allow(dead_code)]
+    pub fn semantic_lint_success() -> Self {
+        Self::SemanticLintSuccess
     }
 
     #[allow(dead_code)]
@@ -130,6 +136,30 @@ async fn chat_completions(
                   "message": {
                     "role": "assistant",
                     "content": "Attention focuses computation on relevant tokens."
+                  },
+                  "finish_reason": "stop"
+                }
+              ],
+              "usage": {
+                "prompt_tokens": 17,
+                "completion_tokens": 25,
+                "total_tokens": 42
+              }
+            })),
+        ),
+        MockScenario::SemanticLintSuccess => (
+            StatusCode::OK,
+            Json(json!({
+              "id": "chatcmpl-mock-semantic-lint",
+              "object": "chat.completion",
+              "created": 1_717_171_717,
+              "model": "mock-model",
+              "choices": [
+                {
+                  "index": 0,
+                  "message": {
+                    "role": "assistant",
+                    "content": "---LINT: contradiction | warning | Conflicting attention claims---\nTwo pages describe attention with conflicting scope.\nPAGES: concepts/attention.md, concepts/attention-mechanism.md\n---END LINT---"
                   },
                   "finish_reason": "stop"
                 }

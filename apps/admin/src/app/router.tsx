@@ -6,6 +6,7 @@ import { AuditPage } from "../features/audit/page";
 import { DashboardPage } from "../features/dashboard/page";
 import { FilesPage } from "../features/files/page";
 import { GraphPage } from "../features/graph/page";
+import { LintPage } from "../features/lint/page";
 import { ProjectDetailPage } from "../features/projects/detail-page";
 import { ProjectsPage } from "../features/projects/page";
 import { QueryPage } from "../features/query/page";
@@ -31,6 +32,7 @@ export function AppRouter() {
           <Route path="projects/:projectId/source-watch" element={<SourceWatchPage />} />
           <Route path="projects/:projectId/search" element={<SearchPage />} />
           <Route path="projects/:projectId/query" element={<QueryPage />} />
+          <Route path="projects/:projectId/lint" element={<LintPage />} />
           <Route path="projects/:projectId/graph" element={<GraphPage />} />
           <Route path="projects/:projectId/tasks" element={<TasksPage />} />
           <Route path="projects/:projectId/reviews" element={<ReviewsPage />} />

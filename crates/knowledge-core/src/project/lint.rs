@@ -22,6 +22,24 @@ pub struct StructuralLintResult {
   pub issues: Vec<StructuralLintIssue>,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SemanticLintIssue {
+  pub issue_type: String,
+  pub severity: String,
+  pub page: String,
+  pub detail: String,
+  #[serde(skip_serializing_if = "Vec::is_empty")]
+  pub affected_pages: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SemanticLintResult {
+  pub mode: String,
+  pub issues: Vec<SemanticLintIssue>,
+}
+
 #[derive(Debug, Clone)]
 struct PageData {
   page: String,
@@ -97,6 +115,139 @@ pub fn run_structural_lint(root: &ProjectRoot) -> Result<StructuralLintResult, P
     mode: "structural".to_string(),
     issues,
   })
+}
+
+pub fn build_semantic_lint_prompt(root: &ProjectRoot) -> Result<Option<String>, ProjectRootError> {
+  let wiki_root = root.safe_join("wiki")?;
+  if !wiki_root.exists() {
+    return Ok(None);
+  }
+
+  let markdown_files = collect_markdown_files(&wiki_root)?;
+  let wiki_files = markdown_files
+    .into_iter()
+    .filter(|path| path.file_name().and_then(|name| name.to_str()) != Some("log.md"))
+    .collect::<Vec<_>>();
+
+  let mut summaries = Vec::new();
+  for path in wiki_files {
+    let content = fs::read_to_string(&path)?;
+    let preview = if content.chars().count() > 500 {
+      let truncated = content.chars().take(500).collect::<String>();
+      format!("{truncated}...")
+    } else {
+      content
+    };
+    let short_path = path
+      .strip_prefix(&wiki_root)
+      .unwrap_or(&path)
+      .to_string_lossy()
+      .replace('\\', "/");
+    summaries.push(format!("### {short_path}\n{preview}"));
+  }
+
+  if summaries.is_empty() {
+    return Ok(None);
+  }
+
+  Ok(Some(
+    [
+      "You are a wiki quality analyst. Review the following wiki page summaries and identify issues.",
+      "",
+      "For each issue, output exactly this format:",
+      "",
+      "---LINT: type | severity | Short title---",
+      "Description of the issue.",
+      "PAGES: page1.md, page2.md",
+      "---END LINT---",
+      "",
+      "Types:",
+      "- contradiction: two or more pages make conflicting claims",
+      "- stale: information that appears outdated or superseded",
+      "- missing-page: an important concept is heavily referenced but has no dedicated page",
+      "- suggestion: a question or source worth adding to the wiki",
+      "",
+      "Severities:",
+      "- warning: should be addressed",
+      "- info: nice to have",
+      "",
+      "Only report genuine issues. Do not invent problems. Output ONLY the ---LINT--- blocks, no other text.",
+      "",
+      "## Wiki Pages",
+      "",
+      &summaries.join("\n\n"),
+    ]
+    .join("\n"),
+  ))
+}
+
+pub fn parse_semantic_lint_response(raw: &str) -> SemanticLintResult {
+  let mut issues = Vec::new();
+  let normalized = raw.replace("\r\n", "\n");
+  let mut cursor = normalized.as_str();
+
+  while let Some(start) = cursor.find("---LINT:") {
+    let block = &cursor[start + "---LINT:".len()..];
+    let Some(end) = block.find("---END LINT---") else {
+      break;
+    };
+    let inner = block[..end].trim();
+    let Some((header, body)) = inner.split_once('\n') else {
+      cursor = &block[end + "---END LINT---".len()..];
+      continue;
+    };
+
+    let header_parts = header
+      .split('|')
+      .map(|value| value.trim().trim_end_matches('-').trim())
+      .filter(|value| !value.is_empty())
+      .collect::<Vec<_>>();
+    if header_parts.len() != 3 {
+      cursor = &block[end + "---END LINT---".len()..];
+      continue;
+    }
+
+    let raw_type = header_parts[0];
+    let severity = if header_parts[1].eq_ignore_ascii_case("warning") {
+      "warning"
+    } else {
+      "info"
+    };
+    let title = header_parts[2];
+    let affected_pages = body
+      .lines()
+      .find_map(|line| line.trim().strip_prefix("PAGES:"))
+      .map(|value| {
+        value
+          .split(',')
+          .map(str::trim)
+          .filter(|item| !item.is_empty())
+          .map(str::to_string)
+          .collect::<Vec<_>>()
+      })
+      .unwrap_or_default();
+    let detail = body
+      .lines()
+      .filter(|line| !line.trim_start().starts_with("PAGES:"))
+      .collect::<Vec<_>>()
+      .join("\n")
+      .trim()
+      .to_string();
+
+    issues.push(SemanticLintIssue {
+      issue_type: "semantic".to_string(),
+      severity: severity.to_string(),
+      page: title.to_string(),
+      detail: format!("[{raw_type}] {detail}"),
+      affected_pages,
+    });
+    cursor = &block[end + "---END LINT---".len()..];
+  }
+
+  SemanticLintResult {
+    mode: "semantic".to_string(),
+    issues,
+  }
 }
 
 fn collect_markdown_files(root: &Path) -> Result<Vec<PathBuf>, ProjectRootError> {
@@ -238,7 +389,7 @@ mod tests {
 
   use crate::project::scaffold::initialize_project;
 
-  use super::run_structural_lint;
+  use super::{build_semantic_lint_prompt, parse_semantic_lint_response, run_structural_lint};
 
   #[test]
   fn structural_lint_reports_orphans_broken_links_and_no_outlinks() {
@@ -291,6 +442,43 @@ mod tests {
         .issues
         .iter()
         .any(|issue| issue.issue_type == "broken-link")
+    );
+  }
+
+  #[test]
+  fn semantic_lint_prompt_summarizes_wiki_pages() {
+    let temp = tempdir().unwrap();
+    let root = initialize_project(temp.path()).unwrap();
+
+    std::fs::write(
+      temp.path().join("wiki/concepts/attention.md"),
+      "---\ntype: concept\ntitle: Attention\nsources: []\n---\n\n# Attention\n\nAttention focuses computation.\n",
+    )
+    .unwrap();
+
+    let prompt = build_semantic_lint_prompt(&root).unwrap().unwrap();
+    assert!(prompt.contains("### concepts/attention.md"));
+    assert!(prompt.contains("Attention focuses computation."));
+  }
+
+  #[test]
+  fn parse_semantic_lint_response_extracts_blocks() {
+    let result = parse_semantic_lint_response(
+      "---LINT: contradiction | warning | Conflicting attention claims---\nTwo pages disagree.\nPAGES: concepts/attention.md, concepts/attention-mechanism.md\n---END LINT---",
+    );
+
+    assert_eq!(result.mode, "semantic");
+    assert_eq!(result.issues.len(), 1);
+    assert_eq!(result.issues[0].issue_type, "semantic");
+    assert_eq!(result.issues[0].severity, "warning");
+    assert_eq!(result.issues[0].page, "Conflicting attention claims");
+    assert_eq!(
+      result.issues[0].detail,
+      "[contradiction] Two pages disagree."
+    );
+    assert_eq!(
+      result.issues[0].affected_pages,
+      vec!["concepts/attention.md".to_string(), "concepts/attention-mechanism.md".to_string()]
     );
   }
 }

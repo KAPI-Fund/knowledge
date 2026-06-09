@@ -9,6 +9,7 @@ use knowledge_server::config::AppConfig;
 use knowledge_server::tasks::{scheduler, store};
 use knowledge_server::{bootstrap_state, build_app};
 use serde_json::{json, Value};
+use support::mock_openai::{MockOpenAiServer, MockScenario};
 use support::TestEnvironment;
 use tempfile::tempdir;
 use tower::util::ServiceExt;
@@ -130,6 +131,101 @@ async fn structural_lint_task_returns_orphan_broken_link_and_no_outlinks_issues(
     issue.get("issueType").and_then(Value::as_str) == Some("no-outlinks")
       && issue.get("page").and_then(Value::as_str) == Some("concepts/orphan-page.md")
   }));
+}
+
+#[tokio::test]
+async fn semantic_lint_task_uses_provider_and_parses_lint_blocks() {
+  let temp = tempdir().unwrap();
+  let _env = TestEnvironment::start("lint-semantic").await.unwrap();
+  let mock = MockOpenAiServer::start(MockScenario::semantic_lint_success())
+    .await
+    .unwrap();
+  let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let (cookie, csrf) = login_and_csrf(state.clone()).await;
+  let project_root = temp.path().join("semantic-lint-project");
+  let project_id = create_project(state.clone(), &cookie, &csrf, project_root.clone()).await;
+
+  sqlx::query(
+    "UPDATE system_settings
+     SET provider_mode = $1,
+         provider_base_url = $2,
+         provider_api_key = $3,
+         provider_model = $4,
+         provider_timeout_seconds = $5",
+  )
+  .bind("openai-compatible")
+  .bind(mock.base_url())
+  .bind("test-key")
+  .bind("mock-model")
+  .bind(30_i64)
+  .execute(&state.pool)
+  .await
+  .unwrap();
+
+  fs::write(
+    project_root.join("wiki/concepts/attention.md"),
+    "---\ntype: concept\ntitle: Attention\nsources: []\n---\n\n# Attention\n\nAttention focuses computation.\n",
+  )
+  .unwrap();
+  fs::write(
+    project_root.join("wiki/concepts/attention-mechanism.md"),
+    "---\ntype: concept\ntitle: Attention Mechanism\nsources: []\n---\n\n# Attention Mechanism\n\nAttention is only a transformer subroutine.\n",
+  )
+  .unwrap();
+
+  let response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri(format!("/api/projects/{project_id}/lint-tasks"))
+        .header(header::COOKIE, &cookie)
+        .header("x-csrf-token", &csrf)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(json!({ "mode": "semantic" }).to_string()))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+  assert_eq!(response.status(), StatusCode::ACCEPTED);
+  let payload = read_json(response.into_body()).await;
+  let task_id = payload.get("taskId").and_then(Value::as_str).unwrap().to_string();
+  wait_for_task_terminal(&state, &task_id).await;
+
+  let detail = store::get_task_by_id(&state, &task_id).await.unwrap();
+  assert_eq!(detail.status, "succeeded");
+  assert_eq!(
+    detail
+      .result
+      .as_ref()
+      .and_then(|result| result.get("mode"))
+      .and_then(Value::as_str),
+    Some("semantic"),
+  );
+
+  let issues = detail
+    .result
+    .as_ref()
+    .and_then(|result| result.get("issues"))
+    .and_then(Value::as_array)
+    .cloned()
+    .unwrap_or_default();
+  assert_eq!(issues.len(), 1);
+  assert_eq!(issues[0].get("issueType").and_then(Value::as_str), Some("semantic"));
+  assert_eq!(issues[0].get("severity").and_then(Value::as_str), Some("warning"));
+  assert_eq!(
+    issues[0].get("page").and_then(Value::as_str),
+    Some("Conflicting attention claims"),
+  );
+  assert!(
+    issues[0]
+      .get("detail")
+      .and_then(Value::as_str)
+      .unwrap()
+      .contains("[contradiction]")
+  );
+  assert_eq!(mock.request_count(), 1);
 }
 
 async fn login_and_csrf(state: knowledge_server::app::state::AppState) -> (String, String) {

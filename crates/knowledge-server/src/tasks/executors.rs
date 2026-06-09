@@ -19,7 +19,9 @@ use knowledge_core::ingest::{
 use knowledge_core::project::page_merge::{
   build_page_merge_prompts, finalize_page_merge, prepare_page_merge, PageMergePlan,
 };
-use knowledge_core::project::lint::run_structural_lint;
+use knowledge_core::project::lint::{
+  build_semantic_lint_prompt, parse_semantic_lint_response, run_structural_lint,
+};
 use knowledge_core::project::queries::{save_query_page, SaveQueryPageInput, SavedQueryCitation};
 use knowledge_core::project::reviews::{
   build_review_sweep_prompt, parse_review_resolution_ids, resolve_review_ids,
@@ -271,12 +273,31 @@ async fn run_delete_source_executor(
 async fn run_lint_executor(state: &AppState, task: &TaskRecord) -> Result<Value, ApiError> {
   let root = project_root_for_id(state, &task.project_id).await?;
   let mode = read_string(&task.payload, "mode")?;
-  if mode != "structural" {
-    return Err(ApiError::bad_request("unsupported lint mode"));
+  if mode == "structural" {
+    let result = run_structural_lint(&root).map_err(|error| ApiError::bad_request(error.to_string()))?;
+    return serde_json::to_value(result).map_err(|error| ApiError::internal(error.to_string()));
   }
 
-  let result = run_structural_lint(&root).map_err(|error| ApiError::bad_request(error.to_string()))?;
-  serde_json::to_value(result).map_err(|error| ApiError::internal(error.to_string()))
+  if mode == "semantic" {
+    let provider = load_ingest_provider(state)
+      .await?
+      .ok_or_else(|| ApiError::bad_request("semantic lint requires an openai-compatible provider"))?;
+    let prompt = build_semantic_lint_prompt(&root)
+      .map_err(|error| ApiError::bad_request(error.to_string()))?
+      .unwrap_or_default();
+    let response = provider
+      .complete_text(ProviderTextRequest {
+        system_prompt: "You are a wiki quality analyst.".to_string(),
+        user_prompt: prompt,
+      })
+      .await
+      .map_err(TaskExecutionError::from_provider_error)
+      .map_err(TaskExecutionError::into_api_error)?;
+    let result = parse_semantic_lint_response(&response.text);
+    return serde_json::to_value(result).map_err(|error| ApiError::internal(error.to_string()));
+  }
+
+  Err(ApiError::bad_request("unsupported lint mode"))
 }
 
 async fn run_ingest_source_executor(

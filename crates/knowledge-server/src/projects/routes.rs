@@ -766,7 +766,7 @@ async fn create_lint_task_handler(
   validate_csrf(&headers, &session.csrf_token)?;
 
   let mode = payload.mode.trim();
-  if mode != "structural" {
+  if mode != "structural" && mode != "semantic" {
     return Err(ApiError::bad_request("unsupported lint mode"));
   }
 
