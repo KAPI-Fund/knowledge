@@ -19,6 +19,7 @@ use knowledge_core::ingest::{
 use knowledge_core::project::page_merge::{
   build_page_merge_prompts, finalize_page_merge, prepare_page_merge, PageMergePlan,
 };
+use knowledge_core::project::lint::run_structural_lint;
 use knowledge_core::project::queries::{save_query_page, SaveQueryPageInput, SavedQueryCitation};
 use knowledge_core::project::reviews::{
   build_review_sweep_prompt, parse_review_resolution_ids, resolve_review_ids,
@@ -39,6 +40,7 @@ pub async fn run_task_executor(state: &AppState, task: &TaskRecord) -> Result<()
     "project.import_source" => run_import_source_executor(state, &task).await.map_err(Into::into),
     "project.rescan_sources" => run_rescan_sources_executor(state, &task).await.map_err(Into::into),
     "project.delete_source" => run_delete_source_executor(state, &task).await.map_err(Into::into),
+    "project.run_lint" => run_lint_executor(state, &task).await.map_err(Into::into),
     "project.ingest_source" => run_ingest_source_executor(state, &task).await.map_err(Into::into),
     "project.sweep_reviews" => run_manual_review_sweep_executor(state, &task).await.map_err(Into::into),
     "project.update_review" => run_update_review_executor(state, &task).await.map_err(Into::into),
@@ -264,6 +266,17 @@ async fn run_delete_source_executor(
   let relative_path = read_string(&task.payload, "relativePath")?;
   delete_source(&root, &relative_path).map_err(|error| ApiError::bad_request(error.to_string()))?;
   Ok(json!({}))
+}
+
+async fn run_lint_executor(state: &AppState, task: &TaskRecord) -> Result<Value, ApiError> {
+  let root = project_root_for_id(state, &task.project_id).await?;
+  let mode = read_string(&task.payload, "mode")?;
+  if mode != "structural" {
+    return Err(ApiError::bad_request("unsupported lint mode"));
+  }
+
+  let result = run_structural_lint(&root).map_err(|error| ApiError::bad_request(error.to_string()))?;
+  serde_json::to_value(result).map_err(|error| ApiError::internal(error.to_string()))
 }
 
 async fn run_ingest_source_executor(

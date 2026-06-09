@@ -53,6 +53,7 @@ pub fn router() -> Router<AppState> {
     .route("/api/projects/{project_id}/query-tasks", post(create_query_task_handler))
     .route("/api/projects/{project_id}/query-tasks/{task_id}", get(query_task_detail_handler))
     .route("/api/projects/{project_id}/query-tasks/{task_id}/save", post(save_query_task_handler))
+    .route("/api/projects/{project_id}/lint-tasks", post(create_lint_task_handler))
     .route("/api/projects/{project_id}/ingest", post(ingest_handler))
     .route("/api/projects/{project_id}/query", post(query_handler))
     .route("/api/projects/{project_id}/reviews", get(list_reviews_handler))
@@ -106,6 +107,11 @@ pub struct FileContentRequest {
 pub struct CreateQueryTaskRequest {
   pub query: String,
   pub top_k: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CreateLintTaskRequest {
+  pub mode: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -736,6 +742,62 @@ async fn save_query_task_handler(
       summary: format!("Queued save-to-wiki for {title}"),
       metadata: json!({
         "slug": slug
+      }),
+    },
+  )
+  .await?;
+
+  Ok((
+    StatusCode::ACCEPTED,
+    Json(json!({
+      "taskId": task.id,
+      "status": task.status
+    })),
+  ))
+}
+
+async fn create_lint_task_handler(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Path(project_id): Path<String>,
+  Json(payload): Json<CreateLintTaskRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+  let session = authorized_session(&state, &headers, Some(&project_id)).await?;
+  validate_csrf(&headers, &session.csrf_token)?;
+
+  let mode = payload.mode.trim();
+  if mode != "structural" {
+    return Err(ApiError::bad_request("unsupported lint mode"));
+  }
+
+  let task = create_queued_task(
+    &state,
+    CreateTaskRecord {
+      project_id: project_id.clone(),
+      task_type: "project.run_lint".to_string(),
+      title: format!("Run {mode} lint"),
+      relative_path: None,
+      detail: json!({}),
+      created_by: session.user_id.clone(),
+    },
+    json!({
+      "mode": mode
+    }),
+  )
+  .await?;
+
+  append_audit_log(
+    &state,
+    CreateAuditLog {
+      project_id: Some(project_id),
+      actor_id: session.user_id,
+      action: "lint.enqueued".to_string(),
+      target_type: "lint".to_string(),
+      target_id: mode.to_string(),
+      task_id: Some(task.id.clone()),
+      summary: format!("Queued {mode} lint run"),
+      metadata: json!({
+        "mode": mode
       }),
     },
   )
