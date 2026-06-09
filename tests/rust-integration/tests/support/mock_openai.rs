@@ -13,6 +13,7 @@ use tokio::sync::Mutex;
 #[derive(Debug, Clone)]
 pub enum MockScenario {
     Success,
+    QuerySaveEnrichSuccess,
     SemanticLintSuccess,
     IngestSuccess,
     IngestSanitizeSuccess,
@@ -27,6 +28,11 @@ pub enum MockScenario {
 impl MockScenario {
     pub fn success() -> Self {
         Self::Success
+    }
+
+    #[allow(dead_code)]
+    pub fn query_save_enrich_success() -> Self {
+        Self::QuerySaveEnrichSuccess
     }
 
     #[allow(dead_code)]
@@ -136,6 +142,30 @@ async fn chat_completions(
                   "message": {
                     "role": "assistant",
                     "content": "Attention focuses computation on relevant tokens."
+                  },
+                  "finish_reason": "stop"
+                }
+              ],
+              "usage": {
+                "prompt_tokens": 17,
+                "completion_tokens": 25,
+                "total_tokens": 42
+              }
+            })),
+        ),
+        MockScenario::QuerySaveEnrichSuccess => (
+            StatusCode::OK,
+            Json(json!({
+              "id": "chatcmpl-mock-enrich",
+              "object": "chat.completion",
+              "created": 1_717_171_717,
+              "model": "mock-model",
+              "choices": [
+                {
+                  "index": 0,
+                  "message": {
+                    "role": "assistant",
+                    "content": "{\"links\":[{\"term\":\"Attention\",\"target\":\"attention\"}]}"
                   },
                   "finish_reason": "stop"
                 }

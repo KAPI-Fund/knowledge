@@ -19,6 +19,7 @@ use knowledge_core::ingest::{
 use knowledge_core::project::page_merge::{
   build_page_merge_prompts, finalize_page_merge, prepare_page_merge, PageMergePlan,
 };
+use knowledge_core::project::enrich::{apply_enrich_links, build_enrich_prompt, parse_enrich_response};
 use knowledge_core::project::lint::{
   build_semantic_lint_prompt, parse_semantic_lint_response, run_structural_lint,
 };
@@ -221,6 +222,30 @@ async fn run_save_query_answer_executor(
     },
   )
   .map_err(|error| ApiError::bad_request(error.to_string()))?;
+
+  if let Some(provider) = load_ingest_provider(state).await? {
+    let page_path = root
+      .safe_join(&result.relative_path)
+      .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    let page_content = std::fs::read_to_string(&page_path)
+      .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    let index_content = std::fs::read_to_string(root.as_path().join("wiki/index.md"))
+      .unwrap_or_default();
+    let prompt = build_enrich_prompt(&index_content, &page_content);
+    let response = provider
+      .complete_text(ProviderTextRequest {
+        system_prompt: prompt.system_prompt,
+        user_prompt: prompt.user_prompt,
+      })
+      .await
+      .map_err(TaskExecutionError::from_provider_error)
+      .map_err(TaskExecutionError::into_api_error)?;
+    let enriched = apply_enrich_links(&page_content, &parse_enrich_response(&response.text));
+    if enriched != page_content {
+      std::fs::write(&page_path, enriched)
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    }
+  }
 
   let _ = append_audit_log(
     state,

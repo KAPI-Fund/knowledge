@@ -1,4 +1,5 @@
 pub mod files;
+pub mod enrich;
 pub mod ingest_sanitize;
 pub mod lint;
 pub mod page_merge;

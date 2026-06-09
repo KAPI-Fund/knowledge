@@ -9,6 +9,7 @@ use knowledge_server::config::AppConfig;
 use knowledge_server::tasks::store::{self, CreateTaskInput};
 use knowledge_server::{build_app, tasks};
 use serde_json::{json, Value};
+use support::mock_openai::{MockOpenAiServer, MockScenario};
 use support::{bootstrap_state_without_scheduler, TestEnvironment};
 use tempfile::tempdir;
 use tower::util::ServiceExt;
@@ -64,6 +65,46 @@ async fn save_query_answer_task_writes_query_page_and_updates_index_and_log() {
 
   let log = fs::read_to_string(project_root.join("wiki/log.md")).unwrap();
   assert!(log.contains("query | Attention Notes"));
+}
+
+#[tokio::test]
+async fn save_query_answer_task_enriches_saved_page_with_wikilinks_when_provider_is_configured() {
+  let env = TestEnvironment::start("query-save-enrich").await.unwrap();
+  let mock = MockOpenAiServer::start(MockScenario::query_save_enrich_success())
+    .await
+    .unwrap();
+  let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
+  let state = bootstrap_state_without_scheduler(&config).await.unwrap();
+  let (cookie, csrf) = login_and_csrf(state.clone()).await;
+  let project_root = tempdir().unwrap().path().join("query-save-enrich-project");
+  let project_id = create_project(state.clone(), &cookie, &csrf, project_root.clone()).await;
+  configure_provider(&state, &mock.base_url(), "mock-model").await;
+  let query_task_id = seed_successful_query_task(&state, &project_id).await;
+
+  let response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri(format!("/api/projects/{project_id}/query-tasks/{query_task_id}/save"))
+        .header(header::COOKIE, &cookie)
+        .header("x-csrf-token", &csrf)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(
+          json!({ "title": "Attention Notes" }).to_string(),
+        ))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+  assert_eq!(response.status(), StatusCode::ACCEPTED);
+  let payload = read_json(response.into_body()).await;
+  let task_id = payload.get("taskId").and_then(Value::as_str).unwrap().to_string();
+  wait_for_task_terminal(&state, &task_id).await;
+
+  let page = fs::read_to_string(project_root.join("wiki/queries/attention-notes.md")).unwrap();
+  assert!(page.contains("[[attention]]") || page.contains("[[Attention]]"));
+  assert_eq!(mock.request_count(), 1);
 }
 
 async fn seed_successful_query_task(
@@ -208,4 +249,27 @@ async fn create_project(
 async fn read_json(body: Body) -> Value {
   let bytes = to_bytes(body, usize::MAX).await.unwrap();
   serde_json::from_slice(&bytes).unwrap()
+}
+
+async fn configure_provider(
+  state: &knowledge_server::app::state::AppState,
+  base_url: &str,
+  model: &str,
+) {
+  sqlx::query(
+    "UPDATE system_settings
+     SET provider_mode = $1,
+         provider_base_url = $2,
+         provider_api_key = $3,
+         provider_model = $4,
+         provider_timeout_seconds = $5",
+  )
+  .bind("openai-compatible")
+  .bind(base_url)
+  .bind("test-key")
+  .bind(model)
+  .bind(30_i64)
+  .execute(&state.pool)
+  .await
+  .unwrap();
 }
