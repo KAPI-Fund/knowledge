@@ -10,6 +10,7 @@ use crate::project::source_identity::{
   source_checkpoint_stem, source_file_stem, source_summary_path as canonical_source_summary_path,
   source_summary_slug_from_identity,
 };
+use crate::project::ingest_sanitize::sanitize_ingested_file_content;
 use crate::project::reviews::{maybe_add_review_for_source, save_generated_reviews};
 use crate::project::root::ProjectRoot;
 
@@ -330,8 +331,9 @@ pub fn generate_wiki_from_analysis(
     if let Some(parent) = absolute.parent() {
       fs::create_dir_all(parent)?;
     }
+    let sanitized_content = sanitize_ingested_file_content(&block.content);
     let merged_content = merge_array_fields_into_content(
-      &block.content,
+      &sanitized_content,
       existing_content.as_deref(),
       &["sources", "tags", "related"],
     );

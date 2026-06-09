@@ -164,6 +164,38 @@ async fn ingest_source_uses_provider_two_stage_generation_and_writes_multiple_pa
 }
 
 #[tokio::test]
+async fn ingest_source_sanitizes_dirty_provider_frontmatter_before_write() {
+  let temp = tempdir().unwrap();
+  let _env = TestEnvironment::start("ingest-sanitize").await.unwrap();
+  let mock = MockOpenAiServer::start(MockScenario::ingest_sanitize_success())
+    .await
+    .unwrap();
+  let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let (cookie, csrf) = login_and_csrf(state.clone()).await;
+  let project_root = temp.path().join("ingest-sanitize-project");
+  let project_id = create_project(state.clone(), &cookie, &csrf, project_root.clone()).await;
+  configure_provider(&state, &mock.base_url(), "mock-model").await;
+
+  fs::write(
+    project_root.join("raw/sources/attention.md"),
+    "# Attention\n\nTransformers use attention mechanisms.\n",
+  )
+  .unwrap();
+
+  let task_id = enqueue_ingest(&state, &cookie, &csrf, &project_id).await;
+  wait_for_task_terminal(&state, &task_id).await;
+
+  let summary = fs::read_to_string(project_root.join("wiki/sources/attention.md")).unwrap();
+  assert!(summary.starts_with("---\n"));
+  assert!(!summary.contains("```yaml"));
+  assert!(!summary.contains("frontmatter:\n"));
+  assert!(summary.contains("related: [\"[[attention-mechanism]]\", \"[[attention]]\"]"));
+  assert!(summary.contains("# Attention"));
+  assert_eq!(mock.request_count(), 3);
+}
+
+#[tokio::test]
 async fn ingest_source_skips_provider_when_source_content_hash_is_unchanged() {
   let temp = tempdir().unwrap();
   let _env = TestEnvironment::start("ingest-cache-hit").await.unwrap();

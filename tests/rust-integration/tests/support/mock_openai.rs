@@ -14,6 +14,7 @@ use tokio::sync::Mutex;
 pub enum MockScenario {
     Success,
     IngestSuccess,
+    IngestSanitizeSuccess,
     IngestWithReviewSuccess,
     IngestWithDedicatedReviewStageSuccess,
     IngestWithPageMergeSuccess,
@@ -30,6 +31,11 @@ impl MockScenario {
     #[allow(dead_code)]
     pub fn ingest_success() -> Self {
         Self::IngestSuccess
+    }
+
+    #[allow(dead_code)]
+    pub fn ingest_sanitize_success() -> Self {
+        Self::IngestSanitizeSuccess
     }
 
     #[allow(dead_code)]
@@ -136,6 +142,7 @@ async fn chat_completions(
             })),
         ),
         MockScenario::IngestSuccess
+        | MockScenario::IngestSanitizeSuccess
         | MockScenario::IngestWithReviewSuccess
         | MockScenario::IngestWithDedicatedReviewStageSuccess
         | MockScenario::IngestWithPageMergeSuccess
@@ -159,6 +166,66 @@ async fn chat_completions(
                     "",
                     "## Recommendations",
                     "- Create or update an attention concept page.",
+                ]
+                .join("\n")
+            } else if matches!(scenario, MockScenario::IngestSanitizeSuccess) && request_index == 2 {
+                [
+                    "---FILE: wiki/sources/attention.md---",
+                    "```yaml",
+                    "frontmatter:",
+                    "---",
+                    "type: source",
+                    "title: Attention",
+                    "created: 2026-06-08",
+                    "updated: 2026-06-08",
+                    "tags: [transformers]",
+                    "related: [[attention-mechanism]], [[attention]]",
+                    "sources: [\"attention.md\"]",
+                    "---",
+                    "",
+                    "# Attention",
+                    "",
+                    "Transformers use attention mechanisms.",
+                    "```",
+                    "---END FILE---",
+                    "",
+                    "---FILE: wiki/index.md---",
+                    "# Wiki Index",
+                    "",
+                    "## Entities",
+                    "",
+                    "## Concepts",
+                    "",
+                    "## Sources",
+                    "- [[attention]] - Source summary",
+                    "",
+                    "## Queries",
+                    "",
+                    "## Comparisons",
+                    "",
+                    "## Synthesis",
+                    "---END FILE---",
+                    "",
+                    "---FILE: wiki/log.md---",
+                    "# Research Log",
+                    "",
+                    "## 2026-06-08 ingest | Attention",
+                    "",
+                    "---END FILE---",
+                    "",
+                    "---FILE: wiki/overview.md---",
+                    "---",
+                    "type: overview",
+                    "title: Project Overview",
+                    "tags: []",
+                    "related: []",
+                    "sources: []",
+                    "---",
+                    "",
+                    "# Overview",
+                    "",
+                    "This wiki covers attention and transformer mechanisms.",
+                    "---END FILE---",
                 ]
                 .join("\n")
             } else if request_index == 2 {
