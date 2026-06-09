@@ -6,6 +6,7 @@ pub mod db;
 pub mod http;
 pub mod providers;
 pub mod projects;
+pub mod query;
 pub mod retrieval;
 pub mod settings;
 pub mod tasks;

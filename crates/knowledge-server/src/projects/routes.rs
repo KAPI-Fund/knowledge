@@ -15,6 +15,7 @@ use crate::projects::source_watch::{
   get_source_watch_settings, save_source_watch_settings, scan_project_source_watch,
   SourceWatchSettings,
 };
+use crate::query::{execute_project_query, ExecuteProjectQueryInput};
 use crate::projects::tasks::{
   create_queued_task, get_task, list_tasks, update_task_status,
   CreateTaskRecord,
@@ -27,7 +28,6 @@ use knowledge_core::project::files::{
 };
 use knowledge_core::project::reviews::load_reviews;
 use knowledge_core::project::sources::list_sources;
-use knowledge_core::query::answer_from_results;
 use knowledge_core::search::SearchOptions;
 
 pub fn router() -> Router<AppState> {
@@ -803,17 +803,18 @@ async fn query_handler(
   Json(payload): Json<SearchRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
   let _session = authorized_session(&state, &headers, Some(&project_id)).await?;
-  let root = project_root_for_id(&state, &project_id).await?;
-  let results = search_project_hybrid(
+  let result = execute_project_query(
     &state,
     &project_id,
-    &root,
-    &payload.query,
-    SearchOptions::default(),
+    ExecuteProjectQueryInput {
+      query: payload.query,
+      top_k: payload.top_k,
+      language: None,
+    },
   )
-  .await?;
-  let answer = answer_from_results(&payload.query, &results.results);
-  Ok(Json(json!(answer)))
+  .await
+  .map_err(|error| error.into_api_error())?;
+  Ok(Json(result))
 }
 
 async fn list_reviews_handler(

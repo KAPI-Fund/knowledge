@@ -160,7 +160,7 @@ async fn ingest_source_uses_provider_two_stage_generation_and_writes_multiple_pa
   assert!(concept.contains("# Attention Mechanism"));
   assert!(concept.contains("sources: [\"attention.md\"]"));
 
-  assert_eq!(mock.request_count(), 2);
+  assert_eq!(mock.request_count(), 3);
 }
 
 #[tokio::test]
@@ -183,11 +183,11 @@ async fn ingest_source_skips_provider_when_source_content_hash_is_unchanged() {
 
   let first_task_id = enqueue_ingest(&state, &cookie, &csrf, &project_id).await;
   wait_for_task_terminal(&state, &first_task_id).await;
-  assert_eq!(mock.request_count(), 2);
+  assert_eq!(mock.request_count(), 3);
 
   let second_task_id = enqueue_ingest(&state, &cookie, &csrf, &project_id).await;
   wait_for_task_terminal(&state, &second_task_id).await;
-  assert_eq!(mock.request_count(), 2);
+  assert_eq!(mock.request_count(), 3);
 
   let detail = store::get_task_by_id(&state, &second_task_id).await.unwrap();
   assert_eq!(detail.status, "succeeded");
@@ -195,14 +195,16 @@ async fn ingest_source_skips_provider_when_source_content_hash_is_unchanged() {
 }
 
 #[tokio::test]
-async fn query_api_returns_answer_and_citations_from_search_context() {
+async fn query_api_returns_provider_backed_answer_and_citations_from_search_context() {
   let temp = tempdir().unwrap();
   let _env = TestEnvironment::start("query-answer").await.unwrap();
+  let mock = MockOpenAiServer::start(MockScenario::success()).await.unwrap();
   let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
   let state = bootstrap_state(&config).await.unwrap();
   let (cookie, csrf) = login_and_csrf(state.clone()).await;
   let project_root = temp.path().join("query-project");
   let project_id = create_project(state.clone(), &cookie, &csrf, project_root.clone()).await;
+  configure_provider(&state, &mock.base_url(), "mock-model").await;
 
   fs::write(
     project_root.join("wiki/concepts/attention.md"),
@@ -225,7 +227,10 @@ async fn query_api_returns_answer_and_citations_from_search_context() {
 
   assert_eq!(response.status(), StatusCode::OK);
   let payload = read_json(response.into_body()).await;
-  assert!(payload.get("answer").and_then(Value::as_str).unwrap().contains("Attention"));
+  assert_eq!(
+    payload.get("answer").and_then(Value::as_str),
+    Some("Attention focuses computation on relevant tokens.")
+  );
   assert!(
     payload
       .get("contextSummary")
@@ -233,12 +238,22 @@ async fn query_api_returns_answer_and_citations_from_search_context() {
       .unwrap()
       .contains("wiki/concepts/attention.md")
   );
+  assert_eq!(payload.get("provider").and_then(Value::as_str), Some("openai-compatible"));
+  assert_eq!(payload.get("model").and_then(Value::as_str), Some("mock-model"));
+  assert_eq!(
+    payload
+      .get("usage")
+      .and_then(|value| value.get("totalTokens"))
+      .and_then(Value::as_u64),
+    Some(42)
+  );
   let citations = payload.get("citations").and_then(Value::as_array).unwrap();
   assert_eq!(citations.len(), 1);
   assert_eq!(
     citations[0].get("path").and_then(Value::as_str),
     Some("wiki/concepts/attention.md")
   );
+  assert_eq!(mock.request_count(), 1);
 }
 
 #[tokio::test]

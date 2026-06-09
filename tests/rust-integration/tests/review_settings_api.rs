@@ -310,6 +310,95 @@ async fn provider_generated_review_blocks_are_persisted_during_ingest() {
 }
 
 #[tokio::test]
+async fn ingest_runs_dedicated_review_stage_when_generation_has_no_review_blocks() {
+  let temp = tempdir().unwrap();
+  let _env = TestEnvironment::start("provider-dedicated-review-stage").await.unwrap();
+  let mock =
+    MockOpenAiServer::start(MockScenario::ingest_with_dedicated_review_stage_success())
+      .await
+      .unwrap();
+  let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let (cookie, csrf) = login_and_csrf(state.clone()).await;
+  let project_root = temp.path().join("provider-dedicated-review-project");
+  let project_id = create_project(state.clone(), &cookie, &csrf, project_root.clone()).await;
+  configure_provider(&state, &mock.base_url(), "mock-model").await;
+
+  let import_response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri(format!("/api/projects/{project_id}/sources:import"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::COOKIE, &cookie)
+        .header("x-csrf-token", &csrf)
+        .body(Body::from(
+          json!({
+            "fileName": "attention.md",
+            "contentBase64": "IyBBdHRlbnRpb24KClRyYW5zZm9ybWVycyB1c2UgYXR0ZW50aW9uIG1lY2hhbmlzbXMuCg=="
+          })
+          .to_string(),
+        ))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(import_response.status(), StatusCode::ACCEPTED);
+  let import_payload = read_json(import_response.into_body()).await;
+  wait_for_task_terminal(
+    &state,
+    import_payload.get("taskId").and_then(Value::as_str).unwrap(),
+  )
+  .await;
+
+  let ingest_response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri(format!("/api/projects/{project_id}/ingest"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::COOKIE, &cookie)
+        .header("x-csrf-token", &csrf)
+        .body(Body::from(json!({ "relativePath": "raw/sources/attention.md" }).to_string()))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(ingest_response.status(), StatusCode::ACCEPTED);
+  let ingest_payload = read_json(ingest_response.into_body()).await;
+  wait_for_task_terminal(
+    &state,
+    ingest_payload.get("taskId").and_then(Value::as_str).unwrap(),
+  )
+  .await;
+
+  let reviews_response = build_app(state)
+    .oneshot(
+      Request::builder()
+        .uri(format!("/api/projects/{project_id}/reviews?status=all"))
+        .header(header::COOKIE, &cookie)
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+  assert_eq!(reviews_response.status(), StatusCode::OK);
+  let reviews_payload = read_json(reviews_response.into_body()).await;
+  let reviews = reviews_payload.get("reviews").and_then(Value::as_array).unwrap();
+  assert_eq!(reviews.len(), 1);
+  assert_eq!(
+    reviews[0].get("title").and_then(Value::as_str),
+    Some("Compare attention variants")
+  );
+  assert_eq!(
+    reviews[0].get("type").and_then(Value::as_str),
+    Some("suggestion")
+  );
+  assert_eq!(mock.request_count(), 4);
+}
+
+#[tokio::test]
 async fn final_ingest_triggers_review_sweep_for_existing_missing_page_items() {
   let temp = tempdir().unwrap();
   let _env = TestEnvironment::start("review-sweep").await.unwrap();

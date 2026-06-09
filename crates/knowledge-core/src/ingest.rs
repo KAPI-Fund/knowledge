@@ -15,6 +15,8 @@ use crate::project::root::ProjectRoot;
 
 const FILE_OPENER_PREFIX: &str = "---FILE:";
 const FILE_CLOSER_CANONICAL: &str = "---END FILE---";
+const REVIEW_STAGE_MIN_SIGNAL_CHARS: usize = 10_000;
+const REVIEW_STAGE_MIN_FILE_BLOCKS: usize = 4;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -208,6 +210,71 @@ pub fn build_generation_user_prompt(
   .join("\n")
 }
 
+pub fn build_review_suggestion_prompt(
+  purpose: &str,
+  index: &str,
+  source_identity: &str,
+  analysis: &str,
+  source_context: &str,
+  generation: &str,
+) -> String {
+  [
+    "You are identifying high-value follow-up research items for a personal wiki.",
+    "Do not output chain-of-thought, hidden reasoning, or explanatory preamble.",
+    "",
+    detect_language_hint(source_context),
+    "",
+    "Your job is NOT to generate wiki pages. The wiki page generation already happened.",
+    "Output only REVIEW blocks for unresolved knowledge gaps that deserve human attention or deeper research.",
+    "",
+    "Create REVIEW blocks only for genuinely useful follow-up work:",
+    "- missing-page: an important entity/concept is referenced but still lacks a dedicated page",
+    "- suggestion: a research question, source type, or comparison that would materially improve the wiki",
+    "- contradiction: a conflict or tension that requires user judgment",
+    "- duplicate: likely duplicate pages/names that need user review",
+    "",
+    "Prefer 1-5 high-signal reviews. If there is nothing worth reviewing, output nothing.",
+    "For suggestion and missing-page reviews, include a SEARCH line with 2-3 keyword-rich web search queries separated by ` | `.",
+    "Use only these options: OPTIONS: Create Page | Skip",
+    "",
+    "REVIEW block template:",
+    "```",
+    "---REVIEW: suggestion | Precise title---",
+    "Concise description of the gap and why it matters.",
+    "OPTIONS: Create Page | Skip",
+    "PAGES: wiki/page1.md, wiki/page2.md",
+    "SEARCH: query 1 | query 2 | query 3",
+    "---END REVIEW---",
+    "```",
+    "",
+    "Return REVIEW blocks only. Do not output FILE blocks. Do not wrap the response in markdown fences.",
+    "",
+    &optional_section("## Wiki Purpose", purpose),
+    &optional_section("## Current Wiki Index", index),
+    "",
+    &format!("## Source\n{source_identity}"),
+    "",
+    "## Stage 1 Analysis",
+    analysis,
+    "",
+    "## Source Context",
+    source_context,
+    "",
+    "## Generated Wiki Output",
+    generation,
+  ]
+  .into_iter()
+  .filter(|section| !section.is_empty())
+  .collect::<Vec<_>>()
+  .join("\n")
+}
+
+pub fn should_run_dedicated_review_stage(generation: &str) -> bool {
+  generation.len() >= REVIEW_STAGE_MIN_SIGNAL_CHARS
+    || count_file_blocks(generation) >= REVIEW_STAGE_MIN_FILE_BLOCKS
+    || generation.contains("---REVIEW:")
+}
+
 pub fn check_ingest_cache(
   root: &ProjectRoot,
   source_identity: &str,
@@ -342,6 +409,10 @@ fn fallback_summary_content(source_identity: &str, analysis: &AnalysisResult) ->
       analysis.analysis.trim()
     }
   )
+}
+
+fn count_file_blocks(text: &str) -> usize {
+  text.match_indices(FILE_OPENER_PREFIX).count()
 }
 
 fn update_index(root: &Path, source_name: &str, title: &str) -> Result<(), std::io::Error> {

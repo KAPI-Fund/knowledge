@@ -15,6 +15,7 @@ pub enum MockScenario {
     Success,
     IngestSuccess,
     IngestWithReviewSuccess,
+    IngestWithDedicatedReviewStageSuccess,
     IngestThenSweepLlmSuccess,
     RetryableError,
     InvalidRequest,
@@ -33,6 +34,11 @@ impl MockScenario {
     #[allow(dead_code)]
     pub fn ingest_with_review_success() -> Self {
         Self::IngestWithReviewSuccess
+    }
+
+    #[allow(dead_code)]
+    pub fn ingest_with_dedicated_review_stage_success() -> Self {
+        Self::IngestWithDedicatedReviewStageSuccess
     }
 
     #[allow(dead_code)]
@@ -125,6 +131,7 @@ async fn chat_completions(
         ),
         MockScenario::IngestSuccess
         | MockScenario::IngestWithReviewSuccess
+        | MockScenario::IngestWithDedicatedReviewStageSuccess
         | MockScenario::IngestThenSweepLlmSuccess => {
             let content = if request_index == 1 {
                 [
@@ -228,6 +235,16 @@ async fn chat_completions(
                     } else {
                         ""
                     },
+                ]
+                .join("\n")
+            } else if matches!(scenario, MockScenario::IngestWithDedicatedReviewStageSuccess) {
+                [
+                    "---REVIEW: suggestion | Compare attention variants---",
+                    "Capture the tradeoffs between standard attention and efficient attention variants.",
+                    "OPTIONS: Create Page | Skip",
+                    "PAGES: wiki/concepts/attention-mechanism.md",
+                    "SEARCH: efficient attention variants comparison | flash attention tradeoffs | linear attention benchmark",
+                    "---END REVIEW---",
                 ]
                 .join("\n")
             } else if matches!(scenario, MockScenario::IngestThenSweepLlmSuccess) {

@@ -4,18 +4,17 @@ use time::{Duration, OffsetDateTime};
 
 use crate::app::state::AppState;
 use crate::http::error::ApiError;
-use crate::providers::{
-  OpenAiCompatibleProvider, ProviderError, ProviderQueryRequest, ProviderTextRequest,
-};
+use crate::providers::{OpenAiCompatibleProvider, ProviderError, ProviderTextRequest};
 use crate::projects::audit::{append_audit_log, CreateAuditLog};
 use crate::projects::service::project_root_for_id;
-use crate::retrieval::service::search_project_hybrid;
+use crate::query::{execute_project_query, ExecuteProjectQueryInput, QueryExecutionError};
 use crate::tasks::model::TaskRecord;
 use crate::tasks::store;
 use knowledge_core::ingest::{
   AnalysisResult, analyze_source, build_analysis_prompt, build_analysis_user_prompt,
-  build_generation_prompt, build_generation_user_prompt, check_ingest_cache,
-  generate_wiki_from_analysis, source_summary_path,
+  build_generation_prompt, build_generation_user_prompt, build_review_suggestion_prompt,
+  check_ingest_cache, generate_wiki_from_analysis, should_run_dedicated_review_stage,
+  source_summary_path,
 };
 use knowledge_core::project::queries::{save_query_page, SaveQueryPageInput, SavedQueryCitation};
 use knowledge_core::project::reviews::{
@@ -24,7 +23,6 @@ use knowledge_core::project::reviews::{
 };
 use knowledge_core::project::source_text::read_source_text;
 use knowledge_core::project::sources::{delete_source, import_source, rescan_sources};
-use knowledge_core::search::SearchOptions;
 
 const REVIEW_SWEEP_MAX_PAGES: usize = 300;
 const REVIEW_SWEEP_SYSTEM_PROMPT: &str = "You judge whether stale wiki review items have already been resolved by the current wiki state. Return JSON only.";
@@ -87,38 +85,6 @@ pub async fn run_query_executor(state: &AppState, task: &TaskRecord) -> Result<(
 }
 
 async fn execute_query(state: &AppState, task: &TaskRecord) -> Result<Value, TaskExecutionError> {
-  let (
-    provider_mode,
-    provider_base_url,
-    provider_api_key,
-    provider_model,
-    provider_timeout_seconds,
-  ) = sqlx::query_as::<_, (
-    String,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<i64>,
-  )>(
-    "SELECT provider_mode, provider_base_url, provider_api_key, provider_model, provider_timeout_seconds
-     FROM system_settings
-     WHERE id = 1",
-  )
-  .fetch_one(&state.pool)
-  .await
-  .map_err(ApiError::from)?;
-
-  if provider_mode.trim().is_empty()
-    || provider_base_url.as_deref().unwrap_or("").trim().is_empty()
-    || provider_model.as_deref().unwrap_or("").trim().is_empty()
-  {
-    return Err(ApiError::bad_request("provider configuration is incomplete").into());
-  }
-
-  if provider_mode != "openai-compatible" {
-    return Err(ApiError::bad_request("unsupported provider mode").into());
-  }
-
   let query = read_string(&task.payload, "query")?;
   let top_k = read_i64(&task.payload, "topK").unwrap_or(3).max(1) as usize;
   let language = task
@@ -128,60 +94,17 @@ async fn execute_query(state: &AppState, task: &TaskRecord) -> Result<Value, Tas
     .filter(|value| !value.trim().is_empty())
     .unwrap_or("en")
     .to_string();
-  let root = project_root_for_id(state, &task.project_id).await?;
-  let results = search_project_hybrid(
+  execute_project_query(
     state,
     &task.project_id,
-    &root,
-    &query,
-    SearchOptions {
-      top_k,
-      include_content: false,
+    ExecuteProjectQueryInput {
+      query,
+      top_k: Some(top_k),
+      language: Some(language),
     },
   )
   .await
-  .map_err(|error| ApiError::internal(error.to_string()))?;
-  let selected_results = results.results;
-  let context_blocks = build_context_blocks(&selected_results);
-  let context_summary = build_context_summary(&selected_results);
-  let provider = OpenAiCompatibleProvider::new(
-    provider_base_url.unwrap_or_default(),
-    provider_api_key.unwrap_or_default(),
-    provider_model.clone().unwrap_or_default(),
-    provider_timeout_seconds.unwrap_or(30),
-  );
-  let answer = provider
-    .answer_query(ProviderQueryRequest {
-      query,
-      context_blocks,
-      language,
-    })
-    .await
-    .map_err(TaskExecutionError::from_provider_error)?;
-
-  Ok(json!({
-    "answer": answer.answer,
-    "citations": selected_results
-      .iter()
-      .map(|result| {
-        json!({
-          "path": result.path,
-          "title": result.title,
-          "snippet": result.snippet,
-          "score": result.score
-        })
-      })
-      .collect::<Vec<_>>(),
-    "contextSummary": context_summary,
-    "model": provider_model.unwrap_or_default(),
-    "provider": provider_mode,
-    "usage": {
-      "promptTokens": answer.usage.prompt_tokens,
-      "completionTokens": answer.usage.completion_tokens,
-      "totalTokens": answer.usage.total_tokens
-    },
-    "completedAt": now_rfc3339()?
-  }))
+  .map_err(TaskExecutionError::from)
 }
 
 #[derive(Debug)]
@@ -238,6 +161,20 @@ impl From<ApiError> for TaskExecutionError {
       code: "task_execution_failed".to_string(),
       retryable: false,
       provider_status: None,
+    }
+  }
+}
+
+impl From<QueryExecutionError> for TaskExecutionError {
+  fn from(error: QueryExecutionError) -> Self {
+    let code = error.code().to_string();
+    let retryable = error.retryable();
+    let provider_status = error.provider_status();
+    Self {
+      api_error: error.into_api_error(),
+      code,
+      retryable,
+      provider_status,
     }
   }
 }
@@ -381,6 +318,32 @@ async fn run_ingest_source_executor(
       .await
       .map_err(TaskExecutionError::from_provider_error)
       .map_err(TaskExecutionError::into_api_error)?;
+    let review_suggestions = if should_run_dedicated_review_stage(&generation.text) {
+      provider
+        .complete_text(ProviderTextRequest {
+          system_prompt: build_review_suggestion_prompt(
+            &purpose,
+            &index,
+            &source_identity,
+            &analysis.analysis,
+            &content,
+            &generation.text,
+          ),
+          user_prompt:
+            "Emit only high-value REVIEW blocks for follow-up research or unresolved knowledge gaps. Output nothing if there are none."
+              .to_string(),
+        })
+        .await
+        .map(|response| response.text)
+        .unwrap_or_default()
+    } else {
+      String::new()
+    };
+    let combined_generation = if review_suggestions.trim().is_empty() {
+      generation.text
+    } else {
+      format!("{}\n\n{}", generation.text.trim_end(), review_suggestions.trim())
+    };
 
     generate_wiki_from_analysis(
       &root,
@@ -388,7 +351,7 @@ async fn run_ingest_source_executor(
       source_name,
       &content,
       &analysis,
-      &generation.text,
+      &combined_generation,
     )
     .map_err(|error| ApiError::bad_request(error.to_string()))?
   } else {
@@ -588,34 +551,6 @@ fn read_saved_query_citations(payload: &Value) -> Result<Vec<SavedQueryCitation>
     .collect()
 }
 
-fn build_context_blocks(results: &[knowledge_core::search::SearchResult]) -> Vec<String> {
-  if results.is_empty() {
-    return vec!["No relevant wiki context was retrieved.".to_string()];
-  }
-
-  results
-    .iter()
-    .enumerate()
-    .map(|(index, result)| {
-      format!(
-        "[{}] {}\nTitle: {}\nSnippet: {}",
-        index + 1,
-        result.path,
-        result.title,
-        result.snippet
-      )
-    })
-    .collect()
-}
-
-fn build_context_summary(results: &[knowledge_core::search::SearchResult]) -> String {
-  results
-    .iter()
-    .map(|result| format!("{} ({})", result.path, result.title))
-    .collect::<Vec<_>>()
-    .join("; ")
-}
-
 async fn should_run_review_sweep(
   state: &AppState,
   project_id: &str,
@@ -705,10 +640,4 @@ fn analysis_title_from_text(source_name: &str, source_content: &str, analysis_te
     .filter(|title| !title.is_empty())
     .map(str::to_string)
     .unwrap_or_else(|| analyze_source(source_name, source_content).title)
-}
-
-fn now_rfc3339() -> Result<String, ApiError> {
-  OffsetDateTime::now_utc()
-    .format(&Rfc3339)
-    .map_err(|_| ApiError::internal("failed to format timestamp"))
 }
