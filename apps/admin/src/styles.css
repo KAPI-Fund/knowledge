@@ -143,6 +143,12 @@ body {
   align-items: center;
 }
 
+.action-row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
 .files-layout {
   display: grid;
   gap: 16px;

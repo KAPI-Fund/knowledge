@@ -12,6 +12,7 @@ import { QueryPage } from "../features/query/page";
 import { ReviewsPage } from "../features/reviews/page";
 import { SearchPage } from "../features/search/page";
 import { SettingsPage } from "../features/settings/page";
+import { SourceWatchPage } from "../features/source-watch/page";
 import { SourcesPage } from "../features/sources/page";
 import { TasksPage } from "../features/tasks/page";
 import { UsersPage } from "../features/users/page";
@@ -27,6 +28,7 @@ export function AppRouter() {
           <Route path="projects/:projectId" element={<ProjectDetailPage />} />
           <Route path="projects/:projectId/files" element={<FilesPage />} />
           <Route path="projects/:projectId/sources" element={<SourcesPage />} />
+          <Route path="projects/:projectId/source-watch" element={<SourceWatchPage />} />
           <Route path="projects/:projectId/search" element={<SearchPage />} />
           <Route path="projects/:projectId/query" element={<QueryPage />} />
           <Route path="projects/:projectId/graph" element={<GraphPage />} />

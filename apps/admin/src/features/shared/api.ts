@@ -89,6 +89,27 @@ const sourcesSchema = z.object({
   ),
 });
 
+const sourceWatchSettingsSchema = z.object({
+  enabled: z.boolean(),
+  autoIngest: z.boolean(),
+  path: z.string(),
+  includeExtensions: z.array(z.string()),
+  excludeExtensions: z.array(z.string()),
+  excludeDirs: z.array(z.string()),
+  excludeGlobs: z.array(z.string()),
+  maxFileSizeMb: z.number(),
+  intervalMinutes: z.number(),
+  lastScanAt: z.string().nullable().optional(),
+});
+
+const sourceWatchScanResultSchema = z.object({
+  watchedCount: z.number(),
+  copiedCount: z.number(),
+  deletedCount: z.number(),
+  queuedIngestCount: z.number(),
+  queuedDeleteCount: z.number(),
+});
+
 const reviewsSchema = z.object({
   reviews: z.array(
     z.object({
@@ -281,6 +302,58 @@ export async function createProject(input: { name: string; rootPath: string; csr
 export async function listProjectSources(projectId: string) {
   const response = await apiFetch(`/api/projects/${projectId}/sources`, { method: "GET" }, sourcesSchema);
   return response.sources;
+}
+
+export async function getProjectSourceWatchSettings(projectId: string) {
+  return apiFetch(
+    `/api/projects/${projectId}/source-watch`,
+    { method: "GET" },
+    sourceWatchSettingsSchema,
+  );
+}
+
+export async function updateProjectSourceWatchSettings(input: {
+  projectId: string;
+  enabled: boolean;
+  autoIngest: boolean;
+  path: string;
+  includeExtensions: string[];
+  excludeExtensions: string[];
+  excludeDirs: string[];
+  excludeGlobs: string[];
+  maxFileSizeMb: number;
+  intervalMinutes: number;
+}) {
+  return apiFetch(
+    `/api/projects/${input.projectId}/source-watch`,
+    {
+      method: "PATCH",
+      headers: csrfHeader(),
+      body: JSON.stringify({
+        enabled: input.enabled,
+        autoIngest: input.autoIngest,
+        path: input.path,
+        includeExtensions: input.includeExtensions,
+        excludeExtensions: input.excludeExtensions,
+        excludeDirs: input.excludeDirs,
+        excludeGlobs: input.excludeGlobs,
+        maxFileSizeMb: input.maxFileSizeMb,
+        intervalMinutes: input.intervalMinutes,
+      }),
+    },
+    sourceWatchSettingsSchema,
+  );
+}
+
+export async function scanProjectSourceWatch(projectId: string) {
+  return apiFetch(
+    `/api/projects/${projectId}/source-watch:scan`,
+    {
+      method: "POST",
+      headers: csrfHeader(),
+    },
+    sourceWatchScanResultSchema,
+  );
 }
 
 export async function listProjectFiles(input: {

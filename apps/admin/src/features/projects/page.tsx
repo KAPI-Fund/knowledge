@@ -18,7 +18,7 @@ export function ProjectsPage() {
       return;
     }
 
-    const rootPath = `E:/Projects/Js/knowledge/.worktrees/platform-foundation/.e2e/${demoProjectName}`;
+    const rootPath = buildDemoProjectRootPath(demoProjectName);
     const project = await createProject.mutateAsync({
       name: demoProjectName,
       rootPath,
@@ -47,4 +47,12 @@ export function ProjectsPage() {
       )}
     </section>
   );
+}
+
+function buildDemoProjectRootPath(projectName: string) {
+  const seed = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const root = window.location.hostname === "127.0.0.1"
+    ? "E:/Projects/Js/knowledge/.e2e"
+    : "E:/Projects/Js/knowledge/.worktrees/platform-foundation/.e2e";
+  return `${root}/${projectName}-${seed}`;
 }

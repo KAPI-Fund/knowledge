@@ -11,6 +11,7 @@ import { GraphPage } from "../graph/page";
 import { ReviewsPage } from "../reviews/page";
 import { SearchPage } from "../search/page";
 import { SettingsPage } from "../settings/page";
+import { SourceWatchPage } from "../source-watch/page";
 import { SourcesPage } from "../sources/page";
 
 import { ProjectDetailPage } from "./detail-page";
@@ -76,6 +77,32 @@ vi.mock("../reviews/queries", () => ({
   }),
   useSweepReviewsMutation: () => ({
     mutateAsync: vi.fn(),
+  }),
+}));
+
+vi.mock("../source-watch/queries", () => ({
+  useProjectSourceWatchQuery: () => ({
+    data: {
+      enabled: true,
+      autoIngest: true,
+      path: "E:/watched-sources",
+      includeExtensions: ["md"],
+      excludeExtensions: ["tmp"],
+      excludeDirs: [".git"],
+      excludeGlobs: ["~$*"],
+      maxFileSizeMb: 100,
+      intervalMinutes: 5,
+      lastScanAt: "2026-06-09T00:00:00Z",
+    },
+    isLoading: false,
+  }),
+  useUpdateProjectSourceWatchMutation: () => ({
+    mutateAsync: vi.fn(),
+    isPending: false,
+  }),
+  useScanProjectSourceWatchMutation: () => ({
+    mutateAsync: vi.fn(),
+    isPending: false,
   }),
 }));
 
@@ -215,6 +242,7 @@ describe("project operation pages", () => {
               <Route path="projects/:projectId" element={<ProjectDetailPage />} />
               <Route path="projects/:projectId/files" element={<FilesPage />} />
               <Route path="projects/:projectId/sources" element={<SourcesPage />} />
+              <Route path="projects/:projectId/source-watch" element={<SourceWatchPage />} />
               <Route path="projects/:projectId/search" element={<SearchPage />} />
               <Route path="projects/:projectId/graph" element={<GraphPage />} />
               <Route path="projects/:projectId/reviews" element={<ReviewsPage />} />
@@ -235,6 +263,10 @@ describe("project operation pages", () => {
     await user.click(screen.getByRole("link", { name: "Sources" }));
     expect(await screen.findByRole("heading", { name: "Sources" })).toBeInTheDocument();
     expect(screen.getByText("raw/sources/demo.md")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("link", { name: "Source Watch" }));
+    expect(await screen.findByRole("heading", { name: "Source Watch" })).toBeInTheDocument();
+    expect(screen.getByDisplayValue("E:/watched-sources")).toBeInTheDocument();
 
     await user.click(screen.getByRole("link", { name: "Search" }));
     expect(await screen.findByRole("heading", { name: "Search" })).toBeInTheDocument();

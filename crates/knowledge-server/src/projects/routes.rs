@@ -11,6 +11,10 @@ use crate::auth::session::find_session;
 use crate::http::error::ApiError;
 use crate::projects::audit::{append_audit_log, list_audit_logs, CreateAuditLog};
 use crate::projects::service::{create_project, project_detail, project_root_for_id};
+use crate::projects::source_watch::{
+  get_source_watch_settings, save_source_watch_settings, scan_project_source_watch,
+  SourceWatchSettings,
+};
 use crate::projects::tasks::{
   create_queued_task, get_task, list_tasks, update_task_status,
   CreateTaskRecord,
@@ -32,6 +36,8 @@ pub fn router() -> Router<AppState> {
     .route("/api/projects/{project_id}", get(project_detail_handler))
     .route("/api/projects/{project_id}/members", get(list_project_members))
     .route("/api/projects/{project_id}/sources", get(list_sources_handler))
+    .route("/api/projects/{project_id}/source-watch", get(get_source_watch_handler).patch(update_source_watch_handler))
+    .route("/api/projects/{project_id}/source-watch:scan", post(scan_source_watch_handler))
     .route("/api/projects/{project_id}/sources:import", post(import_source_handler))
     .route("/api/projects/{project_id}/sources:rescan", post(rescan_sources_handler))
     .route("/api/projects/{project_id}/sources/{*relative_path}", delete(delete_source_handler))
@@ -111,6 +117,20 @@ pub struct SaveQueryTaskRequest {
 #[serde(rename_all = "camelCase")]
 pub struct IngestRequest {
   pub relative_path: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateSourceWatchRequest {
+  pub enabled: bool,
+  pub auto_ingest: Option<bool>,
+  pub path: String,
+  pub include_extensions: Option<Vec<String>>,
+  pub exclude_extensions: Option<Vec<String>>,
+  pub exclude_dirs: Option<Vec<String>>,
+  pub exclude_globs: Option<Vec<String>>,
+  pub max_file_size_mb: Option<i64>,
+  pub interval_minutes: Option<i64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -223,6 +243,88 @@ async fn list_sources_handler(
   let root = project_root_for_id(&state, &project_id).await?;
   let sources = list_sources(&root).map_err(|error| ApiError::bad_request(error.to_string()))?;
   Ok(Json(json!({ "sources": sources })))
+}
+
+async fn get_source_watch_handler(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Path(project_id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+  let _session = authorized_session(&state, &headers, Some(&project_id)).await?;
+  Ok(Json(json!(get_source_watch_settings(&state, &project_id).await?)))
+}
+
+async fn update_source_watch_handler(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Path(project_id): Path<String>,
+  Json(payload): Json<UpdateSourceWatchRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+  let session = authorized_session(&state, &headers, Some(&project_id)).await?;
+  validate_csrf(&headers, &session.csrf_token)?;
+
+  let existing = get_source_watch_settings(&state, &project_id).await?;
+  let updated = save_source_watch_settings(
+    &state,
+    &project_id,
+    SourceWatchSettings {
+      enabled: payload.enabled,
+      auto_ingest: payload.auto_ingest.unwrap_or(existing.auto_ingest),
+      path: payload.path,
+      include_extensions: payload.include_extensions.unwrap_or(existing.include_extensions),
+      exclude_extensions: payload.exclude_extensions.unwrap_or(existing.exclude_extensions),
+      exclude_dirs: payload.exclude_dirs.unwrap_or(existing.exclude_dirs),
+      exclude_globs: payload.exclude_globs.unwrap_or(existing.exclude_globs),
+      max_file_size_mb: payload.max_file_size_mb.unwrap_or(existing.max_file_size_mb),
+      interval_minutes: payload.interval_minutes.unwrap_or(existing.interval_minutes),
+      last_scan_at: existing.last_scan_at,
+    },
+  )
+  .await?;
+
+  append_audit_log(
+    &state,
+    CreateAuditLog {
+      project_id: Some(project_id.clone()),
+      actor_id: session.user_id,
+      action: "source.watch.updated".to_string(),
+      target_type: "project".to_string(),
+      target_id: project_id,
+      task_id: None,
+      summary: "Updated source watch settings".to_string(),
+      metadata: json!(updated),
+    },
+  )
+  .await?;
+
+  Ok(Json(json!(updated)))
+}
+
+async fn scan_source_watch_handler(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Path(project_id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+  let session = authorized_session(&state, &headers, Some(&project_id)).await?;
+  validate_csrf(&headers, &session.csrf_token)?;
+  let result = scan_project_source_watch(&state, &project_id).await?;
+
+  append_audit_log(
+    &state,
+    CreateAuditLog {
+      project_id: Some(project_id.clone()),
+      actor_id: session.user_id,
+      action: "source.watch.scanned".to_string(),
+      target_type: "project".to_string(),
+      target_id: project_id,
+      task_id: None,
+      summary: "Scanned source watch path".to_string(),
+      metadata: json!(result),
+    },
+  )
+  .await?;
+
+  Ok(Json(json!(result)))
 }
 
 async fn import_source_handler(
