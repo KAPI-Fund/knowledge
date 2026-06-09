@@ -12,6 +12,7 @@ image.workspace = true
 http.workspace = true
 knowledge-server = { path = "../../crates/knowledge-server" }
 redis.workspace = true
+reqwest.workspace = true
 serde_json.workspace = true
 sqlx.workspace = true
 tempfile.workspace = true

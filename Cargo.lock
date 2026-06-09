@@ -2004,6 +2004,7 @@ dependencies = [
  "image",
  "knowledge-server",
  "redis",
+ "reqwest",
  "serde_json",
  "sqlx",
  "tempfile",
