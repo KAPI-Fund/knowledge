@@ -49,7 +49,7 @@ describe("dashboard page", () => {
     );
 
     expect(screen.getByRole("heading", { name: "Dashboard" })).toBeInTheDocument();
-    expect(screen.getByText("2 projects")).toBeInTheDocument();
+    expect(screen.getByText("2")).toBeInTheDocument();
     expect(screen.getByText("openai-compatible")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "demo-project" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "research-notes" })).toBeInTheDocument();

@@ -735,12 +735,27 @@ export async function updateSystemSettings(input: {
   providerEmbeddingModel?: string;
   providerTimeoutSeconds?: number;
 }) {
+  const payload = {
+    providerMode: input.providerMode,
+    language: input.language,
+    defaultQueryLimit: input.defaultQueryLimit,
+    providerBaseUrl: input.providerBaseUrl,
+    providerModel: input.providerModel,
+    providerEmbeddingModel: input.providerEmbeddingModel,
+    providerTimeoutSeconds: input.providerTimeoutSeconds,
+    ...(input.providerApiKey?.trim()
+      ? {
+          providerApiKey: input.providerApiKey.trim(),
+        }
+      : {}),
+  };
+
   return apiFetch(
     "/api/system/settings",
     {
       method: "PATCH",
       headers: csrfHeader(),
-      body: JSON.stringify(input),
+      body: JSON.stringify(payload),
     },
     settingsSchema,
   );

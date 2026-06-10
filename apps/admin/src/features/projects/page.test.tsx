@@ -31,6 +31,7 @@ describe("ProjectsPage", () => {
     );
 
     expect(screen.getByRole("heading", { name: "Projects" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Create Project" })).toBeVisible();
     expect(screen.getByText("demo-project")).toBeVisible();
   });
 });

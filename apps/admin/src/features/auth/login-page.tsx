@@ -1,6 +1,10 @@
 import { FormEvent, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
+import { Button } from "../../components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
+import { Input } from "../../components/ui/input";
+
 import { useLoginMutation } from "./api";
 
 export function LoginPage() {
@@ -18,22 +22,29 @@ export function LoginPage() {
 
   return (
     <main className="page">
-      <form className="card" onSubmit={handleSubmit}>
-        <h1>Sign in</h1>
-        <label>
-          Username
-          <input value={username} onChange={(event) => setUsername(event.target.value)} />
-        </label>
-        <label>
-          Password
-          <input
-            type="password"
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-          />
-        </label>
-        <button type="submit">Sign in</button>
-      </form>
+      <Card className="w-full max-w-md">
+        <CardHeader>
+          <CardTitle>Sign in</CardTitle>
+          <CardDescription>Authenticate to access project operations and system settings.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form className="grid gap-4" onSubmit={handleSubmit}>
+            <label className="grid gap-2 text-sm font-medium">
+              Username
+              <Input value={username} onChange={(event) => setUsername(event.target.value)} />
+            </label>
+            <label className="grid gap-2 text-sm font-medium">
+              Password
+              <Input
+                type="password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+              />
+            </label>
+            <Button type="submit">Sign in</Button>
+          </form>
+        </CardContent>
+      </Card>
     </main>
   );
 }

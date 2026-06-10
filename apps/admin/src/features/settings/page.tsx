@@ -1,5 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 
+import { PageSection } from "../../components/layout/page-section";
+import { Alert, AlertDescription, AlertTitle } from "../../components/ui/alert";
+import { Button } from "../../components/ui/button";
+import { Card, CardContent } from "../../components/ui/card";
+import { Input } from "../../components/ui/input";
+
 import { useSystemSettingsQuery, useUpdateSystemSettingsMutation } from "./queries";
 
 export function SettingsPage() {
@@ -13,6 +19,7 @@ export function SettingsPage() {
   const [providerModel, setProviderModel] = useState("");
   const [providerEmbeddingModel, setProviderEmbeddingModel] = useState("");
   const [providerTimeoutSeconds, setProviderTimeoutSeconds] = useState("60");
+  const [saveMessage, setSaveMessage] = useState("");
   const [isDirty, setIsDirty] = useState(false);
   const hydratedFrom = useRef<string>("");
 
@@ -44,107 +51,135 @@ export function SettingsPage() {
   ]);
 
   async function handleSave() {
-    await updateSettings.mutateAsync({
+    const payload = {
       providerMode,
       language,
       defaultQueryLimit: Number(defaultQueryLimit),
       providerBaseUrl,
-      providerApiKey,
       providerModel,
       providerEmbeddingModel,
       providerTimeoutSeconds: Number(providerTimeoutSeconds),
-    });
-    setIsDirty(false);
+      ...(providerApiKey.trim()
+        ? {
+            providerApiKey: providerApiKey.trim(),
+          }
+        : {}),
+    };
+
+    try {
+      await updateSettings.mutateAsync(payload);
+      setIsDirty(false);
+      setSaveMessage("Settings saved.");
+      setProviderApiKey("");
+    } catch (error) {
+      setSaveMessage(error instanceof Error ? error.message : "Failed to save settings.");
+    }
   }
 
   return (
-    <section className="stack">
-      <h1>Settings</h1>
-      <label>
-        Provider Mode
-        <input
-          value={providerMode}
-          onChange={(event) => {
-            setIsDirty(true);
-            setProviderMode(event.target.value);
-          }}
-        />
-      </label>
-      <label>
-        Language
-        <input
-          value={language}
-          onChange={(event) => {
-            setIsDirty(true);
-            setLanguage(event.target.value);
-          }}
-        />
-      </label>
-      <label>
-        Default Query Limit
-        <input
-          aria-label="Default Query Limit"
-          value={defaultQueryLimit}
-          onChange={(event) => {
-            setIsDirty(true);
-            setDefaultQueryLimit(event.target.value);
-          }}
-        />
-      </label>
-      <label>
-        Provider Base URL
-        <input
-          value={providerBaseUrl}
-          onChange={(event) => {
-            setIsDirty(true);
-            setProviderBaseUrl(event.target.value);
-          }}
-        />
-      </label>
-      <label>
-        Provider API Key
-        <input
-          value={providerApiKey}
-          onChange={(event) => {
-            setIsDirty(true);
-            setProviderApiKey(event.target.value);
-          }}
-        />
-      </label>
-      {settings.data?.providerApiKeyConfigured ? <span>API key configured</span> : null}
-      <label>
-        Provider Model
-        <input
-          value={providerModel}
-          onChange={(event) => {
-            setIsDirty(true);
-            setProviderModel(event.target.value);
-          }}
-        />
-      </label>
-      <label>
-        Provider Embedding Model
-        <input
-          value={providerEmbeddingModel}
-          onChange={(event) => {
-            setIsDirty(true);
-            setProviderEmbeddingModel(event.target.value);
-          }}
-        />
-      </label>
-      <label>
-        Provider Timeout Seconds
-        <input
-          value={providerTimeoutSeconds}
-          onChange={(event) => {
-            setIsDirty(true);
-            setProviderTimeoutSeconds(event.target.value);
-          }}
-        />
-      </label>
-      <button type="button" onClick={handleSave}>
-        Save Settings
-      </button>
-    </section>
+    <PageSection
+      description="Configure the provider bridge and default system behavior for the admin workbench."
+      title="Settings"
+    >
+      <Card className="panel">
+        <CardContent className="grid gap-4 p-6">
+          <label className="grid gap-2 text-sm font-medium">
+            Provider Mode
+            <Input
+              onChange={(event) => {
+                setIsDirty(true);
+                setProviderMode(event.target.value);
+              }}
+              value={providerMode}
+            />
+          </label>
+          <label className="grid gap-2 text-sm font-medium">
+            Language
+            <Input
+              onChange={(event) => {
+                setIsDirty(true);
+                setLanguage(event.target.value);
+              }}
+              value={language}
+            />
+          </label>
+          <label className="grid gap-2 text-sm font-medium">
+            Default Query Limit
+            <Input
+              aria-label="Default Query Limit"
+              onChange={(event) => {
+                setIsDirty(true);
+                setDefaultQueryLimit(event.target.value);
+              }}
+              value={defaultQueryLimit}
+            />
+          </label>
+          <label className="grid gap-2 text-sm font-medium">
+            Provider Base URL
+            <Input
+              onChange={(event) => {
+                setIsDirty(true);
+                setProviderBaseUrl(event.target.value);
+              }}
+              value={providerBaseUrl}
+            />
+          </label>
+          <label className="grid gap-2 text-sm font-medium">
+            Provider API Key
+            <Input
+              onChange={(event) => {
+                setIsDirty(true);
+                setProviderApiKey(event.target.value);
+              }}
+              placeholder="Leave blank to keep the current key"
+              type="password"
+              value={providerApiKey}
+            />
+          </label>
+          {settings.data?.providerApiKeyConfigured ? (
+            <p className="text-sm text-muted-foreground">API key configured</p>
+          ) : null}
+          <label className="grid gap-2 text-sm font-medium">
+            Provider Model
+            <Input
+              onChange={(event) => {
+                setIsDirty(true);
+                setProviderModel(event.target.value);
+              }}
+              value={providerModel}
+            />
+          </label>
+          <label className="grid gap-2 text-sm font-medium">
+            Provider Embedding Model
+            <Input
+              onChange={(event) => {
+                setIsDirty(true);
+                setProviderEmbeddingModel(event.target.value);
+              }}
+              value={providerEmbeddingModel}
+            />
+          </label>
+          <label className="grid gap-2 text-sm font-medium">
+            Provider Timeout Seconds
+            <Input
+              onChange={(event) => {
+                setIsDirty(true);
+                setProviderTimeoutSeconds(event.target.value);
+              }}
+              value={providerTimeoutSeconds}
+            />
+          </label>
+          {saveMessage ? (
+            <Alert>
+              <AlertTitle>{saveMessage === "Settings saved." ? "Saved" : "Update failed"}</AlertTitle>
+              <AlertDescription>{saveMessage}</AlertDescription>
+            </Alert>
+          ) : null}
+          <div className="flex justify-end">
+            <Button onClick={handleSave}>Save Settings</Button>
+          </div>
+        </CardContent>
+      </Card>
+    </PageSection>
   );
 }
