@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { z } from "zod";
 
 import { apiFetch } from "@knowledge/api-client";
+import { normalizeAppError } from "../../lib/app-error";
 
 const meSchema = z.object({
   user: z
@@ -17,8 +18,12 @@ const meSchema = z.object({
 async function getSession() {
   try {
     return await apiFetch("/api/auth/me", { method: "GET" }, meSchema);
-  } catch {
-    return { user: null };
+  } catch (error) {
+    const normalized = normalizeAppError(error);
+    if (normalized.kind === "auth") {
+      return { user: null };
+    }
+    throw error;
   }
 }
 

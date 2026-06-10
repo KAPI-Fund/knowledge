@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
-import { apiFetch } from "./http";
+import { ApiClientError, apiFetch } from "./http";
 
 describe("apiFetch", () => {
   afterEach(() => {
@@ -10,7 +10,9 @@ describe("apiFetch", () => {
 
   it("preserves the default json content type when custom headers are provided", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
       status: 200,
+      statusText: "OK",
       text: async () => JSON.stringify({ ok: true }),
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -36,7 +38,9 @@ describe("apiFetch", () => {
   it("parses empty successful responses without calling json", async () => {
     const jsonMock = vi.fn();
     const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
       status: 204,
+      statusText: "No Content",
       headers: new Headers(),
       json: jsonMock,
       text: async () => "",
@@ -53,5 +57,25 @@ describe("apiFetch", () => {
 
     expect(payload).toBeUndefined();
     expect(jsonMock).not.toHaveBeenCalled();
+  });
+
+  it("throws ApiClientError for non-2xx JSON responses", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 400,
+        statusText: "Bad Request",
+        text: async () => JSON.stringify({ error: "unknown project" }),
+      }),
+    );
+
+    await expect(
+      apiFetch("/api/projects/missing", { method: "GET" }, z.object({ ok: z.boolean() })),
+    ).rejects.toMatchObject({
+      name: "ApiClientError",
+      status: 400,
+      message: "unknown project",
+    } satisfies Partial<ApiClientError>);
   });
 });
