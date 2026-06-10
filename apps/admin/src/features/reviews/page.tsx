@@ -1,7 +1,15 @@
 import { useState } from "react";
 import { useParams } from "react-router-dom";
 
-import { ProjectNav } from "../projects/project-nav";
+import { EmptyState } from "@/components/layout/empty-state";
+import { PageSection } from "@/components/layout/page-section";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Select } from "@/components/ui/select";
+import { StatusBadge } from "@/components/layout/status-badge";
+
 import { ProjectFileLink } from "../shared/file-links";
 import { useProjectReviewsQuery, useSweepReviewsMutation, useUpdateReviewMutation } from "./queries";
 
@@ -19,91 +27,126 @@ export function ReviewsPage() {
   const updateReview = useUpdateReviewMutation();
 
   return (
-    <section className="stack">
-      <h1>Reviews</h1>
-      <ProjectNav projectId={projectId} />
-      <div className="card stack compact panel">
-        <label>
-          Status
-          <select value={status} onChange={(event) => setStatus(event.target.value)}>
-            <option value="unresolved">unresolved</option>
-            <option value="resolved">resolved</option>
-            <option value="all">all</option>
-          </select>
-        </label>
-        <label>
-          Type
-          <input value={itemType} onChange={(event) => setItemType(event.target.value)} />
-        </label>
-        <label>
-          Limit
-          <input value={limit} onChange={(event) => setLimit(event.target.value)} />
-        </label>
-        <button
-          type="button"
-          onClick={() => sweepReviews.mutateAsync({ projectId })}
-        >
+    <PageSection
+      actions={
+        <Button disabled={sweepReviews.isPending} onClick={() => sweepReviews.mutateAsync({ projectId })}>
           Sweep Reviews
-        </button>
-      </div>
-      <ul className="results-list">
-        {reviews.data?.map((review) => (
-          <li key={review.id} className="card stack compact panel">
-            <div>
-              <strong>{review.title}</strong> <span>{review.status}</span>
-            </div>
-            {review.type ? <span>{review.type}</span> : null}
-            {review.description ? <p>{review.description}</p> : null}
-            {review.sourcePath ? (
-              <ProjectFileLink projectId={projectId} path={review.sourcePath} />
-            ) : null}
-            {review.affectedPages?.length ? (
-              <div className="stack compact">
-                <strong>Affected Pages</strong>
-                <ul>
-                  {review.affectedPages.map((page) => (
-                    <li key={page}>
-                      <ProjectFileLink projectId={projectId} path={page} />
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ) : null}
-            {review.searchQueries?.length ? (
-              <div className="stack compact">
-                <strong>Search Queries</strong>
-                <ul>
-                  {review.searchQueries.map((query) => (
-                    <li key={query}>{query}</li>
-                  ))}
-                </ul>
-              </div>
-            ) : null}
-            {review.options?.length ? (
-              <div className="stack compact">
-                <strong>Options</strong>
-                <ul>
-                  {review.options.map((option) => (
-                    <li key={`${review.id}-${option.action}`}>{option.label}</li>
-                  ))}
-                </ul>
-              </div>
-            ) : null}
-            <button
-              type="button"
-              onClick={() =>
-                updateReview.mutateAsync({
-                  projectId,
-                  reviewId: review.id,
-                  status: "resolved",
-                })
-              }
-            >
-              Resolve
-            </button>
-          </li>
-        ))}
-      </ul>
-    </section>
+        </Button>
+      }
+      description="Filter unresolved review items, inspect affected pages, and resolve outcomes."
+      title="Reviews"
+    >
+      <Card>
+        <CardHeader>
+          <CardTitle>Review Filters</CardTitle>
+          <CardDescription>Scope review items by status, type, and page limit.</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-4 md:grid-cols-[180px_minmax(0,1fr)_160px] md:items-end">
+          <label className="grid gap-2 text-sm font-medium">
+            Status
+            <Select aria-label="Status" onChange={(event) => setStatus(event.target.value)} value={status}>
+              <option value="unresolved">unresolved</option>
+              <option value="resolved">resolved</option>
+              <option value="all">all</option>
+            </Select>
+          </label>
+          <label className="grid gap-2 text-sm font-medium">
+            Type
+            <Input aria-label="Type" onChange={(event) => setItemType(event.target.value)} value={itemType} />
+          </label>
+          <label className="grid gap-2 text-sm font-medium">
+            Limit
+            <Input aria-label="Limit" onChange={(event) => setLimit(event.target.value)} value={limit} />
+          </label>
+        </CardContent>
+      </Card>
+
+      {reviews.data?.length ? (
+        <div className="grid gap-4">
+          {reviews.data.map((review) => (
+            <Card key={review.id}>
+              <CardHeader>
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="space-y-1">
+                    <CardTitle>{review.title}</CardTitle>
+                    <CardDescription>{review.description ?? "No description provided."}</CardDescription>
+                  </div>
+                  <StatusBadge value={review.status} />
+                </div>
+              </CardHeader>
+              <CardContent className="grid gap-4">
+                <div className="flex flex-wrap gap-2">
+                  {review.type ? <Badge variant="outline">{review.type}</Badge> : null}
+                </div>
+                {review.sourcePath ? (
+                  <ProjectFileLink projectId={projectId} path={review.sourcePath} />
+                ) : null}
+                {review.affectedPages?.length ? (
+                  <div className="grid gap-2">
+                    <p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+                      Affected Pages
+                    </p>
+                    <ul className="grid gap-2">
+                      {review.affectedPages.map((page) => (
+                        <li key={page} className="text-sm">
+                          <ProjectFileLink projectId={projectId} path={page} />
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+                {review.searchQueries?.length ? (
+                  <div className="grid gap-2">
+                    <p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+                      Search Queries
+                    </p>
+                    <ul className="flex flex-wrap gap-2">
+                      {review.searchQueries.map((query) => (
+                        <li key={query}>
+                          <Badge variant="outline">{query}</Badge>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+                {review.options?.length ? (
+                  <div className="grid gap-2">
+                    <p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+                      Options
+                    </p>
+                    <ul className="flex flex-wrap gap-2">
+                      {review.options.map((option) => (
+                        <li key={`${review.id}-${option.action}`}>
+                          <Badge variant="secondary">{option.label}</Badge>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+                <div className="flex justify-start">
+                  <Button
+                    onClick={() =>
+                      updateReview.mutateAsync({
+                        projectId,
+                        reviewId: review.id,
+                        status: "resolved",
+                      })
+                    }
+                    variant="outline"
+                  >
+                    Resolve
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      ) : (
+        <EmptyState
+          description="Review items will appear after the backend runs review generation."
+          title="No reviews"
+        />
+      )}
+    </PageSection>
   );
 }

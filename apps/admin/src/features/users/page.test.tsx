@@ -37,8 +37,8 @@ describe("users page", () => {
 
     expect(screen.getByRole("heading", { name: "Users" })).toBeInTheDocument();
     expect(screen.getByText("2 users")).toBeInTheDocument();
-    expect(screen.getByText("admin", { selector: "strong" })).toBeInTheDocument();
-    expect(screen.getByText("admin", { selector: "span" })).toBeInTheDocument();
+    expect(screen.getAllByRole("cell", { name: "admin" })).toHaveLength(2);
+    expect(screen.getByRole("cell", { name: "editor" })).toBeInTheDocument();
     expect(screen.getByText("member")).toBeInTheDocument();
   });
 });

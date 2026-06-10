@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 
@@ -103,6 +104,7 @@ describe("AppRoutes", () => {
   });
 
   it("shows project workspace chrome on /projects/:projectId routes", async () => {
+    const user = userEvent.setup();
     mockUseSession.mockReturnValue({
       user: { id: "user-1", username: "admin", role: "admin" },
       isLoading: false,
@@ -136,5 +138,11 @@ describe("AppRoutes", () => {
     expect(await screen.findByRole("tab", { name: /files/i })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "demo-project" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Files Page" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: "Reviews" }));
+    expect(await screen.findByRole("heading", { name: "Reviews Page" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: "Audit" }));
+    expect(await screen.findByRole("heading", { name: "Audit Page" })).toBeInTheDocument();
   });
 });
