@@ -1,0 +1,166 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "@fontsource-variable/geist";
+
+@theme inline {
+  --font-sans: "Geist Variable", sans-serif;
+  --font-heading: var(--font-sans);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --radius-sm: calc(var(--radius) * 0.65);
+  --radius-md: calc(var(--radius) * 0.85);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.35);
+}
+
+:root {
+  --background: oklch(0.985 0.002 250);
+  --foreground: oklch(0.188 0.016 257);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.188 0.016 257);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.188 0.016 257);
+  --primary: oklch(0.32 0.046 256);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.958 0.004 248);
+  --secondary-foreground: oklch(0.228 0.016 257);
+  --muted: oklch(0.965 0.004 248);
+  --muted-foreground: oklch(0.53 0.015 257);
+  --accent: oklch(0.95 0.02 205);
+  --accent-foreground: oklch(0.24 0.024 245);
+  --destructive: oklch(0.61 0.22 27);
+  --border: oklch(0.91 0.008 255);
+  --input: oklch(0.91 0.008 255);
+  --ring: oklch(0.62 0.032 245);
+  --radius: 0.875rem;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  html,
+  body,
+  #root {
+    min-height: 100%;
+  }
+
+  html {
+    font-family: var(--font-sans);
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    margin: 0;
+    background-image:
+      radial-gradient(circle at top right, oklch(0.95 0.03 220 / 80%), transparent 32%),
+      linear-gradient(180deg, oklch(0.99 0.002 250), oklch(0.97 0.004 250));
+  }
+}
+
+@layer components {
+  .page {
+    @apply min-h-screen grid place-items-center px-6 py-10;
+  }
+
+  .shell {
+    @apply min-h-screen bg-transparent;
+  }
+
+  .sidebar {
+    @apply flex flex-col gap-2;
+  }
+
+  .content {
+    @apply flex-1;
+  }
+
+  .stack {
+    @apply grid gap-4;
+  }
+
+  .stack.compact {
+    @apply gap-2;
+  }
+
+  .stats {
+    @apply flex flex-wrap gap-3 text-sm text-muted-foreground;
+  }
+
+  .subnav {
+    @apply flex flex-wrap gap-2;
+  }
+
+  .panel {
+    @apply max-w-5xl;
+  }
+
+  .results-list {
+    @apply grid gap-4 list-none p-0 m-0;
+  }
+
+  .checkbox-row {
+    @apply flex items-center gap-3;
+  }
+
+  .action-row {
+    @apply flex flex-wrap gap-3;
+  }
+
+  .files-layout {
+    @apply grid gap-6 xl:grid-cols-[320px_minmax(0,1fr)];
+  }
+
+  .graph-layout {
+    @apply grid gap-6 xl:grid-cols-[minmax(0,1.3fr)_360px];
+  }
+
+  .tree-list {
+    @apply grid gap-2 list-none p-0 m-0;
+  }
+
+  .tree-list.nested {
+    @apply ml-4 mt-2 border-l border-border pl-4;
+  }
+
+  .tree-item {
+    @apply grid gap-2;
+  }
+
+  .tree-label {
+    @apply text-sm text-muted-foreground;
+  }
+
+  .tree-button {
+    @apply justify-start;
+  }
+
+  .preview-pane {
+    @apply rounded-xl border bg-muted/50 p-4 text-sm whitespace-pre-wrap break-words overflow-auto;
+  }
+
+  .ghost-button {
+    @apply inline-flex cursor-pointer items-center rounded-lg bg-transparent px-2 py-1 text-sm text-primary hover:bg-accent hover:text-accent-foreground;
+  }
+
+  .inline-link {
+    @apply text-primary underline-offset-4 hover:underline break-all;
+  }
+}
