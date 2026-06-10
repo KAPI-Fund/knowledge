@@ -5,6 +5,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 
 import { AppShell } from "../../components/layout/app-shell";
+import { ProjectWorkspaceLayout } from "../../components/layout/project-workspace-layout";
 import { AuditPage } from "../audit/page";
 import { FilesPage } from "../files/page";
 import { GraphPage } from "../graph/page";
@@ -224,15 +225,17 @@ describe("project operations routing", () => {
           <Routes>
             <Route path="/" element={<AppShell />}>
               <Route path="projects" element={<ProjectsPage />} />
-              <Route path="projects/:projectId" element={<ProjectDetailPage />} />
-              <Route path="projects/:projectId/files" element={<FilesPage />} />
-              <Route path="projects/:projectId/sources" element={<SourcesPage />} />
-              <Route path="projects/:projectId/source-watch" element={<SourceWatchPage />} />
-              <Route path="projects/:projectId/search" element={<SearchPage />} />
-              <Route path="projects/:projectId/graph" element={<GraphPage />} />
-              <Route path="projects/:projectId/tasks" element={<TasksPage />} />
-              <Route path="projects/:projectId/reviews" element={<ReviewsPage />} />
-              <Route path="projects/:projectId/audit" element={<AuditPage />} />
+              <Route path="projects/:projectId" element={<ProjectWorkspaceLayout />}>
+                <Route index element={<ProjectDetailPage />} />
+                <Route path="files" element={<FilesPage />} />
+                <Route path="sources" element={<SourcesPage />} />
+                <Route path="source-watch" element={<SourceWatchPage />} />
+                <Route path="search" element={<SearchPage />} />
+                <Route path="graph" element={<GraphPage />} />
+                <Route path="tasks" element={<TasksPage />} />
+                <Route path="reviews" element={<ReviewsPage />} />
+                <Route path="audit" element={<AuditPage />} />
+              </Route>
               <Route path="settings" element={<SettingsPage />} />
             </Route>
           </Routes>
@@ -246,6 +249,7 @@ describe("project operations routing", () => {
     expect(screen.getByText("2 sources")).toBeInTheDocument();
     expect(screen.getByText("3 tasks")).toBeInTheDocument();
     expect(screen.getByText("1 reviews")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Overview" })).toBeInTheDocument();
     expect(screen.getByText("Recent Sources")).toBeInTheDocument();
     expect(screen.getByText("raw/sources/demo.md")).toBeInTheDocument();
     expect(screen.getByText("Recent Tasks")).toBeInTheDocument();
@@ -254,9 +258,9 @@ describe("project operations routing", () => {
     expect(screen.getByText("Review demo.md")).toBeInTheDocument();
     expect(screen.getByText("Recent Audit")).toBeInTheDocument();
     expect(screen.getByText("Created project demo-project")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Tasks" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Tasks" })).toBeInTheDocument();
 
-    await user.click(screen.getByRole("link", { name: "Tasks" }));
+    await user.click(screen.getByRole("tab", { name: "Tasks" }));
     expect(await screen.findByRole("heading", { name: "Tasks" })).toBeInTheDocument();
     expect(screen.getAllByText("Imported note.md").length).toBeGreaterThan(0);
   });

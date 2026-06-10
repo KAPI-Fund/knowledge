@@ -1,10 +1,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 
 import { AppShell } from "../../components/layout/app-shell";
+import { ProjectWorkspaceLayout } from "../../components/layout/project-workspace-layout";
 import { AuditPage } from "../audit/page";
 import { FilesPage } from "../files/page";
 import { GraphPage } from "../graph/page";
@@ -40,6 +41,7 @@ vi.mock("../sources/queries", () => ({
   }),
   useImportSourceMutation: () => ({
     mutateAsync: vi.fn(),
+    isPending: false,
   }),
   useIngestSourceMutation: () => ({
     mutateAsync: vi.fn(),
@@ -229,54 +231,70 @@ vi.mock("../graph/queries", () => ({
   }),
 }));
 
+function renderProjectRoute(initialEntry: string) {
+  const queryClient = new QueryClient();
+
+  render(
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter initialEntries={[initialEntry]}>
+        <Routes>
+          <Route path="/" element={<AppShell />}>
+            <Route path="projects/:projectId" element={<ProjectWorkspaceLayout />}>
+              <Route index element={<ProjectDetailPage />} />
+              <Route path="files" element={<FilesPage />} />
+              <Route path="sources" element={<SourcesPage />} />
+              <Route path="source-watch" element={<SourceWatchPage />} />
+              <Route path="search" element={<SearchPage />} />
+              <Route path="graph" element={<GraphPage />} />
+              <Route path="reviews" element={<ReviewsPage />} />
+              <Route path="audit" element={<AuditPage />} />
+            </Route>
+            <Route path="settings" element={<SettingsPage />} />
+          </Route>
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+}
+
+function workspaceProjectNav() {
+  return screen.getAllByRole("navigation", { name: "Project navigation" })[0];
+}
+
 describe("project operation pages", () => {
   it("navigates to files, sources, search, graph, reviews, audit, and settings pages", async () => {
     const user = userEvent.setup();
-    const queryClient = new QueryClient();
 
-    render(
-      <QueryClientProvider client={queryClient}>
-        <MemoryRouter initialEntries={["/projects/project-1"]}>
-          <Routes>
-            <Route path="/" element={<AppShell />}>
-              <Route path="projects/:projectId" element={<ProjectDetailPage />} />
-              <Route path="projects/:projectId/files" element={<FilesPage />} />
-              <Route path="projects/:projectId/sources" element={<SourcesPage />} />
-              <Route path="projects/:projectId/source-watch" element={<SourceWatchPage />} />
-              <Route path="projects/:projectId/search" element={<SearchPage />} />
-              <Route path="projects/:projectId/graph" element={<GraphPage />} />
-              <Route path="projects/:projectId/reviews" element={<ReviewsPage />} />
-              <Route path="projects/:projectId/audit" element={<AuditPage />} />
-              <Route path="settings" element={<SettingsPage />} />
-            </Route>
-          </Routes>
-        </MemoryRouter>
-      </QueryClientProvider>,
-    );
+    renderProjectRoute("/projects/project-1");
 
-    await user.click(screen.getByRole("link", { name: "Files" }));
+    expect(await screen.findByRole("heading", { name: "demo-project" })).toBeInTheDocument();
+    expect(within(workspaceProjectNav()).getByRole("tab", { name: "Files" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Overview" })).toBeInTheDocument();
+
+    await user.click(within(workspaceProjectNav()).getByRole("tab", { name: "Files" }));
     expect(await screen.findByRole("heading", { name: "Files" })).toBeInTheDocument();
     expect(screen.getAllByText("demo.md").length).toBeGreaterThan(0);
     await user.click(screen.getByRole("button", { name: "demo.md" }));
     expect(screen.getByText("preview:raw/sources/demo.md")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("link", { name: "Sources" }));
+    await user.click(within(workspaceProjectNav()).getByRole("tab", { name: "Sources" }));
     expect(await screen.findByRole("heading", { name: "Sources" })).toBeInTheDocument();
     expect(screen.getByText("raw/sources/demo.md")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("link", { name: "Source Watch" }));
+    await user.click(within(workspaceProjectNav()).getByRole("tab", { name: "Source Watch" }));
     expect(await screen.findByRole("heading", { name: "Source Watch" })).toBeInTheDocument();
     expect(screen.getByDisplayValue("E:/watched-sources")).toBeInTheDocument();
+    expect(screen.getByLabelText(/automatically enqueue ingest tasks/i)).toBeInTheDocument();
 
-    await user.click(screen.getByRole("link", { name: "Search" }));
+    await user.click(within(workspaceProjectNav()).getByRole("tab", { name: "Search" }));
     expect(await screen.findByRole("heading", { name: "Search" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Run Search" })).toBeInTheDocument();
 
-    await user.click(screen.getByRole("link", { name: "Graph" }));
+    await user.click(within(workspaceProjectNav()).getByRole("tab", { name: "Graph" }));
     expect(await screen.findByRole("heading", { name: "Graph" })).toBeInTheDocument();
     expect(screen.getByText("Demo")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("link", { name: "Reviews" }));
+    await user.click(within(workspaceProjectNav()).getByRole("tab", { name: "Reviews" }));
     expect(await screen.findByRole("heading", { name: "Reviews" })).toBeInTheDocument();
     expect(screen.getByText("Review demo.md")).toBeInTheDocument();
     expect(screen.getByText("missing-page")).toBeInTheDocument();
@@ -289,7 +307,7 @@ describe("project operation pages", () => {
     expect(await screen.findByRole("heading", { name: "Files" })).toBeInTheDocument();
     expect(screen.getByText("preview:wiki/evaluation.md")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("link", { name: "Audit" }));
+    await user.click(within(workspaceProjectNav()).getByRole("tab", { name: "Audit" }));
     expect(await screen.findByRole("heading", { name: "Audit" })).toBeInTheDocument();
     expect(screen.getByText("Created project demo-project")).toBeInTheDocument();
 

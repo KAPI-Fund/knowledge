@@ -1,7 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 
-import { ProjectNav } from "../projects/project-nav";
+import { PageSection } from "@/components/layout/page-section";
+import { RouteStatePane } from "@/components/layout/route-state-pane";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { normalizeAppError } from "@/lib/app-error";
 
 import {
   useProjectSourceWatchQuery,
@@ -71,84 +76,117 @@ export function SourceWatchPage() {
     );
   }
 
+  if (settings.isLoading) {
+    return <RouteStatePane description="Loading source watch settings." state="loading" title="Source Watch" />;
+  }
+
+  if (settings.error) {
+    const normalized = normalizeAppError(settings.error);
+    return <RouteStatePane description={normalized.message} state="failed" title="Source Watch unavailable" />;
+  }
+
   return (
-    <section className="stack">
-      <h1>Source Watch</h1>
-      <ProjectNav projectId={projectId} />
-
-      <div className="card stack panel">
-        <label className="checkbox-row">
-          <input
-            type="checkbox"
-            checked={enabled}
-            onChange={(event) => setEnabled(event.target.checked)}
-          />
-          <span>Enable source watch</span>
-        </label>
-
-        <label className="checkbox-row">
-          <input
-            type="checkbox"
-            checked={autoIngest}
-            onChange={(event) => setAutoIngest(event.target.checked)}
-          />
-          <span>Automatically enqueue ingest tasks</span>
-        </label>
-
-        <label>
-          Watch Path
-          <input value={path} onChange={(event) => setPath(event.target.value)} />
-        </label>
-
-        <label>
-          Include Extensions
-          <input
-            value={includeExtensions}
-            onChange={(event) => setIncludeExtensions(event.target.value)}
-          />
-        </label>
-
-        <label>
-          Exclude Extensions
-          <input
-            value={excludeExtensions}
-            onChange={(event) => setExcludeExtensions(event.target.value)}
-          />
-        </label>
-
-        <label>
-          Exclude Dirs
-          <input value={excludeDirs} onChange={(event) => setExcludeDirs(event.target.value)} />
-        </label>
-
-        <label>
-          Exclude Globs
-          <input value={excludeGlobs} onChange={(event) => setExcludeGlobs(event.target.value)} />
-        </label>
-
-        <label>
-          Max File Size MB
-          <input value={maxFileSizeMb} onChange={(event) => setMaxFileSizeMb(event.target.value)} />
-        </label>
-
-        <label>
-          Interval Minutes
-          <input value={intervalMinutes} onChange={(event) => setIntervalMinutes(event.target.value)} />
-        </label>
-
-        {settings.data?.lastScanAt ? <p>Last scan: {settings.data.lastScanAt}</p> : null}
-        {statusMessage ? <p aria-live="polite">{statusMessage}</p> : null}
-
-        <div className="action-row">
-          <button type="button" onClick={handleSave} disabled={updateSettings.isPending}>
-            Save Source Watch
-          </button>
-          <button type="button" onClick={handleScanNow} disabled={scanSourceWatch.isPending}>
+    <PageSection
+      actions={
+        <>
+          <Button
+            disabled={scanSourceWatch.isPending}
+            onClick={handleScanNow}
+            variant="outline"
+          >
             Scan Now
-          </button>
-        </div>
-      </div>
-    </section>
+          </Button>
+          <Button disabled={updateSettings.isPending} onClick={handleSave}>
+            Save Source Watch
+          </Button>
+        </>
+      }
+      description="Configure background syncing from a watched source directory."
+      title="Source Watch"
+    >
+      <Card>
+        <CardHeader>
+          <CardTitle>Watcher Settings</CardTitle>
+          <CardDescription>Mirror upstream source folders and optionally queue ingest work.</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-4 lg:grid-cols-2">
+          <label className="flex items-center gap-3 rounded-xl border border-border/70 px-4 py-3 text-sm font-medium">
+            <input
+              checked={enabled}
+              onChange={(event) => setEnabled(event.target.checked)}
+              type="checkbox"
+            />
+            Enable source watch
+          </label>
+
+          <label className="flex items-center gap-3 rounded-xl border border-border/70 px-4 py-3 text-sm font-medium">
+            <input
+              checked={autoIngest}
+              onChange={(event) => setAutoIngest(event.target.checked)}
+              type="checkbox"
+            />
+            Automatically enqueue ingest tasks
+          </label>
+
+          <label className="grid gap-2 text-sm font-medium lg:col-span-2">
+            Watch Path
+            <Input onChange={(event) => setPath(event.target.value)} value={path} />
+          </label>
+
+          <label className="grid gap-2 text-sm font-medium">
+            Include Extensions
+            <Input
+              onChange={(event) => setIncludeExtensions(event.target.value)}
+              value={includeExtensions}
+            />
+          </label>
+
+          <label className="grid gap-2 text-sm font-medium">
+            Exclude Extensions
+            <Input
+              onChange={(event) => setExcludeExtensions(event.target.value)}
+              value={excludeExtensions}
+            />
+          </label>
+
+          <label className="grid gap-2 text-sm font-medium">
+            Exclude Dirs
+            <Input onChange={(event) => setExcludeDirs(event.target.value)} value={excludeDirs} />
+          </label>
+
+          <label className="grid gap-2 text-sm font-medium">
+            Exclude Globs
+            <Input onChange={(event) => setExcludeGlobs(event.target.value)} value={excludeGlobs} />
+          </label>
+
+          <label className="grid gap-2 text-sm font-medium">
+            Max File Size MB
+            <Input onChange={(event) => setMaxFileSizeMb(event.target.value)} value={maxFileSizeMb} />
+          </label>
+
+          <label className="grid gap-2 text-sm font-medium">
+            Interval Minutes
+            <Input onChange={(event) => setIntervalMinutes(event.target.value)} value={intervalMinutes} />
+          </label>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Watcher Status</CardTitle>
+          <CardDescription>Most recent scan metadata returned by the backend.</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-3 text-sm">
+          <div className="grid gap-1">
+            <p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Last Scan</p>
+            <p>{settings.data?.lastScanAt ?? "No scans recorded yet."}</p>
+          </div>
+          {statusMessage ? (
+            <p aria-live="polite">{statusMessage}</p>
+          ) : null}
+        </CardContent>
+      </Card>
+    </PageSection>
   );
 }
 

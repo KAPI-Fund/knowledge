@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -214,6 +214,7 @@ describe("operations actions", () => {
       </QueryClientProvider>,
     );
 
+    await user.click(screen.getByRole("tab", { name: "Text Import" }));
     await user.type(screen.getByLabelText("File Name"), "new-note.md");
     await user.type(screen.getByLabelText("Markdown Content"), "# New Note");
     await user.click(screen.getByRole("button", { name: "Import Source" }));
@@ -238,6 +239,7 @@ describe("operations actions", () => {
       relativePath: "demo.md",
     });
 
+    cleanup();
     render(
       <QueryClientProvider client={queryClient}>
         <MemoryRouter initialEntries={["/projects/project-1/search"]}>
@@ -261,6 +263,7 @@ describe("operations actions", () => {
     expect(screen.getByText("Demo Diagram")).toBeInTheDocument();
     expect(screen.getByText("wiki/media/demo.png")).toBeInTheDocument();
 
+    cleanup();
     render(
       <QueryClientProvider client={queryClient}>
         <MemoryRouter initialEntries={["/projects/project-1/graph"]}>
@@ -281,6 +284,7 @@ describe("operations actions", () => {
     await user.click(screen.getByRole("button", { name: "Apply Graph Filters" }));
     expect(graphQuerySpy).toHaveBeenLastCalledWith("project-1", "demo", "source", 25);
 
+    cleanup();
     render(
       <QueryClientProvider client={queryClient}>
         <MemoryRouter initialEntries={["/projects/project-1/tasks"]}>
@@ -301,6 +305,7 @@ describe("operations actions", () => {
     await user.click(screen.getByRole("button", { name: "Cancel" }));
     expect(cancelTask).toHaveBeenCalledWith({ projectId: "project-1", taskId: "task-1" });
 
+    cleanup();
     render(
       <QueryClientProvider client={queryClient}>
         <MemoryRouter initialEntries={["/projects/project-1/reviews"]}>
@@ -323,6 +328,7 @@ describe("operations actions", () => {
       status: "resolved",
     });
 
+    cleanup();
     render(
       <QueryClientProvider client={queryClient}>
         <MemoryRouter initialEntries={["/settings"]}>
@@ -341,7 +347,6 @@ describe("operations actions", () => {
       language: "en",
       defaultQueryLimit: 5,
       providerBaseUrl: "",
-      providerApiKey: "",
       providerModel: "",
       providerEmbeddingModel: "",
       providerTimeoutSeconds: 60,
@@ -362,6 +367,7 @@ describe("operations actions", () => {
       </QueryClientProvider>,
     );
 
+    await user.click(screen.getByRole("tab", { name: "File Upload" }));
     const binaryFile = new File([new Uint8Array([0, 1, 2, 255])], "slides.docx", {
       type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     });
@@ -374,6 +380,7 @@ describe("operations actions", () => {
       contentBase64: "AAEC/w==",
     });
 
+    await user.click(screen.getByRole("tab", { name: "Folder Import" }));
     const nestedFile = new File(["# Child\n"], "child.md", { type: "text/markdown" });
     const peerFile = new File(["# Peer\n"], "peer.md", { type: "text/markdown" });
     Object.defineProperty(nestedFile, "webkitRelativePath", {

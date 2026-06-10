@@ -1,7 +1,15 @@
 import { useEffect, useState } from "react";
-import { useParams, useSearchParams } from "react-router-dom";
+import { useSearchParams, useParams } from "react-router-dom";
 
-import { ProjectNav } from "../projects/project-nav";
+import { EmptyState } from "@/components/layout/empty-state";
+import { PageSection } from "@/components/layout/page-section";
+import { RouteStatePane } from "@/components/layout/route-state-pane";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Select } from "@/components/ui/select";
+import { normalizeAppError } from "@/lib/app-error";
 
 import { useProjectFileContentQuery, useProjectFilesQuery } from "./queries";
 
@@ -72,61 +80,104 @@ export function FilesPage() {
     setSearchParams(nextParams);
   }
 
+  if (files.isLoading) {
+    return <RouteStatePane description="Loading project files." state="loading" title="Files" />;
+  }
+
+  if (files.error) {
+    const normalized = normalizeAppError(files.error);
+    return <RouteStatePane description={normalized.message} state="failed" title="Files unavailable" />;
+  }
+
   return (
-    <section className="stack">
-      <h1>Files</h1>
-      <ProjectNav projectId={projectId} />
-      <div className="card stack compact panel">
-        <label>
-          Root
-          <select value={root} onChange={(event) => handleRootChange(event.target.value)}>
-            <option value="all">all</option>
-            <option value="wiki">wiki</option>
-            <option value="sources">sources</option>
-          </select>
-        </label>
-        <label>
-          Max Files
-          <input value={maxFiles} onChange={(event) => setMaxFiles(event.target.value)} />
-        </label>
-        <label className="checkbox-row">
-          <input
-            type="checkbox"
-            checked={recursive}
-            onChange={(event) => setRecursive(event.target.checked)}
-          />
-          Recursive
-        </label>
-      </div>
+    <PageSection
+      description="Browse indexed project files and inspect raw content previews."
+      title="Files"
+    >
+      <Card>
+        <CardContent className="grid gap-4 p-6 md:grid-cols-[180px_minmax(0,1fr)_auto] md:items-end">
+          <label className="grid gap-2 text-sm font-medium">
+            Root
+            <Select aria-label="Root" onChange={(event) => handleRootChange(event.target.value)} value={root}>
+              <option value="all">all</option>
+              <option value="wiki">wiki</option>
+              <option value="sources">sources</option>
+            </Select>
+          </label>
+          <label className="grid gap-2 text-sm font-medium">
+            Max Files
+            <Input
+              aria-label="Max Files"
+              onChange={(event) => setMaxFiles(event.target.value)}
+              value={maxFiles}
+            />
+          </label>
+          <label className="flex items-center gap-3 rounded-xl border border-border/70 px-4 py-2 text-sm font-medium">
+            <input
+              checked={recursive}
+              onChange={(event) => setRecursive(event.target.checked)}
+              type="checkbox"
+            />
+            Recursive
+          </label>
+        </CardContent>
+      </Card>
 
-      <div className="files-layout">
-        <section className="card stack compact">
-          <h2>Tree</h2>
-          {files.data?.files?.length ? (
-            <ul className="tree-list">
-              {files.data.files.map((node: ProjectFileNode) => (
-                <FileNodeView
-                  key={node.path}
-                  node={node}
-                  selectedPath={selectedPath}
-                  onSelect={handleSelectPath}
+      <div className="grid gap-6 xl:grid-cols-[320px_minmax(0,1fr)]">
+        <Card>
+          <CardHeader>
+            <CardTitle>Tree</CardTitle>
+            <CardDescription>Filesystem view rooted to the selected namespace.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ScrollArea className="max-h-[520px] pr-3">
+              {files.data?.files?.length ? (
+                <ul className="grid gap-2">
+                  {files.data.files.map((node: ProjectFileNode) => (
+                    <FileNodeView
+                      key={node.path}
+                      node={node}
+                      onSelect={handleSelectPath}
+                      selectedPath={selectedPath}
+                    />
+                  ))}
+                </ul>
+              ) : (
+                <EmptyState
+                  description="No files matched the current root and traversal settings."
+                  title="No files found"
                 />
-              ))}
-            </ul>
-          ) : (
-            <p>No files found.</p>
-          )}
-        </section>
+              )}
+            </ScrollArea>
+          </CardContent>
+        </Card>
 
-        <section className="card stack compact">
-          <h2>Preview</h2>
-          {selectedPath ? <strong>{selectedPath}</strong> : <p>Select a file.</p>}
-          {content.isLoading ? <p>Loading preview...</p> : null}
-          {content.error ? <p>Preview unavailable.</p> : null}
-          {content.data ? <pre className="preview-pane">{content.data.content}</pre> : null}
-        </section>
+        <Card>
+          <CardHeader>
+            <CardTitle>Preview</CardTitle>
+            <CardDescription>
+              {selectedPath ? selectedPath : "Select a file from the tree to inspect its content."}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {!selectedPath ? (
+              <EmptyState
+                description="Choose a file from the tree to load its preview."
+                title="No file selected"
+              />
+            ) : content.isLoading ? (
+              <RouteStatePane description="Loading file preview." state="loading" title="Preview" />
+            ) : content.error ? (
+              <RouteStatePane description="Preview unavailable for the selected file." state="failed" title="Preview unavailable" />
+            ) : (
+              <ScrollArea className="max-h-[520px] rounded-xl border border-border/70 bg-muted/30 p-4">
+                <pre className="whitespace-pre-wrap break-words font-mono text-sm">{content.data?.content}</pre>
+              </ScrollArea>
+            )}
+          </CardContent>
+        </Card>
       </div>
-    </section>
+    </PageSection>
   );
 }
 
@@ -134,31 +185,40 @@ function FileNodeView({
   node,
   onSelect,
   selectedPath,
+  depth = 0,
 }: {
   node: ProjectFileNode;
   onSelect: (path: string) => void;
   selectedPath: string;
+  depth?: number;
 }) {
   return (
-    <li className="tree-item">
+    <li className="grid gap-2">
       {node.isDir ? (
-        <div className="tree-label">
-          <strong>{node.name}</strong>
+        <div className="rounded-lg border border-border/60 bg-muted/20 px-3 py-2" style={{ marginLeft: depth * 12 }}>
+          <p className="font-medium">{node.name}</p>
         </div>
       ) : (
-        <button
-          type="button"
-          className={selectedPath === node.path ? "ghost-button tree-button active" : "ghost-button tree-button"}
+        <Button
+          className="justify-between"
           onClick={() => onSelect(node.path)}
+          style={{ marginLeft: depth * 12 }}
+          variant={selectedPath === node.path ? "secondary" : "ghost"}
         >
-          {node.name}
-        </button>
+          <span>{node.name}</span>
+          {node.size != null ? (
+            <span aria-hidden="true" className="text-xs text-muted-foreground">
+              {node.size}
+            </span>
+          ) : null}
+        </Button>
       )}
       {node.children?.length ? (
-        <ul className="tree-list nested">
+        <ul className="grid gap-2">
           {node.children.map((child) => (
             <FileNodeView
               key={child.path}
+              depth={depth + 1}
               node={child}
               onSelect={onSelect}
               selectedPath={selectedPath}

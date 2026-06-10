@@ -1,7 +1,17 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import { useParams } from "react-router-dom";
 
-import { ProjectNav } from "../projects/project-nav";
+import { EmptyState } from "@/components/layout/empty-state";
+import { PageSection } from "@/components/layout/page-section";
+import { RouteStatePane } from "@/components/layout/route-state-pane";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Textarea } from "@/components/ui/textarea";
+import { normalizeAppError } from "@/lib/app-error";
+
 import { fileToBase64 } from "../shared/api";
 import {
   useDeleteSourceMutation,
@@ -69,7 +79,7 @@ export function SourcesPage() {
 
   async function importSelectedFiles(
     files: UploadFile[],
-    inputRef: React.RefObject<HTMLInputElement | null>,
+    inputRef: RefObject<HTMLInputElement | null>,
     sourceLabel: string,
   ) {
     if (!files.length || !projectId) {
@@ -103,127 +113,218 @@ export function SourcesPage() {
     }
   }
 
+  if (sources.isLoading) {
+    return <RouteStatePane description="Loading source inventory." state="loading" title="Sources" />;
+  }
+
+  if (sources.error) {
+    const normalized = normalizeAppError(sources.error);
+    return <RouteStatePane description={normalized.message} state="failed" title="Sources unavailable" />;
+  }
+
   return (
-    <section className="stack">
-      <h1>Sources</h1>
-      <ProjectNav projectId={projectId} />
-      <div className="card stack panel">
-        <h2>Text Import</h2>
-        <label>
-          File Name
-          <input value={fileName} onChange={(event) => setFileName(event.target.value)} />
-        </label>
-        <label>
-          Markdown Content
-          <textarea value={content} onChange={(event) => setContent(event.target.value)} rows={6} />
-        </label>
-        <button type="button" onClick={handleImportSource}>
-          Import Source
-        </button>
-      </div>
-
-      <div className="card stack panel">
-        <h2>File Upload</h2>
-        <label>
-          Files to Upload
-          <input
-            aria-label="Files to Upload"
-            ref={fileInputRef}
-            type="file"
-            multiple
-            onChange={(event) => setSelectedFiles(Array.from(event.target.files ?? []) as UploadFile[])}
-          />
-        </label>
-        {selectedFiles.length ? (
-          <ul className="results-list">
-            {selectedFiles.map((file) => (
-              <li key={`${sourcePathFromFile(file)}:${file.size}:${file.lastModified}`}>
-                {sourcePathFromFile(file)}
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p>No files selected.</p>
-        )}
-        <button
-          type="button"
-          onClick={handleUploadFiles}
-          disabled={!selectedFiles.length || importSource.isPending}
-        >
-          Upload Files
-        </button>
-      </div>
-
-      <div className="card stack panel">
-        <h2>Folder Import</h2>
-        <label>
-          Folder to Import
-          <input
-            aria-label="Folder to Import"
-            ref={folderInputRef}
-            type="file"
-            multiple
-            onChange={(event) =>
-              setSelectedFolderFiles(Array.from(event.target.files ?? []) as UploadFile[])
-            }
-          />
-        </label>
-        {selectedFolderFiles.length ? (
-          <ul className="results-list">
-            {selectedFolderFiles.map((file) => (
-              <li key={`${sourcePathFromFile(file)}:${file.size}:${file.lastModified}`}>
-                {sourcePathFromFile(file)}
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p>No folder selected.</p>
-        )}
-        <button
-          type="button"
-          onClick={handleImportFolder}
-          disabled={!selectedFolderFiles.length || importSource.isPending}
-        >
-          Import Folder
-        </button>
-      </div>
-
-      <div className="card stack compact panel">
-        <button type="button" onClick={() => rescanSources.mutateAsync({ projectId })}>
+    <PageSection
+      actions={
+        <Button onClick={() => rescanSources.mutateAsync({ projectId })}>
           Rescan Sources
-        </button>
-        {statusMessage ? <p aria-live="polite">{statusMessage}</p> : null}
-      </div>
-      <ul>
-        {sources.data?.map((source) => (
-          <li key={source.relativePath}>
-            <span>{source.relativePath}</span> <span>{source.size}</span>
-            <button
-              type="button"
-              onClick={() =>
-                ingestSource.mutateAsync({
-                  projectId,
-                  relativePath: source.relativePath,
-                })
-              }
-            >
-              Ingest
-            </button>
-            <button
-              type="button"
-              onClick={() =>
-                deleteSource.mutateAsync({
-                  projectId,
-                  relativePath: source.relativePath.replace(/^raw\/sources\//, ""),
-                })
-              }
-            >
-              Delete
-            </button>
-          </li>
-        ))}
-      </ul>
-    </section>
+        </Button>
+      }
+      description="Import raw material, upload assets, and trigger ingest operations."
+      title="Sources"
+    >
+      <Tabs defaultValue="text-import">
+        <TabsList>
+          <TabsTrigger value="text-import">Text Import</TabsTrigger>
+          <TabsTrigger value="upload">File Upload</TabsTrigger>
+          <TabsTrigger value="folder">Folder Import</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="text-import">
+          <Card>
+            <CardHeader>
+              <CardTitle>Text Import</CardTitle>
+              <CardDescription>Create or replace a source file from inline markdown.</CardDescription>
+            </CardHeader>
+            <CardContent className="grid gap-4">
+              <label className="grid gap-2 text-sm font-medium">
+                File Name
+                <Input onChange={(event) => setFileName(event.target.value)} value={fileName} />
+              </label>
+              <label className="grid gap-2 text-sm font-medium">
+                Markdown Content
+                <Textarea
+                  onChange={(event) => setContent(event.target.value)}
+                  rows={10}
+                  value={content}
+                />
+              </label>
+              <div className="flex justify-end">
+                <Button disabled={importSource.isPending} onClick={handleImportSource}>
+                  Import Source
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="upload">
+          <Card>
+            <CardHeader>
+              <CardTitle>File Upload</CardTitle>
+              <CardDescription>Upload binary or text files directly into the source tree.</CardDescription>
+            </CardHeader>
+            <CardContent className="grid gap-4">
+              <label className="grid gap-2 text-sm font-medium">
+                Files to Upload
+                <Input
+                  aria-label="Files to Upload"
+                  multiple
+                  onChange={(event) => setSelectedFiles(Array.from(event.target.files ?? []) as UploadFile[])}
+                  ref={fileInputRef}
+                  type="file"
+                />
+              </label>
+              {selectedFiles.length ? (
+                <ul className="grid gap-2 rounded-xl border border-border/70 bg-muted/20 p-4 text-sm">
+                  {selectedFiles.map((file) => (
+                    <li key={`${sourcePathFromFile(file)}:${file.size}:${file.lastModified}`}>
+                      {sourcePathFromFile(file)}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <EmptyState
+                  description="Select one or more files to upload into the project."
+                  title="No files selected"
+                />
+              )}
+              <div className="flex justify-end">
+                <Button
+                  disabled={!selectedFiles.length || importSource.isPending}
+                  onClick={handleUploadFiles}
+                >
+                  Upload Files
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="folder">
+          <Card>
+            <CardHeader>
+              <CardTitle>Folder Import</CardTitle>
+              <CardDescription>Preserve nested folder structure during import.</CardDescription>
+            </CardHeader>
+            <CardContent className="grid gap-4">
+              <label className="grid gap-2 text-sm font-medium">
+                Folder to Import
+                <Input
+                  aria-label="Folder to Import"
+                  multiple
+                  onChange={(event) => setSelectedFolderFiles(Array.from(event.target.files ?? []) as UploadFile[])}
+                  ref={folderInputRef}
+                  type="file"
+                />
+              </label>
+              {selectedFolderFiles.length ? (
+                <ul className="grid gap-2 rounded-xl border border-border/70 bg-muted/20 p-4 text-sm">
+                  {selectedFolderFiles.map((file) => (
+                    <li key={`${sourcePathFromFile(file)}:${file.size}:${file.lastModified}`}>
+                      {sourcePathFromFile(file)}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <EmptyState
+                  description="Choose a folder to import nested source files."
+                  title="No folder selected"
+                />
+              )}
+              <div className="flex justify-end">
+                <Button
+                  disabled={!selectedFolderFiles.length || importSource.isPending}
+                  onClick={handleImportFolder}
+                >
+                  Import Folder
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
+
+      {statusMessage ? (
+        <Card>
+          <CardContent className="p-4">
+            <p aria-live="polite" className="text-sm">
+              {statusMessage}
+            </p>
+          </CardContent>
+        </Card>
+      ) : null}
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Project Sources</CardTitle>
+          <CardDescription>Manage imported sources and enqueue ingest jobs.</CardDescription>
+        </CardHeader>
+        <CardContent className="p-0">
+          {sources.data?.length ? (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Path</TableHead>
+                  <TableHead>Size</TableHead>
+                  <TableHead>Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {sources.data.map((source) => (
+                  <TableRow key={source.relativePath}>
+                    <TableCell className="font-medium">{source.relativePath}</TableCell>
+                    <TableCell className="text-muted-foreground">{source.size}</TableCell>
+                    <TableCell className="flex flex-wrap gap-2">
+                      <Button
+                        onClick={() =>
+                          ingestSource.mutateAsync({
+                            projectId,
+                            relativePath: source.relativePath,
+                          })
+                        }
+                        size="sm"
+                        variant="secondary"
+                      >
+                        Ingest
+                      </Button>
+                      <Button
+                        onClick={() =>
+                          deleteSource.mutateAsync({
+                            projectId,
+                            relativePath: source.relativePath.replace(/^raw\/sources\//, ""),
+                          })
+                        }
+                        size="sm"
+                        variant="outline"
+                      >
+                        Delete
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          ) : (
+            <CardContent className="pt-0">
+              <EmptyState
+                description="Import text, files, or a folder to populate this project."
+                title="No sources imported"
+              />
+            </CardContent>
+          )}
+        </CardContent>
+      </Card>
+    </PageSection>
   );
 }
 
