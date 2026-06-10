@@ -33,5 +33,9 @@ export function useSession() {
     queryFn: getSession,
   });
 
-  return { user: session.data?.user ?? null };
+  return {
+    user: session.data?.user ?? null,
+    isLoading: session.isLoading,
+    error: session.error,
+  };
 }

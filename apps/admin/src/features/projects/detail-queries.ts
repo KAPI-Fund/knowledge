@@ -6,5 +6,6 @@ export function useProjectDetailQuery(projectId: string) {
   return useQuery({
     queryKey: ["project-detail", projectId],
     queryFn: () => getProjectDetail(projectId),
+    enabled: Boolean(projectId),
   });
 }

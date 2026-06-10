@@ -1,6 +1,8 @@
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 
 import { AppShell } from "../components/layout/app-shell";
+import { AuthGuard } from "../components/layout/auth-guard";
+import { ProjectWorkspaceLayout } from "../components/layout/project-workspace-layout";
 import { LoginPage } from "../features/auth/login-page";
 import { AuditPage } from "../features/audit/page";
 import { DashboardPage } from "../features/dashboard/page";
@@ -18,30 +20,40 @@ import { SourcesPage } from "../features/sources/page";
 import { TasksPage } from "../features/tasks/page";
 import { UsersPage } from "../features/users/page";
 
-export function AppRouter() {
+export function AppRoutes() {
   return (
-    <BrowserRouter>
-      <Routes>
-        <Route path="/login" element={<LoginPage />} />
+    <Routes>
+      <Route path="/login" element={<LoginPage />} />
+      <Route element={<AuthGuard />}>
         <Route path="/" element={<AppShell />}>
           <Route index element={<DashboardPage />} />
           <Route path="projects" element={<ProjectsPage />} />
-          <Route path="projects/:projectId" element={<ProjectDetailPage />} />
-          <Route path="projects/:projectId/files" element={<FilesPage />} />
-          <Route path="projects/:projectId/sources" element={<SourcesPage />} />
-          <Route path="projects/:projectId/source-watch" element={<SourceWatchPage />} />
-          <Route path="projects/:projectId/search" element={<SearchPage />} />
-          <Route path="projects/:projectId/query" element={<QueryPage />} />
-          <Route path="projects/:projectId/lint" element={<LintPage />} />
-          <Route path="projects/:projectId/graph" element={<GraphPage />} />
-          <Route path="projects/:projectId/tasks" element={<TasksPage />} />
-          <Route path="projects/:projectId/reviews" element={<ReviewsPage />} />
-          <Route path="projects/:projectId/audit" element={<AuditPage />} />
+          <Route path="projects/:projectId" element={<ProjectWorkspaceLayout />}>
+            <Route index element={<ProjectDetailPage />} />
+            <Route path="files" element={<FilesPage />} />
+            <Route path="sources" element={<SourcesPage />} />
+            <Route path="source-watch" element={<SourceWatchPage />} />
+            <Route path="search" element={<SearchPage />} />
+            <Route path="query" element={<QueryPage />} />
+            <Route path="lint" element={<LintPage />} />
+            <Route path="graph" element={<GraphPage />} />
+            <Route path="tasks" element={<TasksPage />} />
+            <Route path="reviews" element={<ReviewsPage />} />
+            <Route path="audit" element={<AuditPage />} />
+          </Route>
           <Route path="users" element={<UsersPage />} />
           <Route path="settings" element={<SettingsPage />} />
         </Route>
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
+      </Route>
+      <Route path="*" element={<Navigate replace to="/" />} />
+    </Routes>
+  );
+}
+
+export function AppRouter() {
+  return (
+    <BrowserRouter>
+      <AppRoutes />
     </BrowserRouter>
   );
 }
