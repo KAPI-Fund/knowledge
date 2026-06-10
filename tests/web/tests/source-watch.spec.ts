@@ -10,8 +10,8 @@ test("admin can configure source watch and scan external files into project sour
 }) => {
   await signInAsAdmin(page);
 
-  await page.getByRole("button", { name: "Create Demo Project" }).click();
-  await expect(page.getByRole("heading", { name: /seed-project-/ })).toBeVisible();
+  await createProject(page, "source-watch-project");
+  await expect(page.getByRole("heading", { name: "source-watch-project" })).toBeVisible();
 
   await page.getByRole("link", { name: "Source Watch" }).click();
   await page.getByLabel("Watch Path").fill(fixturesDir);
@@ -40,4 +40,12 @@ async function signInAsAdmin(page: import("@playwright/test").Page) {
   await page.getByLabel("Password").fill("secret-password");
   await page.getByRole("button", { name: "Sign in" }).click();
   await page.waitForURL("**/projects");
+}
+
+async function createProject(page: import("@playwright/test").Page, name: string) {
+  await page.getByRole("button", { name: "Create Project" }).click();
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await page.getByLabel("Name").fill(name);
+  await page.getByRole("dialog").getByRole("button", { name: "Create Project" }).click();
+  await page.waitForURL(/\/projects\/[^/]+$/);
 }

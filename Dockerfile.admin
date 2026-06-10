@@ -11,9 +11,6 @@ RUN npm ci
 
 COPY . .
 
-ARG VITE_KNOWLEDGE_PROJECT_ROOT=/data/projects
-ENV VITE_KNOWLEDGE_PROJECT_ROOT=${VITE_KNOWLEDGE_PROJECT_ROOT}
-
 RUN npm run build --workspace @knowledge/admin
 
 FROM nginx:1.27-alpine

@@ -13,8 +13,8 @@ test("admin can inspect project operations data", async ({ page }) => {
   await page.getByLabel("Password").fill("secret-password");
   await page.getByRole("button", { name: "Sign in" }).click();
   await expect(page.getByRole("heading", { name: "Projects" })).toBeVisible();
-  await page.getByRole("button", { name: "Create Demo Project" }).click();
-  await expect(page.getByRole("heading", { name: /seed-project-/ })).toBeVisible();
+  await createProject(page, "ops-project");
+  await expect(page.getByRole("heading", { name: "ops-project" })).toBeVisible();
 
   await page.getByRole("link", { name: "Sources", exact: true }).click();
   const attentionSource = page.getByRole("listitem").filter({ hasText: "raw/sources/attention.md" });
@@ -78,3 +78,11 @@ test("admin can inspect project operations data", async ({ page }) => {
   await page.getByRole("button", { name: "Save Settings" }).click();
   await expect(page.getByLabel("Default Query Limit")).toHaveValue("5");
 });
+
+async function createProject(page: import("@playwright/test").Page, name: string) {
+  await page.getByRole("button", { name: "Create Project" }).click();
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await page.getByLabel("Name").fill(name);
+  await page.getByRole("dialog").getByRole("button", { name: "Create Project" }).click();
+  await page.waitForURL(/\/projects\/[^/]+$/);
+}

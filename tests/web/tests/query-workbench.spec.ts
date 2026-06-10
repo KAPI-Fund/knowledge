@@ -13,8 +13,8 @@ test("admin can run a provider-backed query and save it to the wiki", async ({ p
   await page.getByRole("button", { name: "Save Settings" }).click();
 
   await page.getByRole("link", { name: "Projects" }).click();
-  await page.getByRole("button", { name: "Create Demo Project" }).click();
-  await expect(page.getByRole("heading", { name: /seed-project-/ })).toBeVisible();
+  await createProject(page, "query-project");
+  await expect(page.getByRole("heading", { name: "query-project" })).toBeVisible();
 
   await page.getByRole("link", { name: "Sources" }).click();
   await page.getByLabel("File Name").fill("attention.md");
@@ -51,4 +51,12 @@ async function signInAsAdmin(page: import("@playwright/test").Page) {
   await page.getByLabel("Password").fill("secret-password");
   await page.getByRole("button", { name: "Sign in" }).click();
   await page.waitForURL("**/projects");
+}
+
+async function createProject(page: import("@playwright/test").Page, name: string) {
+  await page.getByRole("button", { name: "Create Project" }).click();
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await page.getByLabel("Name").fill(name);
+  await page.getByRole("dialog").getByRole("button", { name: "Create Project" }).click();
+  await page.waitForURL(/\/projects\/[^/]+$/);
 }

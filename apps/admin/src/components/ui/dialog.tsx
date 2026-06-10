@@ -72,6 +72,8 @@ export function DialogContent({ className, children, ...props }: HTMLAttributes<
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/30 p-4 backdrop-blur-sm">
       <div
+        aria-modal="true"
+        role="dialog"
         className={cn("w-full max-w-lg rounded-2xl border border-border bg-card text-card-foreground shadow-2xl", className)}
         {...props}
       >

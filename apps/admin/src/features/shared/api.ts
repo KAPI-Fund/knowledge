@@ -282,7 +282,7 @@ export async function listProjectTasks(projectId: string) {
   return response.tasks;
 }
 
-export async function createProject(input: { name: string; rootPath: string; csrfToken: string }) {
+export async function createProject(input: { name: string; csrfToken: string }) {
   return apiFetch(
     "/api/projects",
     {
@@ -292,7 +292,6 @@ export async function createProject(input: { name: string; rootPath: string; csr
       },
       body: JSON.stringify({
         name: input.name,
-        rootPath: input.rootPath,
       }),
     },
     projectSchema,
