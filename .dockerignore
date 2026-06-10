@@ -1,0 +1,14 @@
+.git
+.worktrees
+node_modules
+target
+dist
+coverage
+playwright-report
+test-results
+.e2e
+pdfium
+upstream_llm_wiki
+*.log
+.env
+.env.*

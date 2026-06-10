@@ -127,7 +127,7 @@ export function ProjectsPage() {
             </Table>
           </CardContent>
         </Card>
-      ) : (
+  ) : (
         <ProjectlessState onCreateProject={() => setCreateOpen(true)} />
       )}
     </PageSection>
