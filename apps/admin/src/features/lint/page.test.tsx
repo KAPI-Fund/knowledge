@@ -103,7 +103,7 @@ describe("lint page", () => {
       projectId: "project-1",
       mode: "semantic",
     });
-    expect(await screen.findByText("Conflicting attention claims")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "semantic" })).toBeInTheDocument();
     expect(screen.getByText("[contradiction] Two pages describe attention with conflicting scope.")).toBeInTheDocument();
     expect(screen.getByText("wiki/concepts/attention.md")).toBeInTheDocument();
     expect(screen.getByText("wiki/concepts/attention-mechanism.md")).toBeInTheDocument();

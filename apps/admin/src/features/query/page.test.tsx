@@ -2,7 +2,10 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { AppShell } from "../../components/layout/app-shell";
+import { ProjectWorkspaceLayout } from "../../components/layout/project-workspace-layout";
 
 import { QueryPage } from "./page";
 
@@ -11,6 +14,23 @@ const mockTaskDetail = vi.fn();
 const mockSaveQueryTask = vi.fn();
 const mockRetryTask = vi.fn();
 const mockCancelTask = vi.fn();
+
+vi.mock("../projects/detail-queries", () => ({
+  useProjectDetailQuery: () => ({
+    data: {
+      project: {
+        id: "project-1",
+        name: "demo-project",
+        rootPath: "E:/demo-project",
+        createdAt: "2026-06-04T00:00:00Z",
+        sourceCount: 1,
+        taskCount: 1,
+        reviewCount: 0,
+      },
+    },
+    isLoading: false,
+  }),
+}));
 
 vi.mock("./queries", () => ({
   useCreateQueryTaskMutation: () => ({
@@ -32,6 +52,31 @@ vi.mock("../tasks/queries", () => ({
     mutateAsync: mockCancelTask,
   }),
 }));
+
+afterEach(() => {
+  vi.clearAllMocks();
+  mockCreateQueryTask.mockReset();
+  mockTaskDetail.mockReset();
+  mockSaveQueryTask.mockReset();
+  mockRetryTask.mockReset();
+  mockCancelTask.mockReset();
+});
+
+function renderQueryRoute(queryClient: QueryClient, initialEntry: string) {
+  render(
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter initialEntries={[initialEntry]}>
+        <Routes>
+          <Route path="/" element={<AppShell />}>
+            <Route path="projects/:projectId" element={<ProjectWorkspaceLayout />}>
+              <Route path="query" element={<QueryPage />} />
+            </Route>
+          </Route>
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+}
 
 describe("query page", () => {
   it("submits a query task and renders the completed answer", async () => {
@@ -75,6 +120,29 @@ describe("query page", () => {
       query: "What is attention?",
       topK: 3,
     });
+  });
+
+  it("keeps query page chrome visible while a task is pending", async () => {
+    const user = userEvent.setup();
+    const queryClient = new QueryClient();
+
+    mockCreateQueryTask.mockResolvedValue({ taskId: "task-1", status: "running" });
+    mockTaskDetail
+      .mockReturnValueOnce(undefined)
+      .mockReturnValueOnce({
+        id: "task-1",
+        title: "Query: What is attention?",
+        status: "running",
+        result: null,
+      });
+
+    renderQueryRoute(queryClient, "/projects/project-1/query");
+
+    await user.type(screen.getByLabelText("Query"), "What is attention?");
+    await user.click(screen.getByRole("button", { name: "Run Query" }));
+
+    expect(screen.getByRole("heading", { name: "Query" })).toBeInTheDocument();
+    expect(await screen.findByText(/running/i)).toBeInTheDocument();
   });
 
   it("saves a successful query answer back into the wiki", async () => {

@@ -1,7 +1,12 @@
 import { useState } from "react";
 import { useParams } from "react-router-dom";
 
-import { ProjectNav } from "../projects/project-nav";
+import { EmptyState } from "@/components/layout/empty-state";
+import { PageSection } from "@/components/layout/page-section";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+
 import { ProjectFileLink } from "../shared/file-links";
 
 import { useCreateLintTaskMutation, useLintTaskDetailQuery } from "./queries";
@@ -44,54 +49,81 @@ export function LintPage() {
   }
 
   return (
-    <section className="stack">
-      <h1>Lint</h1>
-      <ProjectNav projectId={projectId} />
-      <div className="card stack compact panel">
-        <p>Run llm_wiki-style lint tasks against the current wiki.</p>
-        <button type="button" onClick={handleRunStructuralLint}>
-          Run Structural Lint
-        </button>
-        <button type="button" onClick={handleRunSemanticLint}>
-          Run Semantic Lint
-        </button>
-      </div>
+    <PageSection
+      description="Run llm_wiki-style structural and semantic validation against the wiki."
+      title="Lint"
+    >
+      <Card>
+        <CardHeader>
+          <CardTitle>Lint Actions</CardTitle>
+          <CardDescription>Launch structural or semantic lint tasks on demand.</CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-wrap gap-3">
+          <Button disabled={createLintTask.isPending} onClick={handleRunStructuralLint}>
+            Run Structural Lint
+          </Button>
+          <Button disabled={createLintTask.isPending} onClick={handleRunSemanticLint} variant="outline">
+            Run Semantic Lint
+          </Button>
+        </CardContent>
+      </Card>
 
       {task.data ? (
-        <section className="card stack compact panel">
-          <h2>Task</h2>
-          <span>{task.data.status}</span>
-          {result?.mode ? <span>{result.mode}</span> : null}
-        </section>
+        <Card>
+          <CardHeader>
+            <CardTitle>Task</CardTitle>
+            <CardDescription>Current lint task status and mode.</CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-wrap items-center gap-3">
+            <Badge variant="secondary">{task.data.status}</Badge>
+            {result?.mode ? <Badge variant="outline">{result.mode}</Badge> : null}
+          </CardContent>
+        </Card>
       ) : null}
 
       {result?.issues?.length ? (
-        <ul className="results-list">
+        <div className="grid gap-4">
           {result.issues.map((issue, index) => (
-            <li key={`${issue.page}:${issue.issueType}:${index}`} className="card stack compact panel">
-              <strong>{issue.issueType}</strong>
-              <span>{issue.severity}</span>
-              {issue.issueType === "semantic" ? <span>{issue.page}</span> : null}
-              {issue.issueType !== "semantic" ? (
-                <ProjectFileLink projectId={projectId} path={`wiki/${issue.page}`} />
-              ) : null}
-              <span>{issue.detail}</span>
-              {issue.affectedPages?.length ? (
-                <div className="stack compact">
-                  <strong>Affected Pages</strong>
-                  <ul>
-                    {issue.affectedPages.map((page) => (
-                      <li key={`${issue.page}:${page}`}>
-                        <ProjectFileLink projectId={projectId} path={`wiki/${page}`} />
-                      </li>
-                    ))}
-                  </ul>
+            <Card key={`${issue.page}:${issue.issueType}:${index}`}>
+              <CardHeader>
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="space-y-1">
+                    <CardTitle>{issue.issueType}</CardTitle>
+                    <CardDescription>{issue.page}</CardDescription>
+                  </div>
+                  <Badge variant="secondary">{issue.severity}</Badge>
                 </div>
-              ) : null}
-            </li>
+              </CardHeader>
+              <CardContent className="grid gap-3">
+                {issue.issueType === "semantic" ? <p className="text-sm">{issue.page}</p> : null}
+                {issue.issueType !== "semantic" ? (
+                  <ProjectFileLink projectId={projectId} path={`wiki/${issue.page}`} />
+                ) : null}
+                <p className="text-sm text-muted-foreground">{issue.detail}</p>
+                {issue.affectedPages?.length ? (
+                  <div className="grid gap-2">
+                    <p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+                      Affected Pages
+                    </p>
+                    <ul className="grid gap-2">
+                      {issue.affectedPages.map((page) => (
+                        <li key={`${issue.page}:${page}`} className="text-sm">
+                          <ProjectFileLink projectId={projectId} path={`wiki/${page}`} />
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+              </CardContent>
+            </Card>
           ))}
-        </ul>
+        </div>
+      ) : task.data ? (
+        <EmptyState
+          description="The lint task completed without returning any issues."
+          title="No issues found"
+        />
       ) : null}
-    </section>
+    </PageSection>
   );
 }
