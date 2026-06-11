@@ -128,10 +128,9 @@ pub fn delete_wiki_pages_with_refs(
     if normalized.to_lowercase().starts_with("wiki/sources/")
       && !slug.is_empty()
       && !slug.starts_with('.')
+      && let Ok(media_dir) = root.safe_join(&format!("wiki/media/{slug}"))
     {
-      if let Ok(media_dir) = root.safe_join(&format!("wiki/media/{slug}")) {
-        let _ = fs::remove_dir_all(media_dir);
-      }
+      let _ = fs::remove_dir_all(media_dir);
     }
   }
 
