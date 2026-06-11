@@ -658,7 +658,7 @@ fn merge_array_fields_into_content(
   if changed { result } else { new_content.to_string() }
 }
 
-fn parse_frontmatter_array(content: &str, field_name: &str) -> Vec<String> {
+pub(crate) fn parse_frontmatter_array(content: &str, field_name: &str) -> Vec<String> {
   let Some((frontmatter_lines, _, _)) = split_frontmatter_lines_owned(content) else {
     return Vec::new();
   };
@@ -705,7 +705,7 @@ fn parse_frontmatter_array(content: &str, field_name: &str) -> Vec<String> {
   Vec::new()
 }
 
-fn write_frontmatter_array(content: &str, field_name: &str, values: &[String]) -> String {
+pub(crate) fn write_frontmatter_array(content: &str, field_name: &str, values: &[String]) -> String {
   let Some((frontmatter_lines, rest, newline)) = split_frontmatter_lines_owned(content) else {
     return content.to_string();
   };

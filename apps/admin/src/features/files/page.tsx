@@ -12,6 +12,7 @@ import { Select } from "@/components/ui/select";
 import { normalizeAppError } from "@/lib/app-error";
 
 import { useProjectFileContentQuery, useProjectFilesQuery } from "./queries";
+import { WikiPageEditor } from "./wiki-page-editor";
 
 type ProjectFileNode = {
   name: string;
@@ -28,6 +29,7 @@ export function FilesPage() {
   const [recursive, setRecursive] = useState(true);
   const [maxFiles, setMaxFiles] = useState("2000");
   const [selectedPath, setSelectedPath] = useState("");
+  const [deleteNotice, setDeleteNotice] = useState("");
   const maxFilesNumber = Number(maxFiles) || 2000;
   const files = useProjectFilesQuery(projectId, {
     root,
@@ -74,9 +76,18 @@ export function FilesPage() {
 
   function handleSelectPath(path: string) {
     setSelectedPath(path);
+    setDeleteNotice("");
     const nextParams = new URLSearchParams(searchParams);
     nextParams.set("root", root);
     nextParams.set("path", path);
+    setSearchParams(nextParams);
+  }
+
+  function handleDeleted(summary: string) {
+    setSelectedPath("");
+    setDeleteNotice(summary);
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.delete("path");
     setSearchParams(nextParams);
   }
 
@@ -160,6 +171,9 @@ export function FilesPage() {
             </CardDescription>
           </CardHeader>
           <CardContent>
+            {deleteNotice ? (
+              <p className="mb-4 text-sm text-muted-foreground">{deleteNotice}</p>
+            ) : null}
             {!selectedPath ? (
               <EmptyState
                 description="Choose a file from the tree to load its preview."
@@ -170,9 +184,17 @@ export function FilesPage() {
             ) : content.error ? (
               <RouteStatePane description="Preview unavailable for the selected file." state="failed" title="Preview unavailable" />
             ) : (
-              <ScrollArea className="max-h-[520px] rounded-xl border border-border/70 bg-muted/30 p-4">
-                <pre className="whitespace-pre-wrap break-words font-mono text-sm">{content.data?.content}</pre>
-              </ScrollArea>
+              <div className="grid gap-4">
+                <WikiPageEditor
+                  content={content.data?.content ?? ""}
+                  onDeleted={handleDeleted}
+                  path={selectedPath}
+                  projectId={projectId}
+                />
+                <ScrollArea className="max-h-[520px] rounded-xl border border-border/70 bg-muted/30 p-4">
+                  <pre className="whitespace-pre-wrap break-words font-mono text-sm">{content.data?.content}</pre>
+                </ScrollArea>
+              </div>
             )}
           </CardContent>
         </Card>

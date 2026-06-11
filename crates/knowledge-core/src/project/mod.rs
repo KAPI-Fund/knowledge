@@ -11,3 +11,5 @@ pub mod scaffold;
 pub mod source_identity;
 pub mod source_text;
 pub mod sources;
+pub mod wiki_cleanup;
+pub mod wiki_pages;

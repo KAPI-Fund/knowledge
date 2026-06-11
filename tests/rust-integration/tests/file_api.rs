@@ -195,6 +195,148 @@ async fn files_api_rejects_invalid_roots_and_non_text_previews() {
     assert_eq!(traversal_response.status(), StatusCode::FORBIDDEN);
 }
 
+#[tokio::test]
+async fn wiki_page_save_and_cascade_delete_clean_references() {
+    let temp = tempdir().unwrap();
+    let _env = TestEnvironment::start("wiki-page-edit").await.unwrap();
+    let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
+    let state = bootstrap_state(&config).await.unwrap();
+    let (cookie, csrf) = login_and_csrf(state.clone()).await;
+    let project_root = temp.path().join("wiki-edit-project");
+    let project_id = create_project(state.clone(), &cookie, &csrf, project_root.clone()).await;
+
+    // Missing CSRF header is rejected.
+    let missing_csrf = build_app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(format!("/api/projects/{project_id}/files/content"))
+                .header(header::COOKIE, &cookie)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({ "path": "wiki/concepts/kv-cache.md", "content": "x" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing_csrf.status(), StatusCode::UNAUTHORIZED);
+
+    // Non-wiki paths are rejected.
+    assert_eq!(
+        save_page(state.clone(), &cookie, &csrf, &project_id, "raw/sources/notes.md", "x").await,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        save_page(state.clone(), &cookie, &csrf, &project_id, "../escape.md", "x").await,
+        StatusCode::BAD_REQUEST
+    );
+
+    // Create two concept pages and an index referencing both forms.
+    assert_eq!(
+        save_page(
+            state.clone(),
+            &cookie,
+            &csrf,
+            &project_id,
+            "wiki/concepts/kv-cache.md",
+            "---\ntype: concept\ntitle: KV Cache\n---\n\n# KV Cache\n",
+        )
+        .await,
+        StatusCode::OK
+    );
+    assert_eq!(
+        save_page(
+            state.clone(),
+            &cookie,
+            &csrf,
+            &project_id,
+            "wiki/concepts/attention.md",
+            "---\ntype: concept\ntitle: Attention\nrelated: [\"kv-cache\", \"transformer\"]\n---\n\nUses [[KV Cache]] and [[Transformer]].\n",
+        )
+        .await,
+        StatusCode::OK
+    );
+    assert_eq!(
+        save_page(
+            state.clone(),
+            &cookie,
+            &csrf,
+            &project_id,
+            "wiki/index.md",
+            "# Index\n\n- [[KV Cache]] cached states\n- [[Attention]] focus\n",
+        )
+        .await,
+        StatusCode::OK
+    );
+
+    // Cascade delete kv-cache.
+    let delete_response = build_app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/projects/{project_id}/wiki-pages:delete"))
+                .header(header::COOKIE, &cookie)
+                .header("x-csrf-token", &csrf)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({ "paths": ["wiki/concepts/kv-cache.md"] }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(delete_response.status(), StatusCode::OK);
+    let delete_payload = read_json(delete_response.into_body()).await;
+    assert_eq!(
+        delete_payload
+            .get("deletedPaths")
+            .and_then(Value::as_array)
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        delete_payload.get("rewrittenFiles").and_then(Value::as_u64),
+        Some(2)
+    );
+
+    // Page is gone; index entry dropped (title-form match, Bug A);
+    // sibling entry survives; body wikilink became plain text while
+    // [[Transformer]] is untouched (Bug B); related: filtered.
+    assert!(!project_root.join("wiki/concepts/kv-cache.md").exists());
+    let index = fs::read_to_string(project_root.join("wiki/index.md")).unwrap();
+    assert!(!index.contains("KV Cache"));
+    assert!(index.contains("- [[Attention]] focus"));
+    let attention = fs::read_to_string(project_root.join("wiki/concepts/attention.md")).unwrap();
+    assert!(attention.contains("Uses KV Cache and [[Transformer]]."));
+    assert!(attention.contains("related: [\"transformer\"]"));
+}
+
+async fn save_page(
+    state: knowledge_server::app::state::AppState,
+    cookie: &str,
+    csrf: &str,
+    project_id: &str,
+    path: &str,
+    content: &str,
+) -> StatusCode {
+    build_app(state)
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(format!("/api/projects/{project_id}/files/content"))
+                .header(header::COOKIE, cookie)
+                .header("x-csrf-token", csrf)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(json!({ "path": path, "content": content }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+        .status()
+}
+
 fn collect_paths(nodes: &[Value]) -> Vec<String> {
     let mut paths = Vec::new();
     for node in nodes {
