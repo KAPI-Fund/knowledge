@@ -42,9 +42,7 @@ async fn real_provider_contract_exposes_models_and_chat_completion() -> Result<(
         .collect::<Vec<_>>();
 
     assert!(
-        model_ids
-            .iter()
-            .any(|value| *value == provider.model.as_str()),
+        model_ids.contains(&provider.model.as_str()),
         "provider model {} was not listed by /v1/models",
         provider.model
     );
@@ -103,13 +101,12 @@ async fn real_provider_query_and_save_round_trip() -> Result<()> {
         Some("wiki/concepts/attention.md")
     );
     assert!(
-        result
+        !result
             .get("answer")
             .and_then(Value::as_str)
             .unwrap_or_default()
             .trim()
-            .len()
-            > 0
+            .is_empty()
     );
 
     let save_response = build_app(state.clone())
