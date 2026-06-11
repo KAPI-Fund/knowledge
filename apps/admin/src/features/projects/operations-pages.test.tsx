@@ -158,6 +158,8 @@ vi.mock("../files/queries", () => ({
     },
     isLoading: false,
   }),
+  useSaveFileContentMutation: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useDeleteWikiPagesMutation: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }));
 
 vi.mock("../audit/queries", () => ({

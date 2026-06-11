@@ -19,7 +19,7 @@ export function WikiPageEditor({
   projectId: string;
   path: string;
   content: string;
-  onDeleted: () => void;
+  onDeleted: (summary: string) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(content);
@@ -30,8 +30,11 @@ export function WikiPageEditor({
   useEffect(() => {
     setEditing(false);
     setDraft(content);
-    setFeedback("");
   }, [path, content]);
+
+  useEffect(() => {
+    setFeedback("");
+  }, [path]);
 
   if (!isEditableWikiPath(path)) {
     return null;
@@ -53,10 +56,9 @@ export function WikiPageEditor({
     }
     try {
       const result = await remove.mutateAsync({ paths: [path] });
-      setFeedback(
-        `Deleted ${result.deletedPaths.length} page(s), rewrote ${result.rewrittenFiles} file(s).`,
-      );
-      onDeleted();
+      const summary = `Deleted ${result.deletedPaths.length} page(s), rewrote ${result.rewrittenFiles} file(s).`;
+      setFeedback(summary);
+      onDeleted(summary);
     } catch (error) {
       setFeedback(normalizeAppError(error).message);
     }
