@@ -154,6 +154,16 @@ const projectFileContentSchema = z.object({
   content: z.string(),
 });
 
+const saveFileContentSchema = z.object({
+  path: z.string(),
+  created: z.boolean(),
+});
+
+const deleteWikiPagesSchema = z.object({
+  deletedPaths: z.array(z.string()),
+  rewrittenFiles: z.number(),
+});
+
 const auditSchema = z.object({
   items: z.array(
     z.object({
@@ -384,6 +394,34 @@ export async function getProjectFileContent(input: { projectId: string; path: st
     `/api/projects/${input.projectId}/files/content?${searchParams.toString()}`,
     { method: "GET" },
     projectFileContentSchema,
+  );
+}
+
+export async function saveProjectFileContent(input: {
+  projectId: string;
+  path: string;
+  content: string;
+}) {
+  return apiFetch(
+    `/api/projects/${input.projectId}/files/content`,
+    {
+      method: "PUT",
+      headers: csrfHeader(),
+      body: JSON.stringify({ path: input.path, content: input.content }),
+    },
+    saveFileContentSchema,
+  );
+}
+
+export async function deleteProjectWikiPages(input: { projectId: string; paths: string[] }) {
+  return apiFetch(
+    `/api/projects/${input.projectId}/wiki-pages:delete`,
+    {
+      method: "POST",
+      headers: csrfHeader(),
+      body: JSON.stringify({ paths: input.paths }),
+    },
+    deleteWikiPagesSchema,
   );
 }
 
