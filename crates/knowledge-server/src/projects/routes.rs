@@ -28,6 +28,7 @@ use knowledge_core::project::files::{
     parse_project_file_root, read_project_file_content,
 };
 use knowledge_core::project::reviews::load_reviews;
+use knowledge_core::project::wiki_pages::{WikiPageError, save_wiki_page};
 use knowledge_core::project::sources::list_sources;
 use knowledge_core::search::SearchOptions;
 
@@ -69,7 +70,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/projects/{project_id}/files", get(list_files_handler))
         .route(
             "/api/projects/{project_id}/files/content",
-            get(file_content_handler),
+            get(file_content_handler).put(save_file_content_handler),
         )
         .route("/api/projects/{project_id}/search", post(search_handler))
         .route("/api/projects/{project_id}/graph", get(graph_handler))
@@ -163,6 +164,13 @@ pub struct FileListRequest {
 #[derive(Debug, Clone, Deserialize)]
 pub struct FileContentRequest {
     pub path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SaveFileContentRequest {
+    path: String,
+    content: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -575,6 +583,38 @@ async fn file_content_handler(
       "path": file.path,
       "content": file.content
     })))
+}
+
+async fn save_file_content_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(project_id): Path<String>,
+    Json(payload): Json<SaveFileContentRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let session = authorized_session(&state, &headers, Some(&project_id)).await?;
+    validate_csrf(&headers, &session.csrf_token)?;
+    let root = project_root_for_id(&state, &project_id).await?;
+    let saved =
+        save_wiki_page(&root, &payload.path, &payload.content).map_err(map_wiki_page_error)?;
+    append_audit_log(
+        &state,
+        CreateAuditLog {
+            project_id: Some(project_id),
+            actor_id: session.user_id,
+            action: "project.wiki_page_saved".to_string(),
+            target_type: "wiki_page".to_string(),
+            target_id: saved.path.clone(),
+            task_id: None,
+            summary: format!(
+                "{} wiki page {}",
+                if saved.created { "Created" } else { "Updated" },
+                saved.path
+            ),
+            metadata: json!({ "path": saved.path, "created": saved.created }),
+        },
+    )
+    .await?;
+    Ok(Json(json!({ "path": saved.path, "created": saved.created })))
 }
 
 async fn search_handler(
@@ -1173,6 +1213,14 @@ fn map_project_files_error(error: ProjectFilesError) -> ApiError {
         ProjectFilesError::Io(_) | ProjectFilesError::Root(_) => {
             ApiError::bad_request(error.to_string())
         }
+    }
+}
+
+fn map_wiki_page_error(error: WikiPageError) -> ApiError {
+    match error {
+        WikiPageError::NotWikiPage => ApiError::bad_request(error.to_string()),
+        WikiPageError::FileTooLarge => ApiError::payload_too_large(error.to_string()),
+        WikiPageError::Io(_) | WikiPageError::Root(_) => ApiError::bad_request(error.to_string()),
     }
 }
 
