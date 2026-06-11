@@ -1,6 +1,11 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { getProjectFileContent, listProjectFiles } from "../shared/api";
+import {
+  deleteProjectWikiPages,
+  getProjectFileContent,
+  listProjectFiles,
+  saveProjectFileContent,
+} from "../shared/api";
 
 export function useProjectFilesQuery(
   projectId: string,
@@ -17,5 +22,30 @@ export function useProjectFileContentQuery(projectId: string, path: string) {
     queryKey: ["project-file-content", projectId, path],
     queryFn: () => getProjectFileContent({ projectId, path }),
     enabled: Boolean(projectId) && Boolean(path),
+  });
+}
+
+export function useSaveFileContentMutation(projectId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { path: string; content: string }) =>
+      saveProjectFileContent({ projectId, ...input }),
+    onSuccess: (_data, input) => {
+      void queryClient.invalidateQueries({ queryKey: ["project-files", projectId] });
+      void queryClient.invalidateQueries({
+        queryKey: ["project-file-content", projectId, input.path],
+      });
+    },
+  });
+}
+
+export function useDeleteWikiPagesMutation(projectId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { paths: string[] }) => deleteProjectWikiPages({ projectId, ...input }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["project-files", projectId] });
+      void queryClient.invalidateQueries({ queryKey: ["project-file-content", projectId] });
+    },
   });
 }
