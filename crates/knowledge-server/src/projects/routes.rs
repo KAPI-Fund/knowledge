@@ -22,13 +22,16 @@ use crate::projects::tasks::{
 };
 use crate::query::{ExecuteProjectQueryInput, execute_project_query};
 use crate::retrieval::service::search_project_hybrid;
+use crate::retrieval::store::delete_pages;
 use knowledge_core::graph::{build_graph_view, neighbors_for_node};
 use knowledge_core::project::files::{
     ProjectFileListOptions, ProjectFilesError, clamp_max_files, list_project_files,
     parse_project_file_root, read_project_file_content,
 };
 use knowledge_core::project::reviews::load_reviews;
-use knowledge_core::project::wiki_pages::{WikiPageError, save_wiki_page};
+use knowledge_core::project::wiki_pages::{
+    WikiPageError, delete_wiki_pages_with_refs, save_wiki_page,
+};
 use knowledge_core::project::sources::list_sources;
 use knowledge_core::search::SearchOptions;
 
@@ -71,6 +74,10 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/projects/{project_id}/files/content",
             get(file_content_handler).put(save_file_content_handler),
+        )
+        .route(
+            "/api/projects/{project_id}/wiki-pages:delete",
+            post(delete_wiki_pages_handler),
         )
         .route("/api/projects/{project_id}/search", post(search_handler))
         .route("/api/projects/{project_id}/graph", get(graph_handler))
@@ -171,6 +178,12 @@ pub struct FileContentRequest {
 struct SaveFileContentRequest {
     path: String,
     content: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DeleteWikiPagesRequest {
+    paths: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -615,6 +628,52 @@ async fn save_file_content_handler(
     )
     .await?;
     Ok(Json(json!({ "path": saved.path, "created": saved.created })))
+}
+
+const MAX_WIKI_DELETE_BATCH: usize = 100;
+
+async fn delete_wiki_pages_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(project_id): Path<String>,
+    Json(payload): Json<DeleteWikiPagesRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let session = authorized_session(&state, &headers, Some(&project_id)).await?;
+    validate_csrf(&headers, &session.csrf_token)?;
+    if payload.paths.is_empty() {
+        return Err(ApiError::bad_request("paths must not be empty"));
+    }
+    if payload.paths.len() > MAX_WIKI_DELETE_BATCH {
+        return Err(ApiError::bad_request("too many paths in one delete request"));
+    }
+    let root = project_root_for_id(&state, &project_id).await?;
+    let result = delete_wiki_pages_with_refs(&root, &payload.paths).map_err(map_wiki_page_error)?;
+    delete_pages(&state.pool, &project_id, &result.deleted_page_ids).await?;
+    append_audit_log(
+        &state,
+        CreateAuditLog {
+            project_id: Some(project_id),
+            actor_id: session.user_id,
+            action: "project.wiki_pages_deleted".to_string(),
+            target_type: "wiki_page".to_string(),
+            target_id: "batch".to_string(),
+            task_id: None,
+            summary: format!(
+                "Deleted {} wiki pages, rewrote {} files",
+                result.deleted_paths.len(),
+                result.rewritten_files
+            ),
+            metadata: json!({
+              "deletedPaths": result.deleted_paths,
+              "rewrittenFiles": result.rewritten_files
+            }),
+        },
+    )
+    .await?;
+    Ok(Json(json!({
+      "deletedPaths": result.deleted_paths,
+      "rewrittenFiles": result.rewritten_files
+    })))
 }
 
 async fn search_handler(

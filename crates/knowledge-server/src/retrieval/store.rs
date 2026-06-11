@@ -162,6 +162,26 @@ pub async fn delete_missing_pages(
   Ok(())
 }
 
+pub async fn delete_pages(
+  pool: &sqlx::PgPool,
+  project_id: &str,
+  page_ids: &[String],
+) -> Result<(), ApiError> {
+  for page_id in page_ids {
+    sqlx::query(
+      "DELETE FROM project_embedding_chunks
+       WHERE project_id = $1 AND page_id = $2",
+    )
+    .bind(project_id)
+    .bind(page_id)
+    .execute(pool)
+    .await
+    .map_err(ApiError::from)?;
+  }
+
+  Ok(())
+}
+
 pub async fn load_project_chunks(
   pool: &sqlx::PgPool,
   project_id: &str,
