@@ -125,7 +125,28 @@ impl MockOpenAiServer {
 async fn chat_completions(
     State(state): State<MockState>,
     Json(payload): Json<Value>,
-) -> (StatusCode, Json<Value>) {
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+
+    if payload.get("stream").and_then(Value::as_bool) == Some(true) {
+        let _ = state.request_count.fetch_add(1, Ordering::SeqCst);
+        let body = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"Attention \"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"focuses computation on relevant tokens.\"}}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        return (
+            [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+            body,
+        )
+            .into_response();
+    }
+
+    let (status, json) = chat_completions_json(state, payload).await;
+    (status, json).into_response()
+}
+
+async fn chat_completions_json(state: MockState, payload: Value) -> (StatusCode, Json<Value>) {
     let scenario = state.scenario.lock().await.clone();
     if payload_has_image_block(&payload) {
         return (

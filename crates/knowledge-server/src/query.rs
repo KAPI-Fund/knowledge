@@ -83,14 +83,14 @@ impl From<ApiError> for QueryExecutionError {
 }
 
 #[derive(Debug)]
-struct QuerySettings {
-  provider_mode: String,
-  provider_base_url: Option<String>,
-  provider_api_key: Option<String>,
-  provider_model: Option<String>,
-  provider_timeout_seconds: Option<i64>,
-  language: String,
-  default_query_limit: i64,
+pub(crate) struct QuerySettings {
+  pub(crate) provider_mode: String,
+  pub(crate) provider_base_url: Option<String>,
+  pub(crate) provider_api_key: Option<String>,
+  pub(crate) provider_model: Option<String>,
+  pub(crate) provider_timeout_seconds: Option<i64>,
+  pub(crate) language: String,
+  pub(crate) default_query_limit: i64,
 }
 
 pub async fn execute_project_query(
@@ -185,7 +185,7 @@ pub async fn execute_project_query(
   }))
 }
 
-async fn load_query_settings(state: &AppState) -> Result<QuerySettings, ApiError> {
+pub(crate) async fn load_query_settings(state: &AppState) -> Result<QuerySettings, ApiError> {
   let (
     provider_mode,
     provider_base_url,

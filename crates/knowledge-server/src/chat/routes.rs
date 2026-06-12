@@ -1,18 +1,26 @@
+use std::convert::Infallible;
+
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
+use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::routing::{get, patch};
 use axum::{Json, Router};
+use futures_util::{Stream, StreamExt};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::app::state::AppState;
+use crate::chat::context::assemble_chat_context;
 use crate::chat::store::{
-    ConversationRecord, MessageRecord, create_conversation, delete_conversation,
+    ConversationRecord, MessageRecord, append_message, create_conversation, delete_conversation,
     find_conversation, list_conversations, list_messages, rename_conversation,
 };
 use crate::http::error::ApiError;
 use crate::projects::routes::{authorized_session, validate_csrf};
+use crate::projects::service::project_root_for_id;
+use crate::providers::{OpenAiCompatibleProvider, ProviderChatMessage, ProviderChatStreamRequest};
+use crate::query::load_query_settings;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -26,9 +34,11 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/api/projects/{project_id}/conversations/{conversation_id}/messages",
-            get(list_messages_handler),
+            get(list_messages_handler).post(send_message_handler),
         )
 }
+
+const MAX_HISTORY_MESSAGES: usize = 10;
 
 #[derive(Debug, Deserialize)]
 struct CreateConversationRequest {
@@ -39,6 +49,11 @@ struct CreateConversationRequest {
 #[derive(Debug, Deserialize)]
 struct RenameConversationRequest {
     title: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SendMessageRequest {
+    content: String,
 }
 
 async fn list_conversations_handler(
@@ -119,6 +134,154 @@ async fn list_messages_handler(
     Ok(Json(json!({
         "messages": messages.iter().map(message_json).collect::<Vec<_>>()
     })))
+}
+
+async fn send_message_handler(
+    State(state): State<AppState>,
+    Path((project_id, conversation_id)): Path<(String, String)>,
+    headers: HeaderMap,
+    Json(payload): Json<SendMessageRequest>,
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
+    let session = authorized_session(&state, &headers, Some(&project_id)).await?;
+    validate_csrf(&headers, &session.csrf_token)?;
+    let content = payload.content.trim().to_string();
+    if content.is_empty() {
+        return Err(ApiError::bad_request("message content must not be empty"));
+    }
+    find_conversation(&state.pool, &project_id, &conversation_id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("conversation not found"))?;
+
+    let settings = load_query_settings(&state).await?;
+    if settings.provider_mode != "openai-compatible"
+        || settings
+            .provider_base_url
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .is_empty()
+        || settings
+            .provider_model
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .is_empty()
+    {
+        return Err(ApiError::bad_request("provider configuration is incomplete"));
+    }
+
+    let root = project_root_for_id(&state, &project_id).await?;
+    let history = list_messages(&state.pool, &conversation_id).await?;
+    append_message(&state.pool, &conversation_id, "user", &content, None).await?;
+
+    let top_k = settings.default_query_limit.max(1) as usize;
+    let assembled = assemble_chat_context(&state, &project_id, &root, &content, top_k).await?;
+
+    let system_prompt = format!(
+        "You answer questions using only the provided wiki context. Respond in {}. If the context is insufficient, say so plainly.\n\nContext:\n{}",
+        settings.language,
+        if assembled.context_blocks.is_empty() {
+            "No relevant wiki context was retrieved.".to_string()
+        } else {
+            assembled.context_blocks.join("\n\n")
+        }
+    );
+
+    let mut messages: Vec<ProviderChatMessage> = history
+        .iter()
+        .rev()
+        .take(MAX_HISTORY_MESSAGES)
+        .rev()
+        .map(|message| ProviderChatMessage {
+            role: message.role.clone(),
+            content: message.content.clone(),
+        })
+        .collect();
+    messages.push(ProviderChatMessage {
+        role: "user".to_string(),
+        content,
+    });
+
+    let provider = OpenAiCompatibleProvider::new(
+        settings.provider_base_url.clone().unwrap_or_default(),
+        settings.provider_api_key.clone().unwrap_or_default(),
+        settings.provider_model.clone().unwrap_or_default(),
+        settings.provider_timeout_seconds.unwrap_or(30),
+    );
+
+    let context_summary = assembled.context_summary;
+    let stream_state = state.clone();
+
+    let event_stream = async_stream::stream! {
+        let mut full_text = String::new();
+        match provider
+            .stream_chat(ProviderChatStreamRequest { system_prompt, messages })
+            .await
+        {
+            Ok(mut deltas) => {
+                while let Some(delta) = deltas.next().await {
+                    match delta {
+                        Ok(text) => {
+                            full_text.push_str(&text);
+                            yield Ok(
+                                Event::default()
+                                    .event("delta")
+                                    .data(json!({ "text": text }).to_string()),
+                            );
+                        }
+                        Err(error) => {
+                            yield Ok(
+                                Event::default()
+                                    .event("error")
+                                    .data(json!({ "message": error.message() }).to_string()),
+                            );
+                            return;
+                        }
+                    }
+                }
+            }
+            Err(error) => {
+                yield Ok(
+                    Event::default()
+                        .event("error")
+                        .data(json!({ "message": error.message() }).to_string()),
+                );
+                return;
+            }
+        }
+
+        match append_message(
+            &stream_state.pool,
+            &conversation_id,
+            "assistant",
+            &full_text,
+            context_summary.as_deref(),
+        )
+        .await
+        {
+            Ok(message) => {
+                yield Ok(
+                    Event::default().event("done").data(
+                        json!({
+                            "messageId": message.id,
+                            "content": full_text,
+                            "contextSummary": context_summary
+                        })
+                        .to_string(),
+                    ),
+                );
+            }
+            Err(_) => {
+                yield Ok(
+                    Event::default()
+                        .event("error")
+                        .data(json!({ "message": "failed to persist assistant message" }).to_string()),
+                );
+            }
+        }
+    };
+
+    Ok(Sse::new(event_stream).keep_alive(KeepAlive::default()))
 }
 
 fn conversation_json(record: &ConversationRecord) -> Value {
