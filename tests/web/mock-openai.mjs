@@ -26,8 +26,32 @@ const payload = JSON.stringify({
 
 const server = http.createServer((request, response) => {
   if (request.method === "POST" && request.url === "/v1/chat/completions") {
-    response.writeHead(200, { "content-type": "application/json" });
-    response.end(payload);
+    let body = "";
+    request.on("data", (chunk) => {
+      body += chunk;
+    });
+    request.on("end", () => {
+      let parsed = {};
+      try {
+        parsed = JSON.parse(body);
+      } catch {
+        parsed = {};
+      }
+
+      if (parsed.stream === true) {
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        response.write('data: {"choices":[{"delta":{"content":"Attention "}}]}\n\n');
+        response.write(
+          'data: {"choices":[{"delta":{"content":"focuses computation on relevant tokens."}}]}\n\n',
+        );
+        response.write("data: [DONE]\n\n");
+        response.end();
+        return;
+      }
+
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(payload);
+    });
     return;
   }
 
