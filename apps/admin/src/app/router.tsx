@@ -5,6 +5,7 @@ import { AuthGuard } from "../components/layout/auth-guard";
 import { ProjectWorkspaceLayout } from "../components/layout/project-workspace-layout";
 import { LoginPage } from "../features/auth/login-page";
 import { AuditPage } from "../features/audit/page";
+import { ChatPage } from "../features/chat/page";
 import { DashboardPage } from "../features/dashboard/page";
 import { FilesPage } from "../features/files/page";
 import { GraphPage } from "../features/graph/page";
@@ -35,6 +36,7 @@ export function AppRoutes() {
             <Route path="source-watch" element={<SourceWatchPage />} />
             <Route path="search" element={<SearchPage />} />
             <Route path="query" element={<QueryPage />} />
+            <Route path="chat" element={<ChatPage />} />
             <Route path="lint" element={<LintPage />} />
             <Route path="graph" element={<GraphPage />} />
             <Route path="tasks" element={<TasksPage />} />
