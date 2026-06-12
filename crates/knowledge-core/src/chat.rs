@@ -33,6 +33,88 @@ pub fn compute_context_budget(max_context_size: Option<usize>) -> ContextBudget 
     }
 }
 
+const MAX_GREETING_LEN: usize = 20;
+
+pub fn is_greeting(text: &str) -> bool {
+    let stripped = text.trim().trim_end_matches(is_trailing_punct).trim();
+    if stripped.is_empty() || stripped.chars().count() > MAX_GREETING_LEN {
+        return false;
+    }
+    // CJK chars are unaffected by lowercasing, so one normalized form serves
+    // both the ASCII and CJK word lists (mirrors upstream toLowerCase()).
+    let normalized = stripped.to_lowercase();
+
+    matches_english(&normalized) || matches_cjk(&normalized) || matches_european(&normalized)
+}
+
+fn is_trailing_punct(ch: char) -> bool {
+    ch.is_whitespace()
+        || matches!(
+            ch,
+            '!' | '！' | '。' | '.' | '?' | '？' | '~' | ',' | '，' | '、' | ';' | '；' | ':' | '：'
+        )
+}
+
+fn matches_english(text: &str) -> bool {
+    const BASES: &[&str] = &[
+        "hi", "hello", "hey", "yo", "sup", "howdy", "hiya", "heya", "hullo",
+    ];
+    const SUFFIXES: &[&str] = &[" there", " y'all", " you", " folks", " everyone"];
+
+    if BASES.contains(&text) || text == "greetings" {
+        return true;
+    }
+    for base in BASES {
+        if let Some(rest) = text.strip_prefix(base) {
+            if SUFFIXES.contains(&rest) {
+                return true;
+            }
+        }
+    }
+    if let Some(rest) = text.strip_prefix("good ") {
+        return ["morning", "afternoon", "evening", "day", "night"].contains(&rest);
+    }
+    ["what's up", "whats up", "wassup", "whaddup"].contains(&text)
+}
+
+fn matches_cjk(text: &str) -> bool {
+    const PARTICLES: &[char] = &['啊', '呀', '吖', '呢', '么', '呗', '哦', '哈'];
+    const STANDALONE: &[&str] = &[
+        "你好", "您好", "大家好", "嗨", "哈喽", "哈啰", "哈囉", "哈罗", "喂",
+    ];
+    const TIME_OF_DAY: &[&str] = &[
+        "早", "早啊", "早安", "早上好", "中午好", "下午好", "晚上好", "晚安",
+    ];
+    const ARE_YOU_THERE: &[&str] = &[
+        "在吗", "在嗎", "在不在", "有人吗", "有人嗎", "有人在吗", "有人在嗎",
+    ];
+    const JAPANESE: &[&str] = &[
+        "こんにちは",
+        "こんばんは",
+        "おはよう",
+        "おはようございます",
+        "やあ",
+        "どうも",
+        "はじめまして",
+    ];
+    const KOREAN: &[&str] = &["안녕", "안녕하세요", "안녕하십니까"];
+
+    if ARE_YOU_THERE.contains(&text) || JAPANESE.contains(&text) || KOREAN.contains(&text) {
+        return true;
+    }
+
+    let base = text.strip_suffix(PARTICLES).unwrap_or(text);
+    STANDALONE.contains(&base) || TIME_OF_DAY.contains(&base)
+}
+
+fn matches_european(text: &str) -> bool {
+    [
+        "hola", "bonjour", "salut", "coucou", "hallo", "servus", "hej", "hejsan", "ciao",
+        "saluton", "ola", "olá", "privet", "привет",
+    ]
+    .contains(&text)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -60,5 +142,38 @@ mod tests {
         let budget = compute_context_budget(Some(1_000_000));
         assert_eq!(budget.page_budget, 500_000);
         assert_eq!(budget.max_page_size, 150_000);
+    }
+
+    #[test]
+    fn detects_plain_greetings_across_languages() {
+        for text in [
+            "hi",
+            "Hello!!",
+            "hey there",
+            "good morning",
+            "what's up?",
+            "你好啊",
+            "早上好",
+            "在吗",
+            "こんにちは",
+            "안녕하세요",
+            "bonjour",
+            "привет",
+        ] {
+            assert!(is_greeting(text), "expected greeting: {text}");
+        }
+    }
+
+    #[test]
+    fn rejects_questions_long_messages_and_empty_input() {
+        for text in [
+            "hello, how do I train a transformer?",
+            "hi I have a question about attention",
+            "",
+            "   ",
+            "the index page is broken",
+        ] {
+            assert!(!is_greeting(text), "expected non-greeting: {text}");
+        }
     }
 }
