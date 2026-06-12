@@ -1,6 +1,5 @@
 use std::collections::BTreeSet;
 use std::fs;
-use std::path::Path;
 
 use knowledge_core::chat::{compute_context_budget, is_greeting};
 use knowledge_core::project::root::ProjectRoot;
@@ -61,7 +60,7 @@ pub async fn assemble_chat_context(
             continue;
         }
         used += cost;
-        seen.insert(page_id_from_path(&result.path));
+        seen.insert(result.path.replace('\\', "/"));
         blocks.push(format!(
             "[{}] {}\nTitle: {}\n{}",
             blocks.len() + 1,
@@ -73,18 +72,19 @@ pub async fn assemble_chat_context(
     }
 
     // Graph expansion from the top hit (upstream's related-page enrichment).
-    if let Some(top) = results.results.first() {
+    if let Some(top) = results.results.first()
+        && let Some(top_node_id) = wiki_node_id(&top.path)
+    {
         let wiki_root = root.as_path().join("wiki");
         let graph = build_retrieval_graph(&wiki_root);
-        for (related_id, _score) in
-            related_nodes(&graph, &page_id_from_path(&top.path), RELATED_PAGE_LIMIT)
-        {
-            if seen.contains(&related_id) {
-                continue;
-            }
+        for (related_id, _score) in related_nodes(&graph, &top_node_id, RELATED_PAGE_LIMIT) {
             let Some(node) = graph.nodes.get(&related_id) else {
                 continue;
             };
+            let project_rel = format!("wiki/{}", node.relative_path);
+            if seen.contains(&project_rel) {
+                continue;
+            }
             let Ok(content) = fs::read_to_string(wiki_root.join(&node.relative_path)) else {
                 continue;
             };
@@ -94,15 +94,15 @@ pub async fn assemble_chat_context(
                 continue;
             }
             used += cost;
-            seen.insert(related_id);
             blocks.push(format!(
-                "[{}] wiki/{}\nTitle: {}\n{}",
+                "[{}] {}\nTitle: {}\n{}",
                 blocks.len() + 1,
-                node.relative_path,
+                project_rel,
                 node.title,
                 truncated
             ));
-            summary.push(format!("wiki/{} ({})", node.relative_path, node.title));
+            summary.push(format!("{} ({})", project_rel, node.title));
+            seen.insert(project_rel);
         }
     }
 
@@ -118,10 +118,8 @@ pub async fn assemble_chat_context(
     })
 }
 
-fn page_id_from_path(path: &str) -> String {
-    Path::new(path)
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .unwrap_or_default()
-        .to_string()
+fn wiki_node_id(path: &str) -> Option<String> {
+    path.replace('\\', "/")
+        .strip_prefix("wiki/")
+        .map(str::to_string)
 }
