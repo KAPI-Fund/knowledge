@@ -262,6 +262,30 @@ const projectSchema = z.object({
   createdAt: z.string(),
 });
 
+const conversationSchema = z.object({
+  id: z.string(),
+  projectId: z.string(),
+  title: z.string(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+
+const conversationsSchema = z.object({
+  conversations: z.array(conversationSchema),
+});
+
+const conversationMessagesSchema = z.object({
+  messages: z.array(
+    z.object({
+      id: z.string(),
+      role: z.string(),
+      content: z.string(),
+      contextSummary: z.string().nullable().optional(),
+      createdAt: z.string(),
+    }),
+  ),
+});
+
 export async function login(input: { username: string; password: string }) {
   return apiFetch(
     "/api/auth/login",
@@ -411,6 +435,66 @@ export async function saveProjectFileContent(input: {
     },
     saveFileContentSchema,
   );
+}
+
+export async function listConversations(projectId: string) {
+  const response = await apiFetch(
+    `/api/projects/${projectId}/conversations`,
+    { method: "GET" },
+    conversationsSchema,
+  );
+  return response.conversations;
+}
+
+export async function createConversation(input: { projectId: string; title?: string }) {
+  return apiFetch(
+    `/api/projects/${input.projectId}/conversations`,
+    {
+      method: "POST",
+      headers: csrfHeader(),
+      body: JSON.stringify({ title: input.title }),
+    },
+    conversationSchema,
+  );
+}
+
+export async function renameConversation(input: {
+  projectId: string;
+  conversationId: string;
+  title: string;
+}) {
+  return apiFetch(
+    `/api/projects/${input.projectId}/conversations/${input.conversationId}`,
+    {
+      method: "PATCH",
+      headers: csrfHeader(),
+      body: JSON.stringify({ title: input.title }),
+    },
+    conversationSchema,
+  );
+}
+
+export async function deleteConversation(input: { projectId: string; conversationId: string }) {
+  return apiFetch(
+    `/api/projects/${input.projectId}/conversations/${input.conversationId}`,
+    {
+      method: "DELETE",
+      headers: csrfHeader(),
+    },
+    z.object({ deleted: z.boolean() }),
+  );
+}
+
+export async function listConversationMessages(input: {
+  projectId: string;
+  conversationId: string;
+}) {
+  const response = await apiFetch(
+    `/api/projects/${input.projectId}/conversations/${input.conversationId}/messages`,
+    { method: "GET" },
+    conversationMessagesSchema,
+  );
+  return response.messages;
 }
 
 export async function deleteProjectWikiPages(input: { projectId: string; paths: string[] }) {
