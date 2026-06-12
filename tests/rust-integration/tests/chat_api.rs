@@ -287,7 +287,160 @@ async fn chat_message_streams_response_and_persists_assistant_message() {
     );
 }
 
+#[tokio::test]
+async fn conversations_are_private_to_their_owner() {
+    let temp = tempdir().unwrap();
+    let _env = TestEnvironment::start("chat-private").await.unwrap();
+    let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
+    let state = bootstrap_state(&config).await.unwrap();
+    let (admin_cookie, admin_csrf) = login_and_csrf(state.clone()).await;
+    let project_root = temp.path().join("chat-private-project");
+    let project_id =
+        support::create_project_with_alias(state.clone(), &admin_cookie, &admin_csrf, project_root)
+            .await;
+
+    // Admin creates a conversation.
+    let created = build_app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/projects/{project_id}/conversations"))
+                .header(header::COOKIE, &admin_cookie)
+                .header("x-csrf-token", &admin_csrf)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(json!({ "title": "Admin notes" }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let conversation_id = read_json(created.into_body())
+        .await
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap()
+        .to_string();
+
+    // Second user: login auto-creates the account; membership added directly.
+    let (alice_cookie, alice_csrf) = login_as(state.clone(), "alice", "alice-password").await;
+    let alice_id = sqlx::query_scalar::<_, String>("SELECT id FROM users WHERE username = 'alice'")
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO project_members (id, project_id, user_id, role, can_import, created_at)
+         VALUES ($1, $2, $3, 'member', FALSE, $4)",
+    )
+    .bind(uuid::Uuid::new_v4().to_string())
+    .bind(&project_id)
+    .bind(&alice_id)
+    .bind("2026-06-12T00:00:00Z")
+    .execute(&state.pool)
+    .await
+    .unwrap();
+
+    // Alice sees an empty conversation list.
+    let listed = build_app(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/projects/{project_id}/conversations"))
+                .header(header::COOKIE, &alice_cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(listed.status(), StatusCode::OK);
+    let listed_payload = read_json(listed.into_body()).await;
+    assert!(
+        listed_payload
+            .get("conversations")
+            .and_then(Value::as_array)
+            .unwrap()
+            .is_empty()
+    );
+
+    // Alice cannot read admin's messages.
+    let messages = build_app(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/projects/{project_id}/conversations/{conversation_id}/messages"
+                ))
+                .header(header::COOKIE, &alice_cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(messages.status(), StatusCode::NOT_FOUND);
+
+    // Alice cannot rename it.
+    let renamed = build_app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!(
+                    "/api/projects/{project_id}/conversations/{conversation_id}"
+                ))
+                .header(header::COOKIE, &alice_cookie)
+                .header("x-csrf-token", &alice_csrf)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(json!({ "title": "Hijacked" }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(renamed.status(), StatusCode::NOT_FOUND);
+
+    // Alice cannot delete it.
+    let deleted = build_app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!(
+                    "/api/projects/{project_id}/conversations/{conversation_id}"
+                ))
+                .header(header::COOKIE, &alice_cookie)
+                .header("x-csrf-token", &alice_csrf)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(deleted.status(), StatusCode::NOT_FOUND);
+
+    // Admin still sees the conversation.
+    let admin_list = build_app(state)
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/projects/{project_id}/conversations"))
+                .header(header::COOKIE, &admin_cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let admin_payload = read_json(admin_list.into_body()).await;
+    assert_eq!(
+        admin_payload
+            .get("conversations")
+            .and_then(Value::as_array)
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
 async fn login_and_csrf(state: knowledge_server::app::state::AppState) -> (String, String) {
+    login_as(state, "admin", "secret-password").await
+}
+
+async fn login_as(
+    state: knowledge_server::app::state::AppState,
+    username: &str,
+    password: &str,
+) -> (String, String) {
     let login = build_app(state)
         .oneshot(
             Request::builder()
@@ -296,8 +449,8 @@ async fn login_and_csrf(state: knowledge_server::app::state::AppState) -> (Strin
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(
                     json!({
-                      "username": "admin",
-                      "password": "secret-password"
+                      "username": username,
+                      "password": password
                     })
                     .to_string(),
                 ))

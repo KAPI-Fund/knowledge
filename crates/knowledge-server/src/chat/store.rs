@@ -61,14 +61,16 @@ pub async fn create_conversation(
 pub async fn list_conversations(
     pool: &PgPool,
     project_id: &str,
+    user_id: &str,
 ) -> Result<Vec<ConversationRecord>, ApiError> {
     sqlx::query_as::<_, ConversationRecord>(
         "SELECT id, project_id, user_id, title, created_at, updated_at
          FROM conversations
-         WHERE project_id = $1
+         WHERE project_id = $1 AND user_id = $2
          ORDER BY updated_at DESC",
     )
     .bind(project_id)
+    .bind(user_id)
     .fetch_all(pool)
     .await
     .map_err(ApiError::from)
@@ -78,14 +80,16 @@ pub async fn find_conversation(
     pool: &PgPool,
     project_id: &str,
     conversation_id: &str,
+    user_id: &str,
 ) -> Result<Option<ConversationRecord>, ApiError> {
     sqlx::query_as::<_, ConversationRecord>(
         "SELECT id, project_id, user_id, title, created_at, updated_at
          FROM conversations
-         WHERE id = $1 AND project_id = $2",
+         WHERE id = $1 AND project_id = $2 AND user_id = $3",
     )
     .bind(conversation_id)
     .bind(project_id)
+    .bind(user_id)
     .fetch_optional(pool)
     .await
     .map_err(ApiError::from)
@@ -95,19 +99,21 @@ pub async fn rename_conversation(
     pool: &PgPool,
     project_id: &str,
     conversation_id: &str,
+    user_id: &str,
     title: &str,
 ) -> Result<Option<ConversationRecord>, ApiError> {
     let now = now_rfc3339()?;
     sqlx::query_as::<_, ConversationRecord>(
         "UPDATE conversations
          SET title = $1, updated_at = $2
-         WHERE id = $3 AND project_id = $4
+         WHERE id = $3 AND project_id = $4 AND user_id = $5
          RETURNING id, project_id, user_id, title, created_at, updated_at",
     )
     .bind(title)
     .bind(now)
     .bind(conversation_id)
     .bind(project_id)
+    .bind(user_id)
     .fetch_optional(pool)
     .await
     .map_err(ApiError::from)
@@ -117,13 +123,16 @@ pub async fn delete_conversation(
     pool: &PgPool,
     project_id: &str,
     conversation_id: &str,
+    user_id: &str,
 ) -> Result<bool, ApiError> {
-    let result = sqlx::query("DELETE FROM conversations WHERE id = $1 AND project_id = $2")
-        .bind(conversation_id)
-        .bind(project_id)
-        .execute(pool)
-        .await
-        .map_err(ApiError::from)?;
+    let result =
+        sqlx::query("DELETE FROM conversations WHERE id = $1 AND project_id = $2 AND user_id = $3")
+            .bind(conversation_id)
+            .bind(project_id)
+            .bind(user_id)
+            .execute(pool)
+            .await
+            .map_err(ApiError::from)?;
     Ok(result.rows_affected() > 0)
 }
 
