@@ -6,7 +6,7 @@ use std::path::Path;
 use serde::Serialize;
 
 const MAX_GRAPH_LIMIT: usize = 1000;
-const STRUCTURAL_IDS: &[&str] = &["index", "log", "overview", "schema", "purpose"];
+pub(crate) const STRUCTURAL_IDS: &[&str] = &["index", "log", "overview", "schema", "purpose"];
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -323,7 +323,7 @@ fn resolve_target(raw_target: &str, aliases: &BTreeMap<String, String>) -> Optio
   aliases.get(&normalized).cloned()
 }
 
-fn normalize_target(value: &str) -> String {
+pub(crate) fn normalize_target(value: &str) -> String {
   let base = value
     .trim()
     .trim_end_matches(".md")

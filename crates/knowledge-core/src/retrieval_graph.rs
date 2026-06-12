@@ -5,6 +5,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
+use crate::graph::{STRUCTURAL_IDS, normalize_target};
+
 type RawNode = (String, String, String, String, Vec<String>, Vec<String>);
 
 const DIRECT_LINK_WEIGHT: f64 = 3.0;
@@ -32,13 +34,19 @@ pub fn build_retrieval_graph(wiki_root: &Path) -> RetrievalGraph {
     let mut raw_nodes: Vec<RawNode> = Vec::new();
     collect_markdown(wiki_root, wiki_root, &mut raw_nodes);
 
-    let node_ids: BTreeSet<String> = raw_nodes.iter().map(|(id, ..)| id.clone()).collect();
+    // Wikilinks carry no directory info, so they resolve via normalized
+    // stems (upstream graph-relevance semantics); node identity is the path.
+    let mut aliases: BTreeMap<String, String> = BTreeMap::new();
+    for (id, ..) in &raw_nodes {
+        aliases.insert(normalize_target(id), id.clone());
+    }
+
     let mut out_links: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     let mut in_links: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
 
     for (id, _, _, _, _, raw_links) in &raw_nodes {
         for raw in raw_links {
-            let Some(resolved) = resolve_target(raw, &node_ids) else {
+            let Some(resolved) = resolve_target(raw, &aliases) else {
                 continue;
             };
             if &resolved == id {
@@ -87,18 +95,28 @@ fn collect_markdown(wiki_root: &Path, dir: &Path, raw_nodes: &mut Vec<RawNode>) 
         if !name.ends_with(".md") {
             continue;
         }
+        let stem = name.trim_end_matches(".md");
+        if STRUCTURAL_IDS.contains(&stem) {
+            continue;
+        }
         let Ok(content) = fs::read_to_string(&path) else {
             continue;
         };
-        let id = name.trim_end_matches(".md").to_string();
         let relative_path = path
             .strip_prefix(wiki_root)
             .unwrap_or(&path)
             .to_string_lossy()
             .replace('\\', "/");
-        let (title, node_type, sources) = extract_frontmatter(&content, &id);
+        let (title, node_type, sources) = extract_frontmatter(&content, stem);
         let links = extract_wikilinks(&content);
-        raw_nodes.push((id, title, node_type, relative_path, sources, links));
+        raw_nodes.push((
+            relative_path.clone(),
+            title,
+            node_type,
+            relative_path,
+            sources,
+            links,
+        ));
     }
 }
 
@@ -158,7 +176,14 @@ fn extract_wikilinks(content: &str) -> Vec<String> {
             break;
         };
         let inner = &rest[..end];
-        let target = inner.split('|').next().unwrap_or(inner).trim();
+        let target = inner
+            .split('|')
+            .next()
+            .unwrap_or(inner)
+            .split('#')
+            .next()
+            .unwrap_or("")
+            .trim();
         if !target.is_empty() {
             links.push(target.to_string());
         }
@@ -167,22 +192,8 @@ fn extract_wikilinks(content: &str) -> Vec<String> {
     links
 }
 
-fn resolve_target(raw: &str, node_ids: &BTreeSet<String>) -> Option<String> {
-    if node_ids.contains(raw) {
-        return Some(raw.to_string());
-    }
-    let raw_lower = raw.to_lowercase();
-    let normalized = raw_lower.split_whitespace().collect::<Vec<_>>().join("-");
-    for id in node_ids {
-        let id_lower = id.to_lowercase();
-        if id_lower == normalized || id_lower == raw_lower {
-            return Some(id.clone());
-        }
-        if id_lower.split_whitespace().collect::<Vec<_>>().join("-") == normalized {
-            return Some(id.clone());
-        }
-    }
-    None
+fn resolve_target(raw: &str, aliases: &BTreeMap<String, String>) -> Option<String> {
+    aliases.get(&normalize_target(raw)).cloned()
 }
 
 pub fn calculate_relevance(a: &RetrievalNode, b: &RetrievalNode, graph: &RetrievalGraph) -> f64 {
@@ -295,21 +306,66 @@ mod tests {
         let graph = build_retrieval_graph(&wiki);
         assert_eq!(graph.nodes.len(), 3);
 
-        // [[KV Cache]] resolves to kv-cache via space->dash normalization.
-        assert!(graph.nodes["attention"].out_links.contains("kv-cache"));
-        assert!(graph.nodes["kv-cache"].in_links.contains("attention"));
+        // [[KV Cache]] resolves to concepts/kv-cache.md via stem normalization.
+        assert!(
+            graph.nodes["concepts/attention.md"]
+                .out_links
+                .contains("concepts/kv-cache.md")
+        );
+        assert!(
+            graph.nodes["concepts/kv-cache.md"]
+                .in_links
+                .contains("concepts/attention.md")
+        );
 
-        let related = related_nodes(&graph, "attention", 5);
-        assert_eq!(related[0].0, "kv-cache");
+        let related = related_nodes(&graph, "concepts/attention.md", 5);
+        assert_eq!(related[0].0, "concepts/kv-cache.md");
         // Direct link (2-way counted once each direction: 1*3.0) + shared source (1*4.0)
         // dominates the tokenizer's type-affinity-only score.
         assert!(
             related[0].1
                 > related
                     .iter()
-                    .find(|(id, _)| id == "tokenizer")
+                    .find(|(id, _)| id == "concepts/tokenizer.md")
                     .map(|(_, s)| *s)
                     .unwrap_or(0.0)
+        );
+    }
+
+    #[test]
+    fn same_stem_pages_stay_distinct_and_anchors_resolve() {
+        let temp = tempfile::tempdir().unwrap();
+        let wiki = temp.path().join("wiki");
+        write_page(
+            &wiki,
+            "concepts/attention.md",
+            "---\ntype: concept\ntitle: Attention\nsources: []\n---\n\nSee [[KV Cache#layout]].\n",
+        );
+        write_page(
+            &wiki,
+            "sources/attention.md",
+            "---\ntype: source\ntitle: Attention Paper\nsources: []\n---\n\nSource notes.\n",
+        );
+        write_page(
+            &wiki,
+            "concepts/kv-cache.md",
+            "---\ntype: concept\ntitle: KV Cache\nsources: []\n---\n\nCaches keys and values.\n",
+        );
+        write_page(&wiki, "index.md", "# Index\n\n- [[Attention]]\n");
+
+        let graph = build_retrieval_graph(&wiki);
+
+        // Same-stem pages are distinct nodes; structural index.md is skipped.
+        assert!(graph.nodes.contains_key("concepts/attention.md"));
+        assert!(graph.nodes.contains_key("sources/attention.md"));
+        assert!(!graph.nodes.contains_key("index.md"));
+        assert!(!graph.nodes.contains_key("index"));
+
+        // [[KV Cache#layout]] resolves after anchor stripping.
+        assert!(
+            graph.nodes["concepts/attention.md"]
+                .out_links
+                .contains("concepts/kv-cache.md")
         );
     }
 
