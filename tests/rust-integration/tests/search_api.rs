@@ -412,6 +412,110 @@ async fn task_endpoint_returns_source_task_queue() {
     );
 }
 
+#[tokio::test]
+async fn same_stem_wiki_pages_index_and_delete_independently() {
+    let temp = tempdir().unwrap();
+    let _env = TestEnvironment::start("search-stem-collision").await.unwrap();
+    let mock = MockOpenAiServer::start(MockScenario::success())
+        .await
+        .unwrap();
+    let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
+    let state = bootstrap_state(&config).await.unwrap();
+    let (cookie, csrf) = login_and_csrf(state.clone()).await;
+    let project_root = temp.path().join("stem-collision-project");
+    let project_id = create_project(state.clone(), &cookie, &csrf, project_root.clone()).await;
+
+    fs::write(
+    project_root.join("wiki/concepts/attention.md"),
+    "---\ntype: concept\ntitle: Attention\nsources: []\n---\n\n# Attention\n\nAttention focuses computation on relevant tokens.\n",
+  )
+  .unwrap();
+    fs::write(
+    project_root.join("wiki/sources/attention.md"),
+    "---\ntype: source\ntitle: Attention Paper\nsources: []\n---\n\n# Attention Paper\n\nSource notes about attention experiments.\n",
+  )
+  .unwrap();
+
+    sqlx::query(
+        "UPDATE system_settings
+     SET provider_mode = $1,
+         provider_base_url = $2,
+         provider_api_key = $3,
+         provider_model = $4,
+         provider_embedding_model = $5,
+         provider_timeout_seconds = $6",
+    )
+    .bind("openai-compatible")
+    .bind(mock.base_url())
+    .bind("test-key")
+    .bind("mock-model")
+    .bind("mock-embedding")
+    .bind(30_i64)
+    .execute(&state.pool)
+    .await
+    .unwrap();
+
+    // Hybrid search triggers the embedding index refresh.
+    let response = build_app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/projects/{project_id}/search"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .body(Body::from(
+                    json!({ "query": "attention", "topK": 5 }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // Both same-stem pages must be indexed under distinct identities.
+    let page_ids = sqlx::query_scalar::<_, String>(
+        "SELECT DISTINCT page_id FROM project_embedding_chunks WHERE project_id = $1 ORDER BY page_id",
+    )
+    .bind(&project_id)
+    .fetch_all(&state.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        page_ids,
+        vec![
+            "wiki/concepts/attention.md".to_string(),
+            "wiki/sources/attention.md".to_string()
+        ]
+    );
+
+    // Deleting one page must not remove the other page's embeddings.
+    let delete_response = build_app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/projects/{project_id}/wiki-pages:delete"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .header("x-csrf-token", &csrf)
+                .body(Body::from(
+                    json!({ "paths": ["wiki/sources/attention.md"] }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(delete_response.status(), StatusCode::OK);
+
+    let remaining = sqlx::query_scalar::<_, String>(
+        "SELECT DISTINCT page_id FROM project_embedding_chunks WHERE project_id = $1",
+    )
+    .bind(&project_id)
+    .fetch_all(&state.pool)
+    .await
+    .unwrap();
+    assert_eq!(remaining, vec!["wiki/concepts/attention.md".to_string()]);
+}
+
 async fn login_and_csrf(state: knowledge_server::app::state::AppState) -> (String, String) {
     let login = build_app(state)
         .oneshot(

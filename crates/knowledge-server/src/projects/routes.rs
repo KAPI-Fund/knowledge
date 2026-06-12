@@ -648,7 +648,7 @@ async fn delete_wiki_pages_handler(
     }
     let root = project_root_for_id(&state, &project_id).await?;
     let result = delete_wiki_pages_with_refs(&root, &payload.paths).map_err(map_wiki_page_error)?;
-    delete_pages(&state.pool, &project_id, &result.deleted_page_ids).await?;
+    delete_pages(&state.pool, &project_id, &result.deleted_paths).await?;
     append_audit_log(
         &state,
         CreateAuditLog {

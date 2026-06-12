@@ -385,8 +385,9 @@ fn apply_rrf_scores(
   vector_scores: &BTreeMap<String, f32>,
 ) {
   for result in results {
-    let token = token_rank.get(&normalize_path(&result.path)).copied();
-    let vector = vector_rank.get(&file_stem(&result.path)).copied();
+    let key = normalize_path(&result.path);
+    let token = token_rank.get(&key).copied();
+    let vector = vector_rank.get(&key).copied();
     let mut rrf = 0.0;
     if let Some(rank) = token {
       rrf += 1.0 / (RRF_K + rank as f64);
@@ -394,7 +395,7 @@ fn apply_rrf_scores(
     if let Some(rank) = vector {
       rrf += 1.0 / (RRF_K + rank as f64);
     }
-    if let Some(score) = vector_scores.get(&file_stem(&result.path)).copied() {
+    if let Some(score) = vector_scores.get(&key).copied() {
       result.vector_score = Some(score);
     }
     result.score = rrf;
@@ -413,14 +414,6 @@ fn search_mode(token_rank_empty: bool, vector_hits: usize) -> &'static str {
 
 fn normalize_path(path: &str) -> String {
   path.replace('\\', "/")
-}
-
-fn file_stem(path: &str) -> String {
-  Path::new(path)
-    .file_stem()
-    .and_then(|value| value.to_str())
-    .unwrap_or(path)
-    .to_string()
 }
 
 fn cosine_similarity(left: &[f32], right: &[f32]) -> Option<f32> {
@@ -484,24 +477,24 @@ fn collect_wiki_pages(
       continue;
     }
 
-    let page_id = path
+    let stem = path
       .file_stem()
       .and_then(|value| value.to_str())
-      .unwrap_or_default()
-      .to_string();
-    if STRUCTURAL_PAGE_IDS.contains(&page_id.as_str()) {
+      .unwrap_or_default();
+    if STRUCTURAL_PAGE_IDS.contains(&stem) {
       continue;
     }
 
     let content = fs::read_to_string(&path).map_err(|error| ApiError::internal(error.to_string()))?;
     let file_name = path.file_name().and_then(|value| value.to_str()).unwrap_or_default();
+    let relative_path = path
+      .strip_prefix(project_root)
+      .unwrap_or(&path)
+      .to_string_lossy()
+      .replace('\\', "/");
     pages.push(PageDocument {
-      page_id,
-      relative_path: path
-        .strip_prefix(project_root)
-        .unwrap_or(&path)
-        .to_string_lossy()
-        .replace('\\', "/"),
+      page_id: relative_path.clone(),
+      relative_path,
       title: extract_title(&content, file_name),
       content_hash: sha256_hex(&content),
       content,

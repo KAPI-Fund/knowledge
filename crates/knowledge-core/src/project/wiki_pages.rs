@@ -74,7 +74,6 @@ pub fn save_wiki_page(
 #[derive(Debug, Clone)]
 pub struct WikiPagesDeleteResult {
   pub deleted_paths: Vec<String>,
-  pub deleted_page_ids: Vec<String>,
   pub rewritten_files: usize,
 }
 
@@ -84,7 +83,6 @@ pub fn delete_wiki_pages_with_refs(
 ) -> Result<WikiPagesDeleteResult, WikiPageError> {
   let mut result = WikiPagesDeleteResult {
     deleted_paths: Vec::new(),
-    deleted_page_ids: Vec::new(),
     rewritten_files: 0,
   };
 
@@ -119,9 +117,6 @@ pub fn delete_wiki_pages_with_refs(
       Err(error) => return Err(WikiPageError::Io(error)),
     }
     result.deleted_paths.push(normalized.clone());
-    if !slug.is_empty() {
-      result.deleted_page_ids.push(slug.clone());
-    }
 
     // Source pages own wiki/media/<slug>/. Guard the slug so a
     // degenerate name can never resolve to the media root itself.
@@ -295,8 +290,8 @@ mod tests {
     .unwrap();
 
     assert_eq!(result.deleted_paths.len(), 2);
-    assert!(result.deleted_page_ids.contains(&"kv-cache".to_string()));
-    assert!(result.deleted_page_ids.contains(&"paper".to_string()));
+    assert!(result.deleted_paths.contains(&"wiki/concepts/kv-cache.md".to_string()));
+    assert!(result.deleted_paths.contains(&"wiki/sources/paper.md".to_string()));
     assert_eq!(result.rewritten_files, 2);
 
     assert!(!root.safe_join("wiki/concepts/kv-cache.md").unwrap().exists());
