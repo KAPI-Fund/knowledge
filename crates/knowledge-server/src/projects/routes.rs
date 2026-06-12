@@ -1200,7 +1200,7 @@ fn extract_session_id(headers: &HeaderMap) -> Option<String> {
         })
 }
 
-fn validate_csrf(headers: &HeaderMap, expected_token: &str) -> Result<(), ApiError> {
+pub(crate) fn validate_csrf(headers: &HeaderMap, expected_token: &str) -> Result<(), ApiError> {
     let supplied = headers
         .get("x-csrf-token")
         .and_then(|value| value.to_str().ok())
@@ -1283,7 +1283,7 @@ fn map_wiki_page_error(error: WikiPageError) -> ApiError {
     }
 }
 
-async fn authorized_session(
+pub(crate) async fn authorized_session(
     state: &AppState,
     headers: &HeaderMap,
     project_id: Option<&str>,

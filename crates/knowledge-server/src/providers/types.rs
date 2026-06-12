@@ -26,6 +26,18 @@ pub enum ProviderContentBlock {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderChatMessage {
+    pub role: String,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderChatStreamRequest {
+    pub system_prompt: String,
+    pub messages: Vec<ProviderChatMessage>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderEmbeddingRequest {
     pub text: String,
 }

@@ -16,7 +16,7 @@ test("admin can run a provider-backed query and save it to the wiki", async ({ p
   await createProject(page, "query-project");
   await expect(page.getByRole("heading", { name: "query-project" })).toBeVisible();
 
-  await page.getByRole("link", { name: "Sources" }).click();
+  await page.getByRole("tab", { name: "Sources" }).click();
   await page.getByLabel("File Name").fill("attention.md");
   await page
     .getByLabel("Markdown Content")
@@ -25,13 +25,13 @@ test("admin can run a provider-backed query and save it to the wiki", async ({ p
   await expect(page.getByText("raw/sources/attention.md").first()).toBeVisible();
   await page.getByRole("button", { name: "Ingest" }).click();
 
-  await page.getByRole("link", { name: "Tasks" }).click();
+  await page.getByRole("tab", { name: "Tasks" }).click();
   const ingestTask = page
-    .getByRole("listitem")
+    .getByRole("row")
     .filter({ hasText: "Ingest raw/sources/attention.md" });
   await expect(ingestTask).toContainText("succeeded");
 
-  await page.getByRole("link", { name: "Query" }).click();
+  await page.getByRole("tab", { name: "Query", exact: true }).click();
   await page.getByLabel("Query").fill("What is attention?");
   await page.getByRole("button", { name: "Run Query" }).click();
   await expect(page.getByText("Attention focuses computation on relevant tokens.")).toBeVisible();
@@ -39,7 +39,7 @@ test("admin can run a provider-backed query and save it to the wiki", async ({ p
   await expect(page.getByText("Saved to wiki")).toBeVisible();
   await expect(page.getByText("wiki/queries/what-is-attention.md")).toBeVisible();
 
-  await page.getByRole("link", { name: "Search" }).click();
+  await page.getByRole("tab", { name: "Search" }).click();
   await page.getByLabel("Search Query").fill("Attention focuses computation");
   await page.getByRole("button", { name: "Run Search" }).click();
   await expect(page.getByText("wiki/queries/what-is-attention.md")).toBeVisible();

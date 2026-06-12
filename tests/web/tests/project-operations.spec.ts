@@ -12,65 +12,67 @@ test("admin can inspect project operations data", async ({ page }) => {
   await page.getByLabel("Username").fill("admin");
   await page.getByLabel("Password").fill("secret-password");
   await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page.getByRole("heading", { name: "Projects" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible();
   await createProject(page, "ops-project");
   await expect(page.getByRole("heading", { name: "ops-project" })).toBeVisible();
 
-  await page.getByRole("link", { name: "Sources", exact: true }).click();
-  const attentionSource = page.getByRole("listitem").filter({ hasText: "raw/sources/attention.md" });
-  const nestedChildSource = page.getByRole("listitem").filter({ hasText: "raw/sources/team-a/child.md" });
+  await page.getByRole("tab", { name: "Sources", exact: true }).click();
+  const attentionSource = page.getByRole("row").filter({ hasText: "raw/sources/attention.md" });
+  const nestedChildSource = page.getByRole("row").filter({ hasText: "raw/sources/team-a/child.md" });
+  await page.getByRole("tab", { name: "File Upload" }).click();
   await page.getByLabel("Files to Upload").setInputFiles(singleUploadPath);
   await page.getByRole("button", { name: "Upload Files" }).click();
-  await page.getByRole("link", { name: "Tasks", exact: true }).click();
-  const importTask = page.getByRole("listitem").filter({ hasText: "Imported attention.md" });
+  await page.getByRole("tab", { name: "Tasks", exact: true }).click();
+  const importTask = page.getByRole("row").filter({ hasText: "Imported attention.md" });
   await expect(importTask).toBeVisible();
-  await page.getByRole("link", { name: "Sources", exact: true }).click();
+  await page.getByRole("tab", { name: "Sources", exact: true }).click();
   await expect(attentionSource).toBeVisible();
 
+  await page.getByRole("tab", { name: "Folder Import" }).click();
   await page.getByLabel("Folder to Import").setInputFiles(folderUploadPath);
   await page.getByRole("button", { name: "Import Folder" }).click();
   await expect(nestedChildSource).toBeVisible();
   await expect(page.getByText("raw/sources/team-a/docs/peer.md").first()).toBeVisible();
 
   await attentionSource.getByRole("button", { name: "Ingest" }).click();
-  await page.getByRole("link", { name: "Tasks", exact: true }).click();
+  await page.getByRole("tab", { name: "Tasks", exact: true }).click();
   const ingestTask = page
-    .getByRole("listitem")
+    .getByRole("row")
     .filter({ hasText: "Ingest raw/sources/attention.md" });
   await expect(ingestTask).toBeVisible();
   await expect(ingestTask).toContainText("succeeded");
 
-  await page.getByRole("link", { name: "Search", exact: true }).click();
+  await page.getByRole("tab", { name: "Search", exact: true }).click();
   await page.getByLabel("Search Query").fill("relevant tokens");
   await page.getByRole("button", { name: "Run Search" }).click();
   await expect(page.getByText("wiki/sources/attention.md")).toBeVisible();
 
-  await page.getByRole("link", { name: "Sources", exact: true }).click();
+  await page.getByRole("tab", { name: "Sources", exact: true }).click();
   await nestedChildSource.getByRole("button", { name: "Ingest" }).click();
-  await page.getByRole("link", { name: "Tasks", exact: true }).click();
+  await page.getByRole("tab", { name: "Tasks", exact: true }).click();
   const nestedIngestTask = page
-    .getByRole("listitem")
+    .getByRole("row")
     .filter({ hasText: "Ingest raw/sources/team-a/child.md" });
   await expect(nestedIngestTask).toContainText("succeeded");
 
-  await page.getByRole("link", { name: "Graph", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Graph" })).toBeVisible();
+  await page.getByRole("tab", { name: "Graph", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Graph", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Attention" })).toBeVisible();
 
-  await page.getByRole("link", { name: "Tasks", exact: true }).click();
+  await page.getByRole("tab", { name: "Tasks", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Tasks" })).toBeVisible();
   await expect(page.getByText("raw/sources/attention.md").first()).toBeVisible();
   await expect(ingestTask).toBeVisible();
   await expect(page.getByText("raw/sources/team-a/child.md").first()).toBeVisible();
 
-  await page.getByRole("link", { name: "Sources", exact: true }).click();
+  await page.getByRole("tab", { name: "Sources", exact: true }).click();
   await attentionSource.getByRole("button", { name: "Delete" }).click();
   await expect(page.getByText("raw/sources/attention.md").first()).not.toBeVisible();
 
-  await page.getByRole("link", { name: "Tasks", exact: true }).click();
-  const deleteTask = page.getByRole("listitem").filter({ hasText: "Deleted attention.md" });
+  await page.getByRole("tab", { name: "Tasks", exact: true }).click();
+  const deleteTask = page.getByRole("row").filter({ hasText: "Deleted attention.md" });
   await expect(deleteTask).toBeVisible();
-  await page.getByRole("link", { name: "Sources", exact: true }).click();
+  await page.getByRole("tab", { name: "Sources", exact: true }).click();
   await expect(page.getByText("raw/sources/attention.md").first()).not.toBeVisible();
 
   await page.getByRole("link", { name: "Settings", exact: true }).click();

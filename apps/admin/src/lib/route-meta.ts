@@ -12,6 +12,7 @@ export const projectRoutes = [
   { suffix: "/source-watch", label: "Source Watch" },
   { suffix: "/search", label: "Search" },
   { suffix: "/query", label: "Query" },
+  { suffix: "/chat", label: "Chat" },
   { suffix: "/lint", label: "Lint" },
   { suffix: "/graph", label: "Graph" },
   { suffix: "/tasks", label: "Tasks" },

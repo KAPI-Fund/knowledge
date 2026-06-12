@@ -1,0 +1,62 @@
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+
+import {
+  createConversation,
+  deleteConversation,
+  listConversationMessages,
+  listConversations,
+  renameConversation,
+} from "../shared/api";
+
+export const conversationKeys = {
+  list: (projectId: string) => ["conversations", projectId] as const,
+  messages: (projectId: string, conversationId: string) =>
+    ["conversation-messages", projectId, conversationId] as const,
+};
+
+export function useConversationsQuery(projectId: string) {
+  return useQuery({
+    queryKey: conversationKeys.list(projectId),
+    queryFn: () => listConversations(projectId),
+    enabled: Boolean(projectId),
+  });
+}
+
+export function useConversationMessagesQuery(projectId: string, conversationId: string | null) {
+  return useQuery({
+    queryKey: conversationKeys.messages(projectId, conversationId ?? "none"),
+    queryFn: () => listConversationMessages({ projectId, conversationId: conversationId ?? "" }),
+    enabled: Boolean(projectId) && Boolean(conversationId),
+  });
+}
+
+export function useCreateConversationMutation(projectId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (title?: string) => createConversation({ projectId, title }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: conversationKeys.list(projectId) });
+    },
+  });
+}
+
+export function useRenameConversationMutation(projectId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { conversationId: string; title: string }) =>
+      renameConversation({ projectId, ...input }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: conversationKeys.list(projectId) });
+    },
+  });
+}
+
+export function useDeleteConversationMutation(projectId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (conversationId: string) => deleteConversation({ projectId, conversationId }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: conversationKeys.list(projectId) });
+    },
+  });
+}

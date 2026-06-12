@@ -13,7 +13,7 @@ test("admin can configure source watch and scan external files into project sour
   await createProject(page, "source-watch-project");
   await expect(page.getByRole("heading", { name: "source-watch-project" })).toBeVisible();
 
-  await page.getByRole("link", { name: "Source Watch" }).click();
+  await page.getByRole("tab", { name: "Source Watch" }).click();
   await page.getByLabel("Watch Path").fill(fixturesDir);
   await page.getByRole("button", { name: "Save Source Watch" }).click();
   await expect(page.getByText("Saved source watch settings.")).toBeVisible();
@@ -23,14 +23,14 @@ test("admin can configure source watch and scan external files into project sour
     page.getByText(/Scanned \d+ file\(s\), copied \d+, queued \d+ ingest task\(s\)\./),
   ).toBeVisible();
 
-  await page.getByRole("link", { name: "Sources" }).click();
+  await page.getByRole("tab", { name: "Sources", exact: true }).click();
   await expect(page.getByText("raw/sources/attention.md").first()).toBeVisible();
   await expect(page.getByText("raw/sources/team-a/child.md").first()).toBeVisible();
   await expect(page.getByText("raw/sources/team-a/docs/peer.md").first()).toBeVisible();
 
-  await page.getByRole("link", { name: "Tasks" }).click();
+  await page.getByRole("tab", { name: "Tasks" }).click();
   await expect(
-    page.getByRole("listitem").filter({ hasText: "Ingest raw/sources/attention.md" }),
+    page.getByRole("row").filter({ hasText: "Ingest raw/sources/attention.md" }),
   ).toContainText("succeeded");
 });
 

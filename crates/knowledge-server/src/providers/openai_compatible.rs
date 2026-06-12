@@ -1,13 +1,15 @@
 use std::time::Duration;
 
+use futures_util::StreamExt;
+use futures_util::stream::BoxStream;
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::providers::types::{
-    ProviderAnswer, ProviderContentBlock, ProviderEmbeddingRequest, ProviderError,
-    ProviderMultimodalRequest, ProviderQueryRequest, ProviderTextRequest, ProviderTextResponse,
-    ProviderUsage,
+    ProviderAnswer, ProviderChatStreamRequest, ProviderContentBlock, ProviderEmbeddingRequest,
+    ProviderError, ProviderMultimodalRequest, ProviderQueryRequest, ProviderTextRequest,
+    ProviderTextResponse, ProviderUsage,
 };
 
 #[derive(Debug, Clone)]
@@ -257,6 +259,48 @@ impl OpenAiCompatibleProvider {
       })
     }
 
+    pub async fn stream_chat(
+        &self,
+        request: ProviderChatStreamRequest,
+    ) -> Result<BoxStream<'static, Result<String, ProviderError>>, ProviderError> {
+        let response = self
+            .client
+            .post(chat_completions_url(&self.base_url))
+            .headers(self.auth_headers()?)
+            .json(&ChatCompletionRequest::from_chat_messages(
+                &self.model,
+                request,
+            ))
+            .send()
+            .await
+            .map_err(map_transport_error)?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.map_err(map_transport_error)?;
+            let payload: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
+            return Err(map_provider_error(status, &payload));
+        }
+
+        let stream = async_stream::try_stream! {
+            let mut bytes_stream = response.bytes_stream();
+            let mut buffer = String::new();
+            while let Some(chunk) = bytes_stream.next().await {
+                let chunk = chunk.map_err(map_transport_error)?;
+                buffer.push_str(&String::from_utf8_lossy(&chunk));
+                while let Some(newline) = buffer.find('\n') {
+                    let line = buffer[..newline].trim().to_string();
+                    buffer.drain(..=newline);
+                    if let Some(delta) = parse_stream_data_line(&line) {
+                        yield delta;
+                    }
+                }
+            }
+        };
+
+        Ok(Box::pin(stream))
+    }
+
     fn auth_headers(&self) -> Result<reqwest::header::HeaderMap, ProviderError> {
         let mut headers = reqwest::header::HeaderMap::new();
         if self.api_key.trim().is_empty() {
@@ -314,6 +358,25 @@ fn map_transport_error(error: reqwest::Error) -> ProviderError {
     )
 }
 
+fn parse_stream_data_line(line: &str) -> Option<String> {
+    let data = line.strip_prefix("data:")?.trim();
+    if data.is_empty() || data == "[DONE]" {
+        return None;
+    }
+    let payload: Value = serde_json::from_str(data).ok()?;
+    let delta = payload
+        .get("choices")?
+        .get(0)?
+        .get("delta")?
+        .get("content")?
+        .as_str()?;
+    if delta.is_empty() {
+        None
+    } else {
+        Some(delta.to_string())
+    }
+}
+
 fn map_provider_error(status: StatusCode, payload: &Value) -> ProviderError {
     let message = payload
         .get("error")
@@ -355,6 +418,8 @@ struct ChatCompletionRequest {
     model: String,
     messages: Vec<ChatMessage>,
     temperature: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stream: Option<bool>,
 }
 
 impl ChatCompletionRequest {
@@ -372,6 +437,24 @@ impl ChatCompletionRequest {
                 },
             ],
             temperature: 0.0,
+            stream: None,
+        }
+    }
+
+    fn from_chat_messages(model: &str, request: ProviderChatStreamRequest) -> Self {
+        let mut messages = vec![ChatMessage {
+            role: "system".to_string(),
+            content: ChatMessageContent::Text(request.system_prompt),
+        }];
+        messages.extend(request.messages.into_iter().map(|message| ChatMessage {
+            role: message.role,
+            content: ChatMessageContent::Text(message.content),
+        }));
+        Self {
+            model: model.to_string(),
+            messages,
+            temperature: 0.0,
+            stream: Some(true),
         }
     }
 
@@ -406,6 +489,7 @@ impl ChatCompletionRequest {
                 },
             ],
             temperature: 0.0,
+            stream: None,
         }
     }
 }
@@ -480,6 +564,55 @@ struct EmbeddingResponseItem {
 mod tests {
   use super::*;
   use crate::providers::types::ProviderContentBlock;
+  use crate::providers::types::{ProviderChatMessage, ProviderChatStreamRequest};
+
+  #[test]
+  fn parses_stream_data_lines() {
+    assert_eq!(
+      parse_stream_data_line(r#"data: {"choices":[{"delta":{"content":"Hel"}}]}"#),
+      Some("Hel".to_string())
+    );
+    assert_eq!(parse_stream_data_line("data: [DONE]"), None);
+    assert_eq!(parse_stream_data_line(""), None);
+    assert_eq!(parse_stream_data_line(": keep-alive"), None);
+    assert_eq!(
+      parse_stream_data_line(r#"data: {"choices":[{"delta":{}}]}"#),
+      None
+    );
+  }
+
+  #[test]
+  fn chat_stream_request_serializes_history_and_stream_flag() {
+    let request = ChatCompletionRequest::from_chat_messages(
+      "model",
+      ProviderChatStreamRequest {
+        system_prompt: "system".to_string(),
+        messages: vec![
+          ProviderChatMessage {
+            role: "user".to_string(),
+            content: "first".to_string(),
+          },
+          ProviderChatMessage {
+            role: "assistant".to_string(),
+            content: "reply".to_string(),
+          },
+        ],
+      },
+    );
+    let value = serde_json::to_value(request).unwrap();
+    assert_eq!(value["stream"], true);
+    assert_eq!(value["messages"][0]["role"], "system");
+    assert_eq!(value["messages"][2]["role"], "assistant");
+
+    let plain = ChatCompletionRequest::from_text(
+      "model",
+      crate::providers::types::ProviderTextRequest {
+        system_prompt: "s".to_string(),
+        user_prompt: "u".to_string(),
+      },
+    );
+    assert!(serde_json::to_value(plain).unwrap().get("stream").is_none());
+  }
 
   #[test]
   fn serializes_image_content_block_for_openai_compatible_chat() {

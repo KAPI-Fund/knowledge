@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type RefObject } from "react";
+import { useRef, useState, type RefObject } from "react";
 import { useParams } from "react-router-dom";
 
 import { EmptyState } from "@/components/layout/empty-state";
@@ -40,14 +40,13 @@ export function SourcesPage() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const folderInputRef = useRef<HTMLInputElement | null>(null);
 
-  useEffect(() => {
-    if (!folderInputRef.current) {
-      return;
-    }
-
-    folderInputRef.current.setAttribute("webkitdirectory", "");
-    folderInputRef.current.setAttribute("directory", "");
-  }, []);
+  function registerFolderInput(node: HTMLInputElement | null) {
+    folderInputRef.current = node;
+    // The folder input lives in a tab panel that unmounts when inactive, so
+    // the directory attributes must be applied on every mount via callback ref.
+    node?.setAttribute("webkitdirectory", "");
+    node?.setAttribute("directory", "");
+  }
 
   async function handleImportSource() {
     const trimmedFileName = fileName.trim();
@@ -223,7 +222,7 @@ export function SourcesPage() {
                   aria-label="Folder to Import"
                   multiple
                   onChange={(event) => setSelectedFolderFiles(Array.from(event.target.files ?? []) as UploadFile[])}
-                  ref={folderInputRef}
+                  ref={registerFolderInput}
                   type="file"
                 />
               </label>
