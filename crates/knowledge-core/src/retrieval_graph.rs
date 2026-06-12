@@ -5,6 +5,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
+type RawNode = (String, String, String, String, Vec<String>, Vec<String>);
+
 const DIRECT_LINK_WEIGHT: f64 = 3.0;
 const SOURCE_OVERLAP_WEIGHT: f64 = 4.0;
 const COMMON_NEIGHBOR_WEIGHT: f64 = 1.5;
@@ -27,8 +29,7 @@ pub struct RetrievalGraph {
 }
 
 pub fn build_retrieval_graph(wiki_root: &Path) -> RetrievalGraph {
-    let mut raw_nodes: Vec<(String, String, String, String, Vec<String>, Vec<String>)> =
-        Vec::new();
+    let mut raw_nodes: Vec<RawNode> = Vec::new();
     collect_markdown(wiki_root, wiki_root, &mut raw_nodes);
 
     let node_ids: BTreeSet<String> = raw_nodes.iter().map(|(id, ..)| id.clone()).collect();
@@ -70,11 +71,7 @@ pub fn build_retrieval_graph(wiki_root: &Path) -> RetrievalGraph {
     RetrievalGraph { nodes }
 }
 
-fn collect_markdown(
-    wiki_root: &Path,
-    dir: &Path,
-    raw_nodes: &mut Vec<(String, String, String, String, Vec<String>, Vec<String>)>,
-) {
+fn collect_markdown(wiki_root: &Path, dir: &Path, raw_nodes: &mut Vec<RawNode>) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
     };
@@ -110,34 +107,33 @@ fn extract_frontmatter(content: &str, fallback_id: &str) -> (String, String, Vec
     let mut node_type = String::from("other");
     let mut sources = Vec::new();
 
-    if let Some(rest) = content.strip_prefix("---\n") {
-        if let Some(end) = rest.find("\n---") {
-            let mut in_sources_block = false;
-            for line in rest[..end].lines() {
-                if in_sources_block {
-                    if let Some(item) = line.trim().strip_prefix("- ") {
-                        sources.push(item.trim().trim_matches(['"', '\'']).to_string());
-                        continue;
-                    }
-                    in_sources_block = false;
+    if let Some(rest) = content.strip_prefix("---\n")
+        && let Some(end) = rest.find("\n---")
+    {
+        let mut in_sources_block = false;
+        for line in rest[..end].lines() {
+            if in_sources_block {
+                if let Some(item) = line.trim().strip_prefix("- ") {
+                    sources.push(item.trim().trim_matches(['"', '\'']).to_string());
+                    continue;
                 }
-                if let Some(value) = line.strip_prefix("title:") {
-                    title = value.trim().trim_matches(['"', '\'']).to_string();
-                } else if let Some(value) = line.strip_prefix("type:") {
-                    node_type = value.trim().trim_matches(['"', '\'']).to_lowercase();
-                } else if let Some(value) = line.strip_prefix("sources:") {
-                    let value = value.trim();
-                    if let Some(inner) = value.strip_prefix('[').and_then(|v| v.strip_suffix(']'))
-                    {
-                        sources.extend(
-                            inner
-                                .split(',')
-                                .map(|item| item.trim().trim_matches(['"', '\'']).to_string())
-                                .filter(|item| !item.is_empty()),
-                        );
-                    } else if value.is_empty() {
-                        in_sources_block = true;
-                    }
+                in_sources_block = false;
+            }
+            if let Some(value) = line.strip_prefix("title:") {
+                title = value.trim().trim_matches(['"', '\'']).to_string();
+            } else if let Some(value) = line.strip_prefix("type:") {
+                node_type = value.trim().trim_matches(['"', '\'']).to_lowercase();
+            } else if let Some(value) = line.strip_prefix("sources:") {
+                let value = value.trim();
+                if let Some(inner) = value.strip_prefix('[').and_then(|v| v.strip_suffix(']')) {
+                    sources.extend(
+                        inner
+                            .split(',')
+                            .map(|item| item.trim().trim_matches(['"', '\'']).to_string())
+                            .filter(|item| !item.is_empty()),
+                    );
+                } else if value.is_empty() {
+                    in_sources_block = true;
                 }
             }
         }

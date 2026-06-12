@@ -65,10 +65,10 @@ fn matches_english(text: &str) -> bool {
         return true;
     }
     for base in BASES {
-        if let Some(rest) = text.strip_prefix(base) {
-            if SUFFIXES.contains(&rest) {
-                return true;
-            }
+        if let Some(rest) = text.strip_prefix(base)
+            && SUFFIXES.contains(&rest)
+        {
+            return true;
         }
     }
     if let Some(rest) = text.strip_prefix("good ") {
