@@ -1,6 +1,6 @@
 # Upstream Alignment Roadmap
 
-> **For agentic workers:** This is a roadmap, not an executable plan. Each phase gets its own detailed implementation plan (written with superpowers:writing-plans) when it starts. Phase 3a's detailed plan already exists: `docs/superpowers/plans/2026-06-11-wiki-page-editing.md`.
+> **For agentic workers:** This is a roadmap, not an executable plan. Each phase gets its own detailed implementation plan (written with superpowers:writing-plans) when it starts. Phase 3a's detailed plan already exists: `docs/superpowers/plans/2026-06-11-wiki-page-editing.md`. Phase 3b's detailed plan: `docs/superpowers/plans/2026-06-12-chat-query.md`.
 
 **Goal:** Bring the server-based knowledge system to functional parity with the `upstream_llm_wiki/` reference app for the features that make sense in a multi-user server deployment.
 
