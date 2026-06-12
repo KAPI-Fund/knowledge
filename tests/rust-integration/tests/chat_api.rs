@@ -288,6 +288,103 @@ async fn chat_message_streams_response_and_persists_assistant_message() {
 }
 
 #[tokio::test]
+async fn chat_failure_emits_error_event_and_keeps_user_message() {
+    let temp = tempdir().unwrap();
+    let _env = TestEnvironment::start("chat-failure").await.unwrap();
+    let mock = MockOpenAiServer::start(MockScenario::retryable_error())
+        .await
+        .unwrap();
+    let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
+    let state = bootstrap_state(&config).await.unwrap();
+    let (cookie, csrf) = login_and_csrf(state.clone()).await;
+    let project_root = temp.path().join("chat-failure-project");
+    let project_id =
+        support::create_project_with_alias(state.clone(), &cookie, &csrf, project_root).await;
+
+    sqlx::query(
+        "UPDATE system_settings
+         SET provider_mode = 'openai-compatible',
+             provider_base_url = $1,
+             provider_api_key = 'test-key',
+             provider_model = 'mock-model',
+             provider_embedding_model = NULL
+         WHERE id = 1",
+    )
+    .bind(mock.base_url())
+    .execute(&state.pool)
+    .await
+    .unwrap();
+
+    let created = build_app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/projects/{project_id}/conversations"))
+                .header(header::COOKIE, &cookie)
+                .header("x-csrf-token", &csrf)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(json!({ "title": "Failure" }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let conversation_id = read_json(created.into_body())
+        .await
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap()
+        .to_string();
+
+    let response = build_app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/api/projects/{project_id}/conversations/{conversation_id}/messages"
+                ))
+                .header(header::COOKIE, &cookie)
+                .header("x-csrf-token", &csrf)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({ "content": "What is attention?" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8_lossy(&body);
+    assert!(text.contains("event: error"), "missing error event: {text}");
+    assert!(!text.contains("event: done"), "unexpected done event: {text}");
+
+    // The user turn was persisted before the provider call and must survive.
+    let messages = build_app(state)
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/projects/{project_id}/conversations/{conversation_id}/messages"
+                ))
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let messages_payload = read_json(messages.into_body()).await;
+    let items = messages_payload
+        .get("messages")
+        .and_then(Value::as_array)
+        .unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].get("role").and_then(Value::as_str), Some("user"));
+    assert_eq!(
+        items[0].get("content").and_then(Value::as_str),
+        Some("What is attention?")
+    );
+}
+
+#[tokio::test]
 async fn conversations_are_private_to_their_owner() {
     let temp = tempdir().unwrap();
     let _env = TestEnvironment::start("chat-private").await.unwrap();

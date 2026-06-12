@@ -129,7 +129,29 @@ async fn chat_completions(
     use axum::response::IntoResponse;
 
     if payload.get("stream").and_then(Value::as_bool) == Some(true) {
+        let scenario = state.scenario.lock().await.clone();
         let _ = state.request_count.fetch_add(1, Ordering::SeqCst);
+        match scenario {
+            MockScenario::RetryableError => {
+                return (
+                    StatusCode::TOO_MANY_REQUESTS,
+                    Json(json!({
+                        "error": { "message": "mock rate limited", "type": "rate_limit_exceeded" }
+                    })),
+                )
+                    .into_response();
+            }
+            MockScenario::InvalidRequest => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({
+                        "error": { "message": "mock invalid request", "type": "invalid_request_error" }
+                    })),
+                )
+                    .into_response();
+            }
+            _ => {}
+        }
         let body = concat!(
             "data: {\"choices\":[{\"delta\":{\"content\":\"Attention \"}}]}\n\n",
             "data: {\"choices\":[{\"delta\":{\"content\":\"focuses computation on relevant tokens.\"}}]}\n\n",
