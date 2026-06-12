@@ -11,7 +11,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select } from "@/components/ui/select";
 import { normalizeAppError } from "@/lib/app-error";
 
-import { useProjectFileContentQuery, useProjectFilesQuery } from "./queries";
+import { useProjectFileContentQuery, useProjectFilesQuery, useSaveFileContentMutation } from "./queries";
 import { WikiPageEditor } from "./wiki-page-editor";
 
 type ProjectFileNode = {
@@ -37,6 +37,9 @@ export function FilesPage() {
     maxFiles: maxFilesNumber,
   });
   const content = useProjectFileContentQuery(projectId, selectedPath);
+  const createPage = useSaveFileContentMutation(projectId);
+  const [newPagePath, setNewPagePath] = useState("");
+  const [createError, setCreateError] = useState("");
 
   useEffect(() => {
     const rootParam = searchParams.get("root");
@@ -91,6 +94,23 @@ export function FilesPage() {
     setSearchParams(nextParams);
   }
 
+  async function handleCreatePage() {
+    const path = newPagePath.trim();
+    if (!path.startsWith("wiki/") || !path.endsWith(".md")) {
+      setCreateError("Path must be a markdown file under wiki/, e.g. wiki/concepts/topic.md");
+      return;
+    }
+    try {
+      const stem = path.slice(path.lastIndexOf("/") + 1, -".md".length);
+      await createPage.mutateAsync({ path, content: `# ${stem.replace(/-/g, " ")}\n` });
+      setCreateError("");
+      setNewPagePath("");
+      handleSelectPath(path);
+    } catch (error) {
+      setCreateError(normalizeAppError(error).message);
+    }
+  }
+
   if (files.isLoading) {
     return <RouteStatePane description="Loading project files." state="loading" title="Files" />;
   }
@@ -131,6 +151,31 @@ export function FilesPage() {
             />
             Recursive
           </label>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>New Wiki Page</CardTitle>
+          <CardDescription>Create a markdown page under wiki/ and open it in the editor.</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
+          <label className="grid gap-2 text-sm font-medium">
+            New Page Path
+            <Input
+              aria-label="New Page Path"
+              onChange={(event) => setNewPagePath(event.target.value)}
+              placeholder="wiki/concepts/topic.md"
+              value={newPagePath}
+            />
+          </label>
+          <Button
+            disabled={createPage.isPending || !newPagePath.trim()}
+            onClick={() => void handleCreatePage()}
+          >
+            Create Page
+          </Button>
+          {createError ? <p className="text-sm text-red-600 md:col-span-2">{createError}</p> : null}
         </CardContent>
       </Card>
 
