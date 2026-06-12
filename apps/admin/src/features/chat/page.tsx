@@ -65,6 +65,12 @@ export function ChatPage() {
           setStreamingText(null);
           setPendingUserText(null);
           setError(message);
+          // The user turn may already be persisted server-side; refetch so it
+          // does not vanish from the transcript.
+          void queryClient.invalidateQueries({
+            queryKey: conversationKeys.messages(projectId, conversationId),
+          });
+          void queryClient.invalidateQueries({ queryKey: conversationKeys.list(projectId) });
         },
       },
     );

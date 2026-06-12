@@ -51,7 +51,16 @@ export async function streamChatMessage(
   );
 
   if (!response.ok || !response.body) {
-    handlers.onError(`chat request failed with status ${response.status}`);
+    let message = `chat request failed with status ${response.status}`;
+    try {
+      const payload = (await response.json()) as { error?: unknown };
+      if (typeof payload.error === "string" && payload.error.trim()) {
+        message = payload.error;
+      }
+    } catch {
+      // non-JSON body: keep the status fallback
+    }
+    handlers.onError(message);
     return;
   }
 
