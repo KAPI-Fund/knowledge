@@ -21,6 +21,7 @@ pub enum MockScenario {
     IngestWithDedicatedReviewStageSuccess,
     IngestWithPageMergeSuccess,
     IngestThenSweepLlmSuccess,
+    DedupSuccess,
     RetryableError,
     InvalidRequest,
 }
@@ -68,6 +69,11 @@ impl MockScenario {
     #[allow(dead_code)]
     pub fn ingest_then_sweep_llm_success() -> Self {
         Self::IngestThenSweepLlmSuccess
+    }
+
+    #[allow(dead_code)]
+    pub fn dedup_success() -> Self {
+        Self::DedupSuccess
     }
 
     #[allow(dead_code)]
@@ -604,6 +610,33 @@ async fn chat_completions_json(state: MockState, payload: Value) -> (StatusCode,
                 })),
             )
         }
+        MockScenario::DedupSuccess => {
+            let system = system_message_text(&payload);
+            let content = if system.contains("Identify groups of slugs") {
+                "{\"groups\":[{\"slugs\":[\"attention\",\"attention-mechanism\"],\"reason\":\"Both describe the attention mechanism.\",\"confidence\":\"high\"}]}".to_string()
+            } else if system.contains("describe the same entity or concept under different names") {
+                "---\ntype: concept\ntitle: Attention Mechanism\ncreated: 2026-06-01\nsources: []\ntags: []\nrelated: []\n---\n\n# Attention Mechanism\n\nAttention focuses computation on relevant tokens across the sequence.\n".to_string()
+            } else {
+                "{\"groups\": []}".to_string()
+            };
+            (
+                StatusCode::OK,
+                Json(json!({
+                  "id": "chatcmpl-mock-dedup",
+                  "object": "chat.completion",
+                  "created": 1_717_171_717,
+                  "model": "mock-model",
+                  "choices": [
+                    {
+                      "index": 0,
+                      "message": { "role": "assistant", "content": content },
+                      "finish_reason": "stop"
+                    }
+                  ],
+                  "usage": { "prompt_tokens": 17, "completion_tokens": 25, "total_tokens": 42 }
+                })),
+            )
+        }
         MockScenario::RetryableError => (
             StatusCode::TOO_MANY_REQUESTS,
             Json(json!({
@@ -623,6 +656,18 @@ async fn chat_completions_json(state: MockState, payload: Value) -> (StatusCode,
             })),
         ),
     }
+}
+
+fn system_message_text(payload: &Value) -> String {
+    payload
+        .get("messages")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .find(|message| message.get("role").and_then(Value::as_str) == Some("system"))
+        .and_then(|message| message.get("content").and_then(Value::as_str))
+        .unwrap_or_default()
+        .to_string()
 }
 
 fn payload_has_image_block(payload: &Value) -> bool {
