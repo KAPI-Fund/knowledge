@@ -7,6 +7,7 @@ import { LoginPage } from "../features/auth/login-page";
 import { AuditPage } from "../features/audit/page";
 import { ChatPage } from "../features/chat/page";
 import { DashboardPage } from "../features/dashboard/page";
+import { DedupPage } from "../features/dedup/page";
 import { FilesPage } from "../features/files/page";
 import { GraphPage } from "../features/graph/page";
 import { LintPage } from "../features/lint/page";
@@ -41,6 +42,7 @@ export function AppRoutes() {
             <Route path="graph" element={<GraphPage />} />
             <Route path="tasks" element={<TasksPage />} />
             <Route path="reviews" element={<ReviewsPage />} />
+            <Route path="dedup" element={<DedupPage />} />
             <Route path="audit" element={<AuditPage />} />
           </Route>
           <Route path="users" element={<UsersPage />} />
