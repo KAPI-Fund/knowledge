@@ -846,6 +846,73 @@ export async function sweepProjectReviews(input: { projectId: string }) {
   );
 }
 
+const dedupGroupSchema = z.object({
+  id: z.string(),
+  slugs: z.array(z.string()),
+  reason: z.string(),
+  confidence: z.string(),
+  status: z.string(),
+  createdAt: z.string(),
+});
+
+const dedupOverviewSchema = z.object({
+  groups: z.array(dedupGroupSchema),
+  notDuplicates: z.array(z.array(z.string())),
+});
+
+export type DedupGroup = z.infer<typeof dedupGroupSchema>;
+
+export async function getProjectDedup(projectId: string) {
+  return apiFetch(`/api/projects/${projectId}/dedup`, { method: "GET" }, dedupOverviewSchema);
+}
+
+export async function detectProjectDuplicates(input: { projectId: string }) {
+  return apiFetch(
+    `/api/projects/${input.projectId}/dedup:detect`,
+    {
+      method: "POST",
+      headers: csrfHeader(),
+    },
+    z.object({
+      taskId: z.string(),
+      status: z.string(),
+    }),
+  );
+}
+
+export async function mergeProjectDuplicateGroup(input: {
+  projectId: string;
+  groupId: string;
+  canonicalSlug: string;
+}) {
+  return apiFetch(
+    `/api/projects/${input.projectId}/dedup/groups/${input.groupId}/merge`,
+    {
+      method: "POST",
+      headers: csrfHeader(),
+      body: JSON.stringify({ canonicalSlug: input.canonicalSlug }),
+    },
+    z.object({
+      taskId: z.string(),
+      status: z.string(),
+    }),
+  );
+}
+
+export async function dismissProjectDuplicateGroup(input: {
+  projectId: string;
+  groupId: string;
+}) {
+  return apiFetch(
+    `/api/projects/${input.projectId}/dedup/groups/${input.groupId}/dismiss`,
+    {
+      method: "POST",
+      headers: csrfHeader(),
+    },
+    z.object({ dismissed: z.boolean() }),
+  );
+}
+
 export async function updateSystemSettings(input: {
   providerMode: string;
   language: string;
