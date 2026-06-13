@@ -129,7 +129,7 @@ pub async fn search_project_hybrid(
   ))
 }
 
-async fn ensure_project_embeddings(
+pub(crate) async fn ensure_project_embeddings(
   state: &AppState,
   project_id: &str,
   root: &ProjectRoot,
@@ -416,7 +416,7 @@ fn normalize_path(path: &str) -> String {
   path.replace('\\', "/")
 }
 
-fn cosine_similarity(left: &[f32], right: &[f32]) -> Option<f32> {
+pub(crate) fn cosine_similarity(left: &[f32], right: &[f32]) -> Option<f32> {
   if left.is_empty() || left.len() != right.len() {
     return None;
   }
