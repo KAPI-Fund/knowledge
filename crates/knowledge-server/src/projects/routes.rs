@@ -28,6 +28,9 @@ use knowledge_core::project::files::{
     ProjectFileListOptions, ProjectFilesError, clamp_max_files, list_project_files,
     parse_project_file_root, read_project_file_content,
 };
+use knowledge_core::project::dedup_store::{
+    add_not_duplicate, load_dedup_store, load_not_duplicates, save_dedup_store,
+};
 use knowledge_core::project::reviews::load_reviews;
 use knowledge_core::project::wiki_pages::{
     WikiPageError, delete_wiki_pages_with_refs, save_wiki_page,
@@ -129,6 +132,22 @@ pub fn router() -> Router<AppState> {
             patch(update_review_handler),
         )
         .route(
+            "/api/projects/{project_id}/dedup",
+            get(dedup_overview_handler),
+        )
+        .route(
+            "/api/projects/{project_id}/dedup:detect",
+            post(detect_dedup_handler),
+        )
+        .route(
+            "/api/projects/{project_id}/dedup/groups/{group_id}/merge",
+            post(merge_dedup_group_handler),
+        )
+        .route(
+            "/api/projects/{project_id}/dedup/groups/{group_id}/dismiss",
+            post(dismiss_dedup_group_handler),
+        )
+        .route(
             "/api/projects/{project_id}/audit-logs",
             get(audit_logs_handler),
         )
@@ -226,6 +245,12 @@ pub struct UpdateSourceWatchRequest {
 #[derive(Debug, Clone, Deserialize)]
 pub struct UpdateReviewRequest {
     pub status: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MergeDedupGroupRequest {
+    pub canonical_slug: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -1185,6 +1210,156 @@ async fn audit_logs_handler(
     let _session = authorized_session(&state, &headers, Some(&project_id)).await?;
     let items = list_audit_logs(&state, &project_id).await?;
     Ok(Json(json!({ "items": items })))
+}
+
+async fn dedup_overview_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(project_id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let _session = authorized_session(&state, &headers, Some(&project_id)).await?;
+    let root = project_root_for_id(&state, &project_id).await?;
+    let store = load_dedup_store(&root).map_err(|error| ApiError::internal(error.to_string()))?;
+    let not_duplicates =
+        load_not_duplicates(&root).map_err(|error| ApiError::internal(error.to_string()))?;
+    Ok(Json(json!({
+      "groups": store.groups,
+      "notDuplicates": not_duplicates
+    })))
+}
+
+async fn detect_dedup_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(project_id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let session = authorized_session(&state, &headers, Some(&project_id)).await?;
+    validate_csrf(&headers, &session.csrf_token)?;
+    let task = create_queued_task(
+        &state,
+        CreateTaskRecord {
+            project_id: project_id.clone(),
+            task_type: "project.dedup_detect".to_string(),
+            title: "Detect duplicate pages".to_string(),
+            relative_path: None,
+            detail: json!({}),
+            created_by: session.user_id.clone(),
+        },
+        json!({}),
+    )
+    .await?;
+    append_audit_log(
+        &state,
+        CreateAuditLog {
+            project_id: Some(project_id),
+            actor_id: session.user_id,
+            action: "dedup.detect.enqueued".to_string(),
+            target_type: "dedup".to_string(),
+            target_id: "batch".to_string(),
+            task_id: Some(task.id.clone()),
+            summary: "Queued duplicate detection".to_string(),
+            metadata: json!({}),
+        },
+    )
+    .await?;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(json!({
+          "taskId": task.id,
+          "status": task.status
+        })),
+    ))
+}
+
+async fn merge_dedup_group_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((project_id, group_id)): Path<(String, String)>,
+    Json(payload): Json<MergeDedupGroupRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let session = authorized_session(&state, &headers, Some(&project_id)).await?;
+    validate_csrf(&headers, &session.csrf_token)?;
+    let root = project_root_for_id(&state, &project_id).await?;
+    let store = load_dedup_store(&root).map_err(|error| ApiError::internal(error.to_string()))?;
+    let group = store
+        .groups
+        .iter()
+        .find(|group| group.id == group_id)
+        .ok_or_else(|| ApiError::not_found("dedup group not found"))?;
+    if !group.slugs.contains(&payload.canonical_slug) {
+        return Err(ApiError::bad_request("canonical slug is not part of the group"));
+    }
+    let task = create_queued_task(
+        &state,
+        CreateTaskRecord {
+            project_id: project_id.clone(),
+            task_type: "project.dedup_merge".to_string(),
+            title: format!("Merge duplicate group {}", group.slugs.join(" / ")),
+            relative_path: None,
+            detail: json!({}),
+            created_by: session.user_id.clone(),
+        },
+        json!({
+          "groupId": group_id,
+          "canonicalSlug": payload.canonical_slug
+        }),
+    )
+    .await?;
+    append_audit_log(
+        &state,
+        CreateAuditLog {
+            project_id: Some(project_id),
+            actor_id: session.user_id,
+            action: "dedup.group.merge.enqueued".to_string(),
+            target_type: "dedup".to_string(),
+            target_id: group_id,
+            task_id: Some(task.id.clone()),
+            summary: format!("Queued dedup merge into {}", payload.canonical_slug),
+            metadata: json!({ "canonicalSlug": payload.canonical_slug }),
+        },
+    )
+    .await?;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(json!({
+          "taskId": task.id,
+          "status": task.status
+        })),
+    ))
+}
+
+async fn dismiss_dedup_group_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((project_id, group_id)): Path<(String, String)>,
+) -> Result<impl IntoResponse, ApiError> {
+    let session = authorized_session(&state, &headers, Some(&project_id)).await?;
+    validate_csrf(&headers, &session.csrf_token)?;
+    let root = project_root_for_id(&state, &project_id).await?;
+    let mut store = load_dedup_store(&root).map_err(|error| ApiError::internal(error.to_string()))?;
+    let Some(index) = store.groups.iter().position(|group| group.id == group_id) else {
+        return Err(ApiError::not_found("dedup group not found"));
+    };
+    let removed = store.groups.remove(index);
+    add_not_duplicate(&root, &removed.slugs)
+        .map_err(|error| ApiError::internal(error.to_string()))?;
+    save_dedup_store(&root, &store)
+        .map_err(|error| ApiError::internal(error.to_string()))?;
+    append_audit_log(
+        &state,
+        CreateAuditLog {
+            project_id: Some(project_id),
+            actor_id: session.user_id,
+            action: "dedup.group.dismissed".to_string(),
+            target_type: "dedup".to_string(),
+            target_id: group_id,
+            task_id: None,
+            summary: format!("Dismissed dedup group with slugs: {}", removed.slugs.join(", ")),
+            metadata: json!({ "slugs": removed.slugs }),
+        },
+    )
+    .await?;
+    Ok(Json(json!({ "dismissed": true })))
 }
 
 fn extract_session_id(headers: &HeaderMap) -> Option<String> {

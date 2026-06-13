@@ -10,3 +10,4 @@ pdfium/
 .env
 .env.*
 *.log
+.claude/settings.local.json

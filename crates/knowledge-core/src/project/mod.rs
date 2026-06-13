@@ -1,3 +1,5 @@
+pub mod dedup;
+pub mod dedup_store;
 pub mod files;
 pub mod enrich;
 pub mod ingest_sanitize;

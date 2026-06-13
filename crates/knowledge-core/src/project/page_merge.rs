@@ -146,7 +146,7 @@ fn parse_frontmatter(content: &str) -> ParsedFrontmatter {
   ParsedFrontmatter { fields, body: rest }
 }
 
-fn merge_array_fields_into_content(
+pub(crate) fn merge_array_fields_into_content(
   new_content: &str,
   existing_content: Option<&str>,
   fields: &[&str],
@@ -180,7 +180,7 @@ fn merge_array_fields_into_content(
   if changed { result } else { new_content.to_string() }
 }
 
-fn parse_frontmatter_array(content: &str, field_name: &str) -> Vec<String> {
+pub(crate) fn parse_frontmatter_array(content: &str, field_name: &str) -> Vec<String> {
   let Some((frontmatter_lines, _, _)) = split_frontmatter_lines_owned(content) else {
     return Vec::new();
   };
@@ -227,7 +227,7 @@ fn parse_frontmatter_array(content: &str, field_name: &str) -> Vec<String> {
   Vec::new()
 }
 
-fn write_frontmatter_array(content: &str, field_name: &str, values: &[String]) -> String {
+pub(crate) fn write_frontmatter_array(content: &str, field_name: &str, values: &[String]) -> String {
   let Some((frontmatter_lines, rest, newline)) = split_frontmatter_lines_owned(content) else {
     return content.to_string();
   };
@@ -296,7 +296,7 @@ fn merge_frontmatter_lists(existing: &[String], incoming: &[String]) -> Vec<Stri
   merged
 }
 
-fn set_frontmatter_scalar(content: &str, field_name: &str, value: &str) -> String {
+pub(crate) fn set_frontmatter_scalar(content: &str, field_name: &str, value: &str) -> String {
   let Some((frontmatter_lines, rest, newline)) = split_frontmatter_lines_owned(content) else {
     return content.to_string();
   };
@@ -327,7 +327,7 @@ fn set_frontmatter_scalar(content: &str, field_name: &str, value: &str) -> Strin
   }
 }
 
-fn split_frontmatter_lines_owned(content: &str) -> Option<(Vec<String>, String, &'static str)> {
+pub(crate) fn split_frontmatter_lines_owned(content: &str) -> Option<(Vec<String>, String, &'static str)> {
   let newline = if content.contains("\r\n") { "\r\n" } else { "\n" };
   let lines = content.split(newline).collect::<Vec<_>>();
   if lines.first().copied() != Some("---") {

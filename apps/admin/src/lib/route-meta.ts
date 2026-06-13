@@ -17,5 +17,6 @@ export const projectRoutes = [
   { suffix: "/graph", label: "Graph" },
   { suffix: "/tasks", label: "Tasks" },
   { suffix: "/reviews", label: "Reviews" },
+  { suffix: "/dedup", label: "Dedup" },
   { suffix: "/audit", label: "Audit" },
 ] as const;
