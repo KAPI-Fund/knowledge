@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use serde_json::{json, Value};
 use time::format_description::well_known::Rfc3339;
 use time::{Duration, OffsetDateTime};
@@ -11,6 +13,11 @@ use crate::providers::{OpenAiCompatibleProvider, ProviderError, ProviderTextRequ
 use crate::projects::audit::{append_audit_log, CreateAuditLog};
 use crate::projects::service::project_root_for_id;
 use crate::query::{execute_project_query, ExecuteProjectQueryInput, QueryExecutionError};
+use crate::retrieval::dedup::{
+  select_dedup_candidate_pages, DEDUP_MAX_CANDIDATE_PAGES, DEDUP_SIMILARITY_THRESHOLD,
+};
+use crate::retrieval::service::{ensure_project_embeddings, load_embedding_config};
+use crate::retrieval::store::{delete_pages, load_project_chunks};
 use crate::tasks::model::TaskRecord;
 use crate::tasks::store;
 use knowledge_core::ingest::{
@@ -19,9 +26,18 @@ use knowledge_core::ingest::{
   check_ingest_cache, generate_wiki_from_analysis, parse_generation_file_blocks,
   render_generation_file_blocks, should_run_dedicated_review_stage, source_summary_path,
 };
+use knowledge_core::project::dedup::{
+  build_detector_user_message, build_merger_user_message, collect_all_wiki_pages,
+  collect_entity_pages, compute_dedup_merge, extract_entity_summary, filter_detected_groups,
+  parse_detector_response, DedupBackupEntry, DETECTOR_SYSTEM_PROMPT, MERGER_SYSTEM_PROMPT,
+};
+use knowledge_core::project::dedup_store::{
+  load_dedup_store, load_not_duplicates, save_dedup_store, DedupGroup, DedupStore,
+};
 use knowledge_core::project::page_merge::{
   build_page_merge_prompts, finalize_page_merge, prepare_page_merge, PageMergePlan,
 };
+use knowledge_core::project::wiki_pages::{delete_wiki_pages_with_refs, save_wiki_page};
 use knowledge_core::project::enrich::{apply_enrich_links, build_enrich_prompt, parse_enrich_response};
 use knowledge_core::project::lint::{
   build_semantic_lint_prompt, parse_semantic_lint_response, run_structural_lint,
@@ -54,6 +70,8 @@ pub async fn run_task_executor(state: &AppState, task: &TaskRecord) -> Result<()
     "project.ingest_source" => run_ingest_source_executor(state, &task).await.map_err(Into::into),
     "project.sweep_reviews" => run_manual_review_sweep_executor(state, &task).await.map_err(Into::into),
     "project.update_review" => run_update_review_executor(state, &task).await.map_err(Into::into),
+    "project.dedup_detect" => run_dedup_detect_executor(state, &task).await.map_err(Into::into),
+    "project.dedup_merge" => run_dedup_merge_executor(state, &task).await.map_err(Into::into),
     _ => Err(TaskExecutionError::from(ApiError::bad_request("unsupported task type"))),
   };
 
@@ -613,6 +631,208 @@ async fn run_manual_review_sweep_executor(
       .await?
       .unwrap_or_else(|| json!({ "resolvedIds": [], "unresolvedIds": [] })),
   )
+}
+
+async fn run_dedup_detect_executor(
+  state: &AppState,
+  task: &TaskRecord,
+) -> Result<Value, ApiError> {
+  let root = project_root_for_id(state, &task.project_id).await?;
+  let provider = load_ingest_provider(state)
+    .await?
+    .ok_or_else(|| ApiError::bad_request("dedup detection requires an openai-compatible provider"))?;
+  let embedding_config = load_embedding_config(state)
+    .await?
+    .ok_or_else(|| ApiError::bad_request("dedup detection requires a configured embedding model"))?;
+
+  ensure_project_embeddings(state, &task.project_id, &root, &embedding_config).await?;
+  let chunks = load_project_chunks(&state.pool, &task.project_id).await?;
+  let candidate_paths =
+    select_dedup_candidate_pages(&chunks, DEDUP_SIMILARITY_THRESHOLD, DEDUP_MAX_CANDIDATE_PAGES);
+
+  let mut summaries = Vec::new();
+  let mut seen_slugs = BTreeSet::new();
+  for path in &candidate_paths {
+    let content = try_read_project_file(&root, path);
+    if content.is_empty() {
+      continue;
+    }
+    if let Some(summary) = extract_entity_summary(path, &content)
+      && seen_slugs.insert(summary.slug.clone())
+    {
+      summaries.push(summary);
+    }
+  }
+
+  let mut groups = Vec::new();
+  if summaries.len() >= 2 {
+    let response = provider
+      .complete_text(ProviderTextRequest {
+        system_prompt: DETECTOR_SYSTEM_PROMPT.to_string(),
+        user_prompt: build_detector_user_message(&summaries),
+      })
+      .await
+      .map_err(TaskExecutionError::from_provider_error)
+      .map_err(TaskExecutionError::into_api_error)?;
+
+    let valid_slugs = summaries
+      .iter()
+      .map(|summary| summary.slug.clone())
+      .collect::<BTreeSet<_>>();
+    let not_duplicates =
+      load_not_duplicates(&root).map_err(|error| ApiError::internal(error.to_string()))?;
+    let detected = filter_detected_groups(
+      parse_detector_response(&response.text),
+      &valid_slugs,
+      &not_duplicates,
+    );
+
+    let now = OffsetDateTime::now_utc()
+      .format(&Rfc3339)
+      .map_err(|_| ApiError::internal("failed to format timestamp"))?;
+    for candidate in detected {
+      groups.push(DedupGroup {
+        id: uuid::Uuid::new_v4().to_string(),
+        slugs: candidate.slugs,
+        reason: candidate.reason,
+        confidence: candidate.confidence,
+        status: "candidate".to_string(),
+        created_at: now.clone(),
+      });
+    }
+  }
+
+  let group_count = groups.len();
+  save_dedup_store(&root, &DedupStore { groups })
+    .map_err(|error| ApiError::internal(error.to_string()))?;
+
+  Ok(json!({
+    "groupCount": group_count,
+    "candidatePages": candidate_paths
+  }))
+}
+
+async fn run_dedup_merge_executor(
+  state: &AppState,
+  task: &TaskRecord,
+) -> Result<Value, ApiError> {
+  let group_id = read_string(&task.payload, "groupId")?;
+  let canonical_slug = read_string(&task.payload, "canonicalSlug")?;
+  let root = project_root_for_id(state, &task.project_id).await?;
+  let provider = load_ingest_provider(state)
+    .await?
+    .ok_or_else(|| ApiError::bad_request("dedup merge requires an openai-compatible provider"))?;
+
+  let mut store_data =
+    load_dedup_store(&root).map_err(|error| ApiError::internal(error.to_string()))?;
+  let group = store_data
+    .groups
+    .iter()
+    .find(|group| group.id == group_id)
+    .cloned()
+    .ok_or_else(|| ApiError::bad_request("dedup group not found"))?;
+
+  let entity_pages =
+    collect_entity_pages(&root).map_err(|error| ApiError::internal(error.to_string()))?;
+  let mut group_pages = Vec::new();
+  for slug in &group.slugs {
+    let matches = entity_pages
+      .iter()
+      .filter(|page| &page.slug == slug)
+      .collect::<Vec<_>>();
+    if matches.len() > 1 {
+      return Err(ApiError::bad_request(format!(
+        "slug \"{slug}\" is ambiguous across multiple wiki pages"
+      )));
+    }
+    let page = matches
+      .first()
+      .ok_or_else(|| ApiError::bad_request(format!("page for slug \"{slug}\" not found")))?;
+    group_pages.push((*page).clone());
+  }
+
+  let group_paths = group_pages
+    .iter()
+    .map(|page| page.path.clone())
+    .collect::<BTreeSet<_>>();
+  let other_pages = collect_all_wiki_pages(&root)
+    .map_err(|error| ApiError::internal(error.to_string()))?
+    .into_iter()
+    .filter(|page| !group_paths.contains(&page.path) && page.path != "wiki/index.md")
+    .collect::<Vec<_>>();
+
+  let response = provider
+    .complete_text(ProviderTextRequest {
+      system_prompt: MERGER_SYSTEM_PROMPT.to_string(),
+      user_prompt: build_merger_user_message(&group_pages),
+    })
+    .await
+    .map_err(TaskExecutionError::from_provider_error)
+    .map_err(TaskExecutionError::into_api_error)?;
+
+  let now = OffsetDateTime::now_utc()
+    .format(&Rfc3339)
+    .map_err(|_| ApiError::internal("failed to format timestamp"))?;
+  let today = now[..10].to_string();
+  let outcome = compute_dedup_merge(
+    &group_pages,
+    &canonical_slug,
+    &other_pages,
+    &response.text,
+    &today,
+  )
+  .map_err(|error| ApiError::bad_request(error.to_string()))?;
+
+  let stamp = now.replace([':', '.'], "-");
+  for entry in &outcome.backup {
+    write_dedup_backup(&root, &stamp, entry)?;
+  }
+
+  save_wiki_page(&root, &outcome.canonical_path, &outcome.canonical_content)
+    .map_err(|error| ApiError::bad_request(error.to_string()))?;
+  for rewrite in &outcome.rewrites {
+    save_wiki_page(&root, &rewrite.path, &rewrite.new_content)
+      .map_err(|error| ApiError::bad_request(error.to_string()))?;
+  }
+  let delete_result = delete_wiki_pages_with_refs(&root, &outcome.pages_to_delete)
+    .map_err(|error| ApiError::bad_request(error.to_string()))?;
+  delete_pages(&state.pool, &task.project_id, &outcome.pages_to_delete).await?;
+
+  let removed_slugs = group
+    .slugs
+    .iter()
+    .filter(|slug| *slug != &canonical_slug)
+    .cloned()
+    .collect::<BTreeSet<_>>();
+  store_data.groups.retain(|candidate| {
+    candidate.id != group_id
+      && !candidate.slugs.iter().any(|slug| removed_slugs.contains(slug))
+  });
+  save_dedup_store(&root, &store_data)
+    .map_err(|error| ApiError::internal(error.to_string()))?;
+
+  Ok(json!({
+    "canonicalPath": outcome.canonical_path,
+    "deletedPaths": delete_result.deleted_paths,
+    "rewrittenFiles": delete_result.rewritten_files,
+    "rewrites": outcome.rewrites.iter().map(|rewrite| rewrite.path.clone()).collect::<Vec<_>>()
+  }))
+}
+
+fn write_dedup_backup(
+  root: &knowledge_core::project::root::ProjectRoot,
+  stamp: &str,
+  entry: &DedupBackupEntry,
+) -> Result<(), ApiError> {
+  let backup_path = root
+    .safe_join(&format!(".knowledge/dedup/backups/{stamp}/{}", entry.path))
+    .map_err(|error| ApiError::internal(error.to_string()))?;
+  if let Some(parent) = backup_path.parent() {
+    std::fs::create_dir_all(parent).map_err(|error| ApiError::internal(error.to_string()))?;
+  }
+  std::fs::write(&backup_path, &entry.content)
+    .map_err(|error| ApiError::internal(error.to_string()))?;
+  Ok(())
 }
 
 async fn append_task_audit_log(
