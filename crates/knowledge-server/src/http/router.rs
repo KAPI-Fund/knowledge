@@ -1,6 +1,7 @@
-use axum::http::StatusCode;
+use axum::Json;
 use axum::routing::get;
 use axum::Router;
+use serde_json::json;
 
 use crate::auth;
 use crate::app::state::AppState;
@@ -20,6 +21,6 @@ pub fn build_router(state: AppState) -> Router {
     .with_state(state)
 }
 
-async fn health() -> StatusCode {
-  StatusCode::OK
+async fn health() -> Json<serde_json::Value> {
+  Json(json!({ "ok": true, "service": "knowledge-server" }))
 }
