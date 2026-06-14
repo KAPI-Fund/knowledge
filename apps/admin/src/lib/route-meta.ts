@@ -2,6 +2,7 @@ export const systemRoutes = [
   { to: "/", label: "Dashboard" },
   { to: "/projects", label: "Projects" },
   { to: "/users", label: "Users" },
+  { to: "/api-tokens", label: "API Tokens" },
   { to: "/settings", label: "Settings" },
 ] as const;
 

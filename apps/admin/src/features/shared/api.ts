@@ -913,6 +913,59 @@ export async function dismissProjectDuplicateGroup(input: {
   );
 }
 
+const apiTokenSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  projectId: z.string().nullable(),
+  prefix: z.string(),
+  lastUsedAt: z.string().nullable(),
+  revokedAt: z.string().nullable(),
+  createdAt: z.string(),
+});
+
+const apiTokensListSchema = z.object({
+  tokens: z.array(apiTokenSchema),
+});
+
+const apiTokenCreateResponseSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  projectId: z.string().nullable(),
+  prefix: z.string(),
+  createdAt: z.string(),
+  token: z.string(),
+});
+
+export type ApiTokenSummary = z.infer<typeof apiTokenSchema>;
+export type ApiTokenCreateResponse = z.infer<typeof apiTokenCreateResponseSchema>;
+
+export async function listApiTokens() {
+  return apiFetch(`/api/users/me/api-tokens`, { method: "GET" }, apiTokensListSchema);
+}
+
+export async function createApiToken(input: { name: string; projectId: string | null }) {
+  return apiFetch(
+    `/api/users/me/api-tokens`,
+    {
+      method: "POST",
+      headers: csrfHeader(),
+      body: JSON.stringify({ name: input.name, projectId: input.projectId }),
+    },
+    apiTokenCreateResponseSchema,
+  );
+}
+
+export async function revokeApiToken(input: { tokenId: string }) {
+  return apiFetch(
+    `/api/users/me/api-tokens/${input.tokenId}/revoke`,
+    {
+      method: "POST",
+      headers: csrfHeader(),
+    },
+    z.object({ revoked: z.boolean() }),
+  );
+}
+
 export async function updateSystemSettings(input: {
   providerMode: string;
   language: string;

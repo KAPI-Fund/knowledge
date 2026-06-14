@@ -1,5 +1,5 @@
 use axum::extract::{Path, Query, State};
-use axum::http::{HeaderMap, StatusCode, header};
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::{delete, get, patch, post};
 use axum::{Json, Router};
@@ -7,7 +7,6 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::app::state::AppState;
-use crate::auth::session::find_session;
 use crate::http::error::ApiError;
 use crate::projects::audit::{CreateAuditLog, append_audit_log, list_audit_logs};
 use crate::projects::service::{
@@ -278,8 +277,8 @@ async fn create_project_handler(
     headers: HeaderMap,
     Json(payload): Json<CreateProjectRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let session = authorized_session(&state, &headers, None).await?;
-    validate_csrf(&headers, &session.csrf_token)?;
+    let session = authorized_principal(&state, &headers, None).await?;
+    validate_csrf(&headers, &session)?;
     let project = create_project(&payload, &state, &session.user_id).await?;
     Ok((StatusCode::CREATED, Json(project)))
 }
@@ -288,7 +287,7 @@ async fn list_projects_handler(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, ApiError> {
-    let _session = authorized_session(&state, &headers, None).await?;
+    let _session = authorized_principal(&state, &headers, None).await?;
     let rows = sqlx::query_as::<_, (String, String, String, String)>(
         "SELECT id, name, root_path, created_at FROM projects ORDER BY created_at ASC",
     )
@@ -316,7 +315,7 @@ async fn project_detail_handler(
     headers: HeaderMap,
     Path(project_id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let _session = authorized_session(&state, &headers, Some(&project_id)).await?;
+    let _session = authorized_principal(&state, &headers, Some(&project_id)).await?;
     Ok(Json(project_detail(&state, &project_id).await?))
 }
 
@@ -325,7 +324,7 @@ async fn list_project_members(
     headers: HeaderMap,
     Path(project_id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let _session = authorized_session(&state, &headers, Some(&project_id)).await?;
+    let _session = authorized_principal(&state, &headers, Some(&project_id)).await?;
 
     let rows = sqlx::query_as::<_, (String, String, bool)>(
     "SELECT user_id, role, can_import FROM project_members WHERE project_id = $1 ORDER BY created_at ASC",
@@ -354,7 +353,7 @@ async fn list_sources_handler(
     headers: HeaderMap,
     Path(project_id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let _session = authorized_session(&state, &headers, Some(&project_id)).await?;
+    let _session = authorized_principal(&state, &headers, Some(&project_id)).await?;
     let root = project_root_for_id(&state, &project_id).await?;
     let sources = list_sources(&root).map_err(|error| ApiError::bad_request(error.to_string()))?;
     Ok(Json(json!({ "sources": sources })))
@@ -365,7 +364,7 @@ async fn get_source_watch_handler(
     headers: HeaderMap,
     Path(project_id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let _session = authorized_session(&state, &headers, Some(&project_id)).await?;
+    let _session = authorized_principal(&state, &headers, Some(&project_id)).await?;
     Ok(Json(json!(
         get_source_watch_settings(&state, &project_id).await?
     )))
@@ -377,8 +376,8 @@ async fn update_source_watch_handler(
     Path(project_id): Path<String>,
     Json(payload): Json<UpdateSourceWatchRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let session = authorized_session(&state, &headers, Some(&project_id)).await?;
-    validate_csrf(&headers, &session.csrf_token)?;
+    let session = authorized_principal(&state, &headers, Some(&project_id)).await?;
+    validate_csrf(&headers, &session)?;
 
     let existing = get_source_watch_settings(&state, &project_id).await?;
     let updated = save_source_watch_settings(
@@ -430,8 +429,8 @@ async fn scan_source_watch_handler(
     headers: HeaderMap,
     Path(project_id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let session = authorized_session(&state, &headers, Some(&project_id)).await?;
-    validate_csrf(&headers, &session.csrf_token)?;
+    let session = authorized_principal(&state, &headers, Some(&project_id)).await?;
+    validate_csrf(&headers, &session)?;
     let result = scan_project_source_watch(&state, &project_id).await?;
 
     append_audit_log(
@@ -458,8 +457,8 @@ async fn import_source_handler(
     Path(project_id): Path<String>,
     Json(payload): Json<ImportSourceRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let session = authorized_session(&state, &headers, Some(&project_id)).await?;
-    validate_csrf(&headers, &session.csrf_token)?;
+    let session = authorized_principal(&state, &headers, Some(&project_id)).await?;
+    validate_csrf(&headers, &session)?;
     let task = create_queued_task(
         &state,
         CreateTaskRecord {
@@ -504,8 +503,8 @@ async fn rescan_sources_handler(
     headers: HeaderMap,
     Path(project_id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let session = authorized_session(&state, &headers, Some(&project_id)).await?;
-    validate_csrf(&headers, &session.csrf_token)?;
+    let session = authorized_principal(&state, &headers, Some(&project_id)).await?;
+    validate_csrf(&headers, &session)?;
     let task = create_queued_task(
         &state,
         CreateTaskRecord {
@@ -547,8 +546,8 @@ async fn delete_source_handler(
     headers: HeaderMap,
     Path((project_id, relative_path)): Path<(String, String)>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let session = authorized_session(&state, &headers, Some(&project_id)).await?;
-    validate_csrf(&headers, &session.csrf_token)?;
+    let session = authorized_principal(&state, &headers, Some(&project_id)).await?;
+    validate_csrf(&headers, &session)?;
     let task = create_queued_task(
         &state,
         CreateTaskRecord {
@@ -593,7 +592,7 @@ async fn list_files_handler(
     Path(project_id): Path<String>,
     Query(params): Query<FileListRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let _session = authorized_session(&state, &headers, Some(&project_id)).await?;
+    let _session = authorized_principal(&state, &headers, Some(&project_id)).await?;
     let root = project_root_for_id(&state, &project_id).await?;
     let options = ProjectFileListOptions {
         root: parse_project_file_root(params.root.as_deref()).map_err(map_project_files_error)?,
@@ -614,7 +613,7 @@ async fn file_content_handler(
     Path(project_id): Path<String>,
     Query(params): Query<FileContentRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let _session = authorized_session(&state, &headers, Some(&project_id)).await?;
+    let _session = authorized_principal(&state, &headers, Some(&project_id)).await?;
     let root = project_root_for_id(&state, &project_id).await?;
     let file = read_project_file_content(&root, &params.path).map_err(map_project_files_error)?;
     Ok(Json(json!({
@@ -629,8 +628,8 @@ async fn save_file_content_handler(
     Path(project_id): Path<String>,
     Json(payload): Json<SaveFileContentRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let session = authorized_session(&state, &headers, Some(&project_id)).await?;
-    validate_csrf(&headers, &session.csrf_token)?;
+    let session = authorized_principal(&state, &headers, Some(&project_id)).await?;
+    validate_csrf(&headers, &session)?;
     let root = project_root_for_id(&state, &project_id).await?;
     let saved =
         save_wiki_page(&root, &payload.path, &payload.content).map_err(map_wiki_page_error)?;
@@ -663,8 +662,8 @@ async fn delete_wiki_pages_handler(
     Path(project_id): Path<String>,
     Json(payload): Json<DeleteWikiPagesRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let session = authorized_session(&state, &headers, Some(&project_id)).await?;
-    validate_csrf(&headers, &session.csrf_token)?;
+    let session = authorized_principal(&state, &headers, Some(&project_id)).await?;
+    validate_csrf(&headers, &session)?;
     if payload.paths.is_empty() {
         return Err(ApiError::bad_request("paths must not be empty"));
     }
@@ -707,7 +706,7 @@ async fn search_handler(
     Path(project_id): Path<String>,
     Json(payload): Json<SearchRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let _session = authorized_session(&state, &headers, Some(&project_id)).await?;
+    let _session = authorized_principal(&state, &headers, Some(&project_id)).await?;
     let root = project_root_for_id(&state, &project_id).await?;
     let response = search_project_hybrid(
         &state,
@@ -734,7 +733,7 @@ async fn graph_handler(
     Path(project_id): Path<String>,
     Query(params): Query<GraphRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let _session = authorized_session(&state, &headers, Some(&project_id)).await?;
+    let _session = authorized_principal(&state, &headers, Some(&project_id)).await?;
     let root = project_root_for_id(&state, &project_id).await?;
     let (nodes, edges) = build_graph_view(
         root.as_path(),
@@ -751,7 +750,7 @@ async fn graph_neighbors_handler(
     headers: HeaderMap,
     Path((project_id, node_id)): Path<(String, String)>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let _session = authorized_session(&state, &headers, Some(&project_id)).await?;
+    let _session = authorized_principal(&state, &headers, Some(&project_id)).await?;
     let root = project_root_for_id(&state, &project_id).await?;
     let neighborhood = neighbors_for_node(root.as_path(), &node_id)
         .map_err(|error| ApiError::bad_request(error.to_string()))?;
@@ -763,7 +762,7 @@ async fn tasks_handler(
     headers: HeaderMap,
     Path(project_id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let _session = authorized_session(&state, &headers, Some(&project_id)).await?;
+    let _session = authorized_principal(&state, &headers, Some(&project_id)).await?;
     let tasks = list_tasks(&state, &project_id).await?;
     Ok(Json(json!({ "tasks": tasks })))
 }
@@ -773,7 +772,7 @@ async fn task_detail_handler(
     headers: HeaderMap,
     Path((project_id, task_id)): Path<(String, String)>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let _session = authorized_session(&state, &headers, Some(&project_id)).await?;
+    let _session = authorized_principal(&state, &headers, Some(&project_id)).await?;
     Ok(Json(json!(get_task(&state, &project_id, &task_id).await?)))
 }
 
@@ -782,8 +781,8 @@ async fn retry_task_handler(
     headers: HeaderMap,
     Path((project_id, task_id)): Path<(String, String)>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let session = authorized_session(&state, &headers, Some(&project_id)).await?;
-    validate_csrf(&headers, &session.csrf_token)?;
+    let session = authorized_principal(&state, &headers, Some(&project_id)).await?;
+    validate_csrf(&headers, &session)?;
     let updated = update_task_status(&state, &project_id, &task_id, "queued").await?;
     Ok(Json(json!(updated)))
 }
@@ -793,8 +792,8 @@ async fn cancel_task_handler(
     headers: HeaderMap,
     Path((project_id, task_id)): Path<(String, String)>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let session = authorized_session(&state, &headers, Some(&project_id)).await?;
-    validate_csrf(&headers, &session.csrf_token)?;
+    let session = authorized_principal(&state, &headers, Some(&project_id)).await?;
+    validate_csrf(&headers, &session)?;
     let current = get_task(&state, &project_id, &task_id).await?;
     if current.status == "completed" {
         return Err(ApiError::bad_request("completed tasks cannot be cancelled"));
@@ -809,8 +808,8 @@ async fn create_query_task_handler(
     Path(project_id): Path<String>,
     Json(payload): Json<CreateQueryTaskRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let session = authorized_session(&state, &headers, Some(&project_id)).await?;
-    validate_csrf(&headers, &session.csrf_token)?;
+    let session = authorized_principal(&state, &headers, Some(&project_id)).await?;
+    validate_csrf(&headers, &session)?;
 
     let (provider_mode, language, default_query_limit) =
         sqlx::query_as::<_, (String, String, i64)>(
@@ -860,7 +859,7 @@ async fn query_task_detail_handler(
     headers: HeaderMap,
     Path((project_id, task_id)): Path<(String, String)>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let _session = authorized_session(&state, &headers, Some(&project_id)).await?;
+    let _session = authorized_principal(&state, &headers, Some(&project_id)).await?;
     Ok(Json(json!(get_task(&state, &project_id, &task_id).await?)))
 }
 
@@ -870,8 +869,8 @@ async fn save_query_task_handler(
     Path((project_id, task_id)): Path<(String, String)>,
     Json(payload): Json<SaveQueryTaskRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let session = authorized_session(&state, &headers, Some(&project_id)).await?;
-    validate_csrf(&headers, &session.csrf_token)?;
+    let session = authorized_principal(&state, &headers, Some(&project_id)).await?;
+    validate_csrf(&headers, &session)?;
 
     let source_task = get_task(&state, &project_id, &task_id).await?;
     if source_task.task_type != "query.answer" || source_task.status != "succeeded" {
@@ -961,8 +960,8 @@ async fn create_lint_task_handler(
     Path(project_id): Path<String>,
     Json(payload): Json<CreateLintTaskRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let session = authorized_session(&state, &headers, Some(&project_id)).await?;
-    validate_csrf(&headers, &session.csrf_token)?;
+    let session = authorized_principal(&state, &headers, Some(&project_id)).await?;
+    validate_csrf(&headers, &session)?;
 
     let mode = payload.mode.trim();
     if mode != "structural" && mode != "semantic" {
@@ -1017,8 +1016,8 @@ async fn ingest_handler(
     Path(project_id): Path<String>,
     Json(payload): Json<IngestRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let session = authorized_session(&state, &headers, Some(&project_id)).await?;
-    validate_csrf(&headers, &session.csrf_token)?;
+    let session = authorized_principal(&state, &headers, Some(&project_id)).await?;
+    validate_csrf(&headers, &session)?;
     let task = create_queued_task(
         &state,
         CreateTaskRecord {
@@ -1063,7 +1062,7 @@ async fn query_handler(
     Path(project_id): Path<String>,
     Json(payload): Json<SearchRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let _session = authorized_session(&state, &headers, Some(&project_id)).await?;
+    let _session = authorized_principal(&state, &headers, Some(&project_id)).await?;
     let result = execute_project_query(
         &state,
         &project_id,
@@ -1084,7 +1083,7 @@ async fn list_reviews_handler(
     Path(project_id): Path<String>,
     Query(params): Query<ReviewListRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let _session = authorized_session(&state, &headers, Some(&project_id)).await?;
+    let _session = authorized_principal(&state, &headers, Some(&project_id)).await?;
     let root = project_root_for_id(&state, &project_id).await?;
     let store = load_reviews(&root).map_err(|error| ApiError::bad_request(error.to_string()))?;
     let status = parse_review_status(params.status.as_deref())?;
@@ -1117,8 +1116,8 @@ async fn sweep_reviews_handler(
     headers: HeaderMap,
     Path(project_id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let session = authorized_session(&state, &headers, Some(&project_id)).await?;
-    validate_csrf(&headers, &session.csrf_token)?;
+    let session = authorized_principal(&state, &headers, Some(&project_id)).await?;
+    validate_csrf(&headers, &session)?;
     let task = create_queued_task(
         &state,
         CreateTaskRecord {
@@ -1161,8 +1160,8 @@ async fn update_review_handler(
     Path((project_id, review_id)): Path<(String, String)>,
     Json(payload): Json<UpdateReviewRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let session = authorized_session(&state, &headers, Some(&project_id)).await?;
-    validate_csrf(&headers, &session.csrf_token)?;
+    let session = authorized_principal(&state, &headers, Some(&project_id)).await?;
+    validate_csrf(&headers, &session)?;
     let task = create_queued_task(
         &state,
         CreateTaskRecord {
@@ -1207,7 +1206,7 @@ async fn audit_logs_handler(
     headers: HeaderMap,
     Path(project_id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let _session = authorized_session(&state, &headers, Some(&project_id)).await?;
+    let _session = authorized_principal(&state, &headers, Some(&project_id)).await?;
     let items = list_audit_logs(&state, &project_id).await?;
     Ok(Json(json!({ "items": items })))
 }
@@ -1217,7 +1216,7 @@ async fn dedup_overview_handler(
     headers: HeaderMap,
     Path(project_id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let _session = authorized_session(&state, &headers, Some(&project_id)).await?;
+    let _session = authorized_principal(&state, &headers, Some(&project_id)).await?;
     let root = project_root_for_id(&state, &project_id).await?;
     let store = load_dedup_store(&root).map_err(|error| ApiError::internal(error.to_string()))?;
     let not_duplicates =
@@ -1233,8 +1232,8 @@ async fn detect_dedup_handler(
     headers: HeaderMap,
     Path(project_id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let session = authorized_session(&state, &headers, Some(&project_id)).await?;
-    validate_csrf(&headers, &session.csrf_token)?;
+    let session = authorized_principal(&state, &headers, Some(&project_id)).await?;
+    validate_csrf(&headers, &session)?;
     let task = create_queued_task(
         &state,
         CreateTaskRecord {
@@ -1277,8 +1276,8 @@ async fn merge_dedup_group_handler(
     Path((project_id, group_id)): Path<(String, String)>,
     Json(payload): Json<MergeDedupGroupRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let session = authorized_session(&state, &headers, Some(&project_id)).await?;
-    validate_csrf(&headers, &session.csrf_token)?;
+    let session = authorized_principal(&state, &headers, Some(&project_id)).await?;
+    validate_csrf(&headers, &session)?;
     let root = project_root_for_id(&state, &project_id).await?;
     let store = load_dedup_store(&root).map_err(|error| ApiError::internal(error.to_string()))?;
     let group = store
@@ -1333,8 +1332,8 @@ async fn dismiss_dedup_group_handler(
     headers: HeaderMap,
     Path((project_id, group_id)): Path<(String, String)>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let session = authorized_session(&state, &headers, Some(&project_id)).await?;
-    validate_csrf(&headers, &session.csrf_token)?;
+    let session = authorized_principal(&state, &headers, Some(&project_id)).await?;
+    validate_csrf(&headers, &session)?;
     let root = project_root_for_id(&state, &project_id).await?;
     let mut store = load_dedup_store(&root).map_err(|error| ApiError::internal(error.to_string()))?;
     let Some(index) = store.groups.iter().position(|group| group.id == group_id) else {
@@ -1362,29 +1361,24 @@ async fn dismiss_dedup_group_handler(
     Ok(Json(json!({ "dismissed": true })))
 }
 
-fn extract_session_id(headers: &HeaderMap) -> Option<String> {
-    headers
-        .get(header::COOKIE)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|cookie| {
-            cookie
-                .split(';')
-                .map(str::trim)
-                .find(|item| item.starts_with("knowledge_session="))
-                .map(|item| item.trim_start_matches("knowledge_session=").to_string())
-        })
-}
-
-pub(crate) fn validate_csrf(headers: &HeaderMap, expected_token: &str) -> Result<(), ApiError> {
+pub(crate) fn validate_csrf(
+    headers: &HeaderMap,
+    principal: &crate::auth::principal::Principal,
+) -> Result<(), ApiError> {
+    if !principal.requires_csrf() {
+        return Ok(());
+    }
+    let expected = principal
+        .csrf_token
+        .as_deref()
+        .ok_or_else(|| ApiError::unauthorized("missing csrf token"))?;
     let supplied = headers
         .get("x-csrf-token")
         .and_then(|value| value.to_str().ok())
         .unwrap_or_default();
-
-    if supplied.is_empty() || supplied != expected_token {
+    if supplied.is_empty() || supplied != expected {
         return Err(ApiError::unauthorized("invalid csrf token"));
     }
-
     Ok(())
 }
 
@@ -1458,23 +1452,24 @@ fn map_wiki_page_error(error: WikiPageError) -> ApiError {
     }
 }
 
-pub(crate) async fn authorized_session(
+pub(crate) async fn authorized_principal(
     state: &AppState,
     headers: &HeaderMap,
     project_id: Option<&str>,
-) -> Result<crate::auth::session::SessionRecord, ApiError> {
-    let session_id =
-        extract_session_id(headers).ok_or_else(|| ApiError::unauthorized("missing session"))?;
-    let session = find_session(state, &session_id)
-        .await?
-        .ok_or_else(|| ApiError::unauthorized("missing session"))?;
+) -> Result<crate::auth::principal::Principal, ApiError> {
+    let principal = crate::auth::principal::resolve_principal(state, headers).await?;
 
     if let Some(project_id) = project_id {
+        if !principal.permits_project(project_id) {
+            return Err(ApiError::forbidden(
+                "api token is not scoped to this project",
+            ));
+        }
         let membership = sqlx::query_scalar::<_, i64>(
             "SELECT COUNT(*) FROM project_members WHERE project_id = $1 AND user_id = $2",
         )
         .bind(project_id)
-        .bind(&session.user_id)
+        .bind(&principal.user_id)
         .fetch_one(&state.pool)
         .await
         .map_err(ApiError::from)?;
@@ -1483,6 +1478,5 @@ pub(crate) async fn authorized_session(
             return Err(ApiError::forbidden("not a project member"));
         }
     }
-
-    Ok(session)
+    Ok(principal)
 }

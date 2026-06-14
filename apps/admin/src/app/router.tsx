@@ -3,6 +3,7 @@ import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { AppShell } from "../components/layout/app-shell";
 import { AuthGuard } from "../components/layout/auth-guard";
 import { ProjectWorkspaceLayout } from "../components/layout/project-workspace-layout";
+import { ApiTokensPage } from "../features/api-tokens/page";
 import { LoginPage } from "../features/auth/login-page";
 import { AuditPage } from "../features/audit/page";
 import { ChatPage } from "../features/chat/page";
@@ -46,6 +47,7 @@ export function AppRoutes() {
             <Route path="audit" element={<AuditPage />} />
           </Route>
           <Route path="users" element={<UsersPage />} />
+          <Route path="api-tokens" element={<ApiTokensPage />} />
           <Route path="settings" element={<SettingsPage />} />
         </Route>
       </Route>
