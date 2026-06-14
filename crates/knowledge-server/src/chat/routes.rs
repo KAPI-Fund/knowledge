@@ -17,7 +17,7 @@ use crate::chat::store::{
     find_conversation, list_conversations, list_messages, rename_conversation,
 };
 use crate::http::error::ApiError;
-use crate::projects::routes::{authorized_session, validate_csrf};
+use crate::projects::routes::{authorized_principal, validate_csrf};
 use crate::projects::service::project_root_for_id;
 use crate::providers::{OpenAiCompatibleProvider, ProviderChatMessage, ProviderChatStreamRequest};
 use crate::query::load_query_settings;
@@ -61,7 +61,7 @@ async fn list_conversations_handler(
     Path(project_id): Path<String>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, ApiError> {
-    let session = authorized_session(&state, &headers, Some(&project_id)).await?;
+    let session = authorized_principal(&state, &headers, Some(&project_id)).await?;
     let conversations = list_conversations(&state.pool, &project_id, &session.user_id).await?;
     Ok(Json(json!({
         "conversations": conversations.iter().map(conversation_json).collect::<Vec<_>>()
@@ -74,8 +74,8 @@ async fn create_conversation_handler(
     headers: HeaderMap,
     Json(payload): Json<CreateConversationRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let session = authorized_session(&state, &headers, Some(&project_id)).await?;
-    validate_csrf(&headers, &session.csrf_token)?;
+    let session = authorized_principal(&state, &headers, Some(&project_id)).await?;
+    validate_csrf(&headers, &session)?;
     let title = payload
         .title
         .filter(|value| !value.trim().is_empty())
@@ -91,8 +91,8 @@ async fn rename_conversation_handler(
     headers: HeaderMap,
     Json(payload): Json<RenameConversationRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let session = authorized_session(&state, &headers, Some(&project_id)).await?;
-    validate_csrf(&headers, &session.csrf_token)?;
+    let session = authorized_principal(&state, &headers, Some(&project_id)).await?;
+    validate_csrf(&headers, &session)?;
     if payload.title.trim().is_empty() {
         return Err(ApiError::bad_request("title must not be empty"));
     }
@@ -113,8 +113,8 @@ async fn delete_conversation_handler(
     Path((project_id, conversation_id)): Path<(String, String)>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, ApiError> {
-    let session = authorized_session(&state, &headers, Some(&project_id)).await?;
-    validate_csrf(&headers, &session.csrf_token)?;
+    let session = authorized_principal(&state, &headers, Some(&project_id)).await?;
+    validate_csrf(&headers, &session)?;
     let deleted =
         delete_conversation(&state.pool, &project_id, &conversation_id, &session.user_id).await?;
     if !deleted {
@@ -128,7 +128,7 @@ async fn list_messages_handler(
     Path((project_id, conversation_id)): Path<(String, String)>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, ApiError> {
-    let session = authorized_session(&state, &headers, Some(&project_id)).await?;
+    let session = authorized_principal(&state, &headers, Some(&project_id)).await?;
     find_conversation(&state.pool, &project_id, &conversation_id, &session.user_id)
         .await?
         .ok_or_else(|| ApiError::not_found("conversation not found"))?;
@@ -144,8 +144,8 @@ async fn send_message_handler(
     headers: HeaderMap,
     Json(payload): Json<SendMessageRequest>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
-    let session = authorized_session(&state, &headers, Some(&project_id)).await?;
-    validate_csrf(&headers, &session.csrf_token)?;
+    let session = authorized_principal(&state, &headers, Some(&project_id)).await?;
+    validate_csrf(&headers, &session)?;
     let content = payload.content.trim().to_string();
     if content.is_empty() {
         return Err(ApiError::bad_request("message content must not be empty"));

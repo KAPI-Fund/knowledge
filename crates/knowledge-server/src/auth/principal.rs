@@ -42,9 +42,7 @@ impl Principal {
 
 pub fn extract_bearer_token(headers: &HeaderMap) -> Option<String> {
   let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
-  let mut parts = value.splitn(2, char::is_whitespace);
-  let scheme = parts.next()?;
-  let token = parts.next()?;
+  let (scheme, token) = value.split_once(char::is_whitespace)?;
   if !scheme.eq_ignore_ascii_case("bearer") {
     return None;
   }
