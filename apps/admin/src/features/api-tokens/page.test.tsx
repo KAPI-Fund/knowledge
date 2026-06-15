@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
@@ -146,6 +146,9 @@ describe("api tokens page", () => {
     renderPage();
 
     expect(screen.getByText("scoped-bot")).toBeInTheDocument();
-    expect(screen.getByText("project-1")).toBeInTheDocument();
+    const row = screen.getByText("scoped-bot").closest("tr");
+    expect(row).not.toBeNull();
+    expect(within(row as HTMLElement).getByText("Demo Project")).toBeInTheDocument();
+    expect(within(row as HTMLElement).queryByText("project-1")).not.toBeInTheDocument();
   });
 });

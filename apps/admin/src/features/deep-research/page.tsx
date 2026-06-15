@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 
 import { EmptyState } from "@/components/layout/empty-state";
 import { PageSection } from "@/components/layout/page-section";
@@ -12,7 +12,10 @@ import { useProjectTasksQuery } from "../tasks/queries";
 
 import { useCreateDeepResearchTaskMutation } from "./queries";
 
-function renderTaskResult(task: { result?: unknown; error?: unknown }) {
+function renderTaskResult(
+  task: { result?: unknown; error?: unknown },
+  projectId: string,
+) {
   if (task.error) {
     const message =
       typeof task.error === "object" && task.error && "message" in task.error
@@ -34,7 +37,13 @@ function renderTaskResult(task: { result?: unknown; error?: unknown }) {
       <div className="grid gap-1">
         {result.savedPath ? (
           <p>
-            Saved: <code>{result.savedPath}</code>
+            Saved:{" "}
+            <Link
+              className="underline"
+              to={`/projects/${projectId}/files?path=${encodeURIComponent(result.savedPath)}`}
+            >
+              <code>{result.savedPath}</code>
+            </Link>
           </p>
         ) : null}
         {typeof result.sourceCount === "number" ? (
@@ -129,7 +138,7 @@ export function DeepResearchPage() {
                 </div>
               </CardHeader>
               <CardContent className="grid gap-2 text-sm">
-                {renderTaskResult(task)}
+                {renderTaskResult(task, projectId)}
               </CardContent>
             </Card>
           ))}

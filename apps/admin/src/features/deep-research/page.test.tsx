@@ -95,6 +95,11 @@ describe("deep research page", () => {
     renderPage();
     expect(screen.getByText("wiki/queries/research-kg.md")).toBeInTheDocument();
     expect(screen.getByText("Sources used: 3")).toBeInTheDocument();
+    const link = screen.getByRole("link", { name: /wiki\/queries\/research-kg\.md/ });
+    expect(link).toHaveAttribute(
+      "href",
+      "/projects/project-1/files?path=wiki%2Fqueries%2Fresearch-kg.md",
+    );
   });
 
   it("renders the error message for a failed task", () => {

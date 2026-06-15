@@ -34,6 +34,7 @@ export function ApiTokensPage() {
   const revokeMutation = useRevokeApiTokenMutation();
   const tokens = tokensQuery.data?.tokens ?? [];
   const projects = projectsQuery.data ?? [];
+  const projectsById = new Map(projects.map((project) => [project.id, project.name] as const));
 
   return (
     <PageSection
@@ -147,7 +148,11 @@ export function ApiTokensPage() {
                     <TableCell>
                       <code>{token.prefix}…</code>
                     </TableCell>
-                    <TableCell>{token.projectId ?? "—"}</TableCell>
+                    <TableCell>
+                      {token.projectId
+                        ? projectsById.get(token.projectId) ?? token.projectId
+                        : "—"}
+                    </TableCell>
                     <TableCell>
                       {token.revokedAt ? (
                         <Badge variant="outline">revoked</Badge>
