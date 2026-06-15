@@ -39,7 +39,7 @@ test("admin can run a provider-backed query and save it to the wiki", async ({ p
   await expect(page.getByText("Saved to wiki")).toBeVisible();
   await expect(page.getByText("wiki/queries/what-is-attention.md")).toBeVisible();
 
-  await page.getByRole("tab", { name: "Search" }).click();
+  await page.getByRole("tab", { name: "Search", exact: true }).click();
   await page.getByLabel("Search Query").fill("Attention focuses computation");
   await page.getByRole("button", { name: "Run Search" }).click();
   await expect(page.getByText("wiki/queries/what-is-attention.md")).toBeVisible();
