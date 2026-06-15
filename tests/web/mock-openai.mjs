@@ -133,6 +133,23 @@ const server = http.createServer((request, response) => {
     return;
   }
 
+  if (request.method === "GET" && request.url?.startsWith("/search")) {
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(
+      JSON.stringify({
+        results: [
+          {
+            title: "Knowledge graphs explained",
+            url: "https://example.com/knowledge-graphs",
+            content: "An overview of knowledge graphs and their applications.",
+            engine: "mock",
+          },
+        ],
+      }),
+    );
+    return;
+  }
+
   response.writeHead(404, { "content-type": "application/json" });
   response.end(JSON.stringify({ error: "not found" }));
 });
