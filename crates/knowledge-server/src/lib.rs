@@ -13,6 +13,7 @@ pub mod retrieval;
 pub mod settings;
 pub mod tasks;
 pub mod users;
+pub mod web_search;
 
 use app::state::AppState;
 use cache::CacheStore;
