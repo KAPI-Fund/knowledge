@@ -1,12 +1,12 @@
 use axum::extract::State;
-use axum::http::HeaderMap;
+use axum::http::{header, HeaderMap};
 use axum::routing::get;
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::json;
 
 use crate::app::state::AppState;
-use crate::auth::principal::resolve_principal;
+use crate::auth::session::{find_session, SessionRecord};
 use crate::http::error::ApiError;
 
 pub fn router() -> Router<AppState> {
@@ -126,7 +126,7 @@ async fn get_settings(
   State(state): State<AppState>,
   headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-  let _principal = resolve_principal(&state, &headers).await?;
+  let _session = require_session(&state, &headers).await?;
   Ok(Json(build_settings_response(&state).await?))
 }
 
@@ -135,19 +135,13 @@ async fn update_settings(
   headers: HeaderMap,
   Json(payload): Json<UpdateSettingsRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-  let principal = resolve_principal(&state, &headers).await?;
-  if principal.requires_csrf() {
-    let expected = principal
-      .csrf_token
-      .as_deref()
-      .ok_or_else(|| ApiError::unauthorized("missing csrf token"))?;
-    let supplied = headers
-      .get("x-csrf-token")
-      .and_then(|value| value.to_str().ok())
-      .unwrap_or_default();
-    if supplied.is_empty() || supplied != expected {
-      return Err(ApiError::unauthorized("invalid csrf token"));
-    }
+  let session = require_session(&state, &headers).await?;
+  let supplied = headers
+    .get("x-csrf-token")
+    .and_then(|value| value.to_str().ok())
+    .unwrap_or_default();
+  if supplied.is_empty() || supplied != session.csrf_token {
+    return Err(ApiError::unauthorized("invalid csrf token"));
   }
   let searxng_categories_value = payload
     .searxng_categories
@@ -194,5 +188,26 @@ async fn update_settings(
   .map_err(ApiError::from)?;
 
   Ok(Json(build_settings_response(&state).await?))
+}
+
+async fn require_session(
+  state: &AppState,
+  headers: &HeaderMap,
+) -> Result<SessionRecord, ApiError> {
+  let session_id = headers
+    .get(header::COOKIE)
+    .and_then(|value| value.to_str().ok())
+    .and_then(|cookie| {
+      cookie
+        .split(';')
+        .map(str::trim)
+        .find(|item| item.starts_with("knowledge_session="))
+        .map(|item| item.trim_start_matches("knowledge_session=").to_string())
+    })
+    .ok_or_else(|| ApiError::unauthorized("missing session"))?;
+
+  find_session(state, &session_id)
+    .await?
+    .ok_or_else(|| ApiError::unauthorized("missing session"))
 }
 

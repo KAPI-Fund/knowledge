@@ -261,3 +261,98 @@ async fn web_search_via_bearer_token() {
 
     searxng_handle.abort();
 }
+
+#[tokio::test]
+async fn settings_get_rejects_bearer_token() {
+    let _env = TestEnvironment::start("settings-bearer-get").await.unwrap();
+    let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
+    let state = bootstrap_state(&config).await.unwrap();
+    let (cookie, csrf) = login_and_csrf(state.clone()).await;
+
+    let mint = build_app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/users/me/api-tokens")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .header("x-csrf-token", &csrf)
+                .body(Body::from(json!({ "name": "settings-test" }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let token = read_json(mint.into_body()).await["token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let response = build_app(state)
+        .oneshot(
+            Request::builder()
+                .uri("/api/system/settings")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::UNAUTHORIZED,
+        "system settings must reject Bearer authentication"
+    );
+}
+
+#[tokio::test]
+async fn settings_patch_rejects_bearer_token() {
+    let _env = TestEnvironment::start("settings-bearer-patch").await.unwrap();
+    let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
+    let state = bootstrap_state(&config).await.unwrap();
+    let (cookie, csrf) = login_and_csrf(state.clone()).await;
+
+    let mint = build_app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/users/me/api-tokens")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .header("x-csrf-token", &csrf)
+                .body(Body::from(json!({ "name": "settings-test" }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let token = read_json(mint.into_body()).await["token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let response = build_app(state)
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/system/settings")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::from(
+                    json!({
+                      "providerMode": "openai-compatible",
+                      "language": "en",
+                      "defaultQueryLimit": 25,
+                      "searchProvider": "tavily",
+                      "searchApiKey": "stolen-key"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::UNAUTHORIZED,
+        "system settings must reject Bearer authentication"
+    );
+}
