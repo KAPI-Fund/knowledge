@@ -1026,6 +1026,8 @@ export async function updateSystemSettings(input: {
   ollamaSearchUrl?: string;
   tavilyBaseUrl?: string;
   serpapiBaseUrl?: string;
+  clearProviderApiKey?: boolean;
+  clearSearchApiKey?: boolean;
 }) {
   const payload = {
     providerMode: input.providerMode,
@@ -1052,6 +1054,8 @@ export async function updateSystemSettings(input: {
           searchApiKey: input.searchApiKey.trim(),
         }
       : {}),
+    ...(input.clearProviderApiKey ? { clearProviderApiKey: true } : {}),
+    ...(input.clearSearchApiKey ? { clearSearchApiKey: true } : {}),
   };
 
   return apiFetch(

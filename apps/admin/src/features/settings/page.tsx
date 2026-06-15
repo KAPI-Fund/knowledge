@@ -32,6 +32,8 @@ export function SettingsPage() {
   const runWebSearch = useRunWebSearchMutation();
   const [saveMessage, setSaveMessage] = useState("");
   const [isDirty, setIsDirty] = useState(false);
+  const [clearProviderApiKey, setClearProviderApiKey] = useState(false);
+  const [clearSearchApiKey, setClearSearchApiKey] = useState(false);
   const hydratedFrom = useRef<string>("");
 
   useEffect(() => {
@@ -112,6 +114,8 @@ export function SettingsPage() {
             searchApiKey: searchApiKey.trim(),
           }
         : {}),
+      ...(clearProviderApiKey ? { clearProviderApiKey: true } : {}),
+      ...(clearSearchApiKey ? { clearSearchApiKey: true } : {}),
     };
 
     try {
@@ -120,6 +124,8 @@ export function SettingsPage() {
       setSaveMessage("Settings saved.");
       setProviderApiKey("");
       setSearchApiKey("");
+      setClearProviderApiKey(false);
+      setClearSearchApiKey(false);
     } catch (error) {
       setSaveMessage(error instanceof Error ? error.message : "Failed to save settings.");
     }
@@ -186,7 +192,20 @@ export function SettingsPage() {
             />
           </label>
           {settings.data?.providerApiKeyConfigured ? (
-            <p className="text-sm text-muted-foreground">API key configured</p>
+            clearProviderApiKey ? (
+              <p className="text-sm text-muted-foreground">Key will be removed on save</p>
+            ) : (
+              <button
+                className="text-sm text-destructive underline text-left"
+                onClick={() => {
+                  setClearProviderApiKey(true);
+                  setIsDirty(true);
+                }}
+                type="button"
+              >
+                Remove configured key
+              </button>
+            )
           ) : null}
           <label className="grid gap-2 text-sm font-medium">
             Provider Model
@@ -266,7 +285,20 @@ export function SettingsPage() {
             </label>
           ) : null}
           {settings.data?.searchApiKeyConfigured && searchProvider !== "none" && searchProvider !== "searxng" ? (
-            <p className="text-sm text-muted-foreground">Search API key configured</p>
+            clearSearchApiKey ? (
+              <p className="text-sm text-muted-foreground">Key will be removed on save</p>
+            ) : (
+              <button
+                className="text-sm text-destructive underline text-left"
+                onClick={() => {
+                  setClearSearchApiKey(true);
+                  setIsDirty(true);
+                }}
+                type="button"
+              >
+                Remove configured key
+              </button>
+            )
           ) : null}
           {searchProvider === "serpapi" ? (
             <label className="grid gap-2 text-sm font-medium">

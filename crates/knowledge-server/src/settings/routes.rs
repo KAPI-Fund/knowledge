@@ -40,6 +40,10 @@ pub struct UpdateSettingsRequest {
   pub tavily_base_url: Option<String>,
   #[serde(default)]
   pub serpapi_base_url: Option<String>,
+  #[serde(default)]
+  pub clear_provider_api_key: Option<bool>,
+  #[serde(default)]
+  pub clear_search_api_key: Option<bool>,
 }
 
 async fn build_settings_response(state: &AppState) -> Result<serde_json::Value, ApiError> {
@@ -153,12 +157,12 @@ async fn update_settings(
          language = $2,
          default_query_limit = $3,
          provider_base_url = $4,
-         provider_api_key = COALESCE(NULLIF($5, ''), provider_api_key),
+         provider_api_key = CASE WHEN $17 THEN NULL ELSE COALESCE(NULLIF($5, ''), provider_api_key) END,
          provider_model = $6,
          provider_embedding_model = $7,
          provider_timeout_seconds = $8,
          search_provider = COALESCE($9, search_provider),
-         search_api_key = COALESCE(NULLIF($10, ''), search_api_key),
+         search_api_key = CASE WHEN $18 THEN NULL ELSE COALESCE(NULLIF($10, ''), search_api_key) END,
          serpapi_engine = COALESCE($11, serpapi_engine),
          searxng_url = $12,
          searxng_categories = COALESCE($13, searxng_categories),
@@ -183,6 +187,8 @@ async fn update_settings(
   .bind(payload.ollama_search_url.as_deref())
   .bind(payload.tavily_base_url.as_deref())
   .bind(payload.serpapi_base_url.as_deref())
+  .bind(payload.clear_provider_api_key.unwrap_or(false))
+  .bind(payload.clear_search_api_key.unwrap_or(false))
   .execute(&state.pool)
   .await
   .map_err(ApiError::from)?;

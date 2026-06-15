@@ -7,6 +7,7 @@ import { SettingsPage } from "./page";
 
 const updateSettings = vi.fn();
 const runWebSearch = vi.fn();
+const resetWebSearch = vi.fn();
 const settingsData = vi.fn();
 
 vi.mock("./queries", () => ({
@@ -19,6 +20,7 @@ vi.mock("./queries", () => ({
   }),
   useRunWebSearchMutation: () => ({
     mutateAsync: runWebSearch,
+    reset: resetWebSearch,
     isPending: false,
     data: undefined,
   }),
@@ -67,6 +69,49 @@ describe("SettingsPage", () => {
       expect.not.objectContaining({
         providerApiKey: "",
       }),
+    );
+  });
+
+  it("sends clearProviderApiKey when remove key is clicked then saved", async () => {
+    const user = userEvent.setup();
+    const queryClient = new QueryClient();
+    settingsData.mockReturnValue({
+      providerMode: "openai-compatible",
+      language: "en",
+      defaultQueryLimit: 25,
+      providerBaseUrl: null,
+      providerApiKeyConfigured: true,
+      providerModel: null,
+      providerEmbeddingModel: null,
+      providerTimeoutSeconds: 30,
+      searchProvider: "none",
+      searchApiKeyConfigured: false,
+      serpapiEngine: "google",
+      searxngUrl: null,
+      searxngCategories: ["general"],
+      ollamaSearchUrl: null,
+      tavilyBaseUrl: null,
+      serpapiBaseUrl: null,
+    });
+    updateSettings.mockResolvedValue({
+      providerMode: "openai-compatible",
+      language: "en",
+      defaultQueryLimit: 25,
+      providerApiKeyConfigured: false,
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <SettingsPage />
+      </QueryClientProvider>,
+    );
+
+    await user.click(screen.getByRole("button", { name: /remove configured key/i }));
+    expect(screen.getByText("Key will be removed on save")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Save Settings" }));
+    expect(updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ clearProviderApiKey: true }),
     );
   });
 });
