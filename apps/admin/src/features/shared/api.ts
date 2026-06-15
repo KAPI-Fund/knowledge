@@ -185,7 +185,26 @@ const settingsSchema = z.object({
   providerModel: z.string().nullable().optional(),
   providerEmbeddingModel: z.string().nullable().optional(),
   providerTimeoutSeconds: z.number().nullable().optional(),
+  searchProvider: z.string().nullable().optional(),
+  searchApiKeyConfigured: z.boolean().optional(),
+  serpapiEngine: z.string().nullable().optional(),
+  searxngUrl: z.string().nullable().optional(),
+  searxngCategories: z.array(z.string()).nullable().optional(),
+  ollamaSearchUrl: z.string().nullable().optional(),
 });
+
+const webSearchResultSchema = z.object({
+  title: z.string(),
+  url: z.string(),
+  snippet: z.string(),
+  source: z.string(),
+});
+
+const webSearchResponseSchema = z.object({
+  results: z.array(webSearchResultSchema),
+});
+
+export type WebSearchResult = z.infer<typeof webSearchResultSchema>;
 
 const searchResultsSchema = z.object({
   mode: z.string(),
@@ -975,6 +994,12 @@ export async function updateSystemSettings(input: {
   providerModel?: string;
   providerEmbeddingModel?: string;
   providerTimeoutSeconds?: number;
+  searchProvider?: string;
+  searchApiKey?: string;
+  serpapiEngine?: string;
+  searxngUrl?: string;
+  searxngCategories?: string[];
+  ollamaSearchUrl?: string;
 }) {
   const payload = {
     providerMode: input.providerMode,
@@ -984,9 +1009,19 @@ export async function updateSystemSettings(input: {
     providerModel: input.providerModel,
     providerEmbeddingModel: input.providerEmbeddingModel,
     providerTimeoutSeconds: input.providerTimeoutSeconds,
+    searchProvider: input.searchProvider,
+    serpapiEngine: input.serpapiEngine,
+    searxngUrl: input.searxngUrl,
+    searxngCategories: input.searxngCategories,
+    ollamaSearchUrl: input.ollamaSearchUrl,
     ...(input.providerApiKey?.trim()
       ? {
           providerApiKey: input.providerApiKey.trim(),
+        }
+      : {}),
+    ...(input.searchApiKey?.trim()
+      ? {
+          searchApiKey: input.searchApiKey.trim(),
         }
       : {}),
   };
@@ -999,5 +1034,17 @@ export async function updateSystemSettings(input: {
       body: JSON.stringify(payload),
     },
     settingsSchema,
+  );
+}
+
+export async function runWebSearch(input: { query: string; maxResults?: number }) {
+  return apiFetch(
+    `/api/web-search`,
+    {
+      method: "POST",
+      headers: csrfHeader(),
+      body: JSON.stringify({ query: input.query, maxResults: input.maxResults }),
+    },
+    webSearchResponseSchema,
   );
 }
