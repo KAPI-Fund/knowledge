@@ -1,5 +1,7 @@
 import { useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { useParams } from "react-router-dom";
+
+import { ProjectFileLink } from "../shared/file-links";
 
 import { EmptyState } from "@/components/layout/empty-state";
 import { PageSection } from "@/components/layout/page-section";
@@ -37,13 +39,7 @@ function renderTaskResult(
       <div className="grid gap-1">
         {result.savedPath ? (
           <p>
-            Saved:{" "}
-            <Link
-              className="underline"
-              to={`/projects/${projectId}/files?path=${encodeURIComponent(result.savedPath)}`}
-            >
-              <code>{result.savedPath}</code>
-            </Link>
+            Saved: <ProjectFileLink projectId={projectId} path={result.savedPath} />
           </p>
         ) : null}
         {typeof result.sourceCount === "number" ? (

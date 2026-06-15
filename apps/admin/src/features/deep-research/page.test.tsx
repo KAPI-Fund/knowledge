@@ -98,7 +98,7 @@ describe("deep research page", () => {
     const link = screen.getByRole("link", { name: /wiki\/queries\/research-kg\.md/ });
     expect(link).toHaveAttribute(
       "href",
-      "/projects/project-1/files?path=wiki%2Fqueries%2Fresearch-kg.md",
+      "/projects/project-1/files?root=all&path=wiki%2Fqueries%2Fresearch-kg.md",
     );
   });
 
