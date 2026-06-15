@@ -70,6 +70,31 @@ async fn web_search_against_mock_searxng_returns_results() {
     searxng_handle.await.unwrap();
 }
 
+async fn spawn_localhost_responder(response_body: String) -> (tokio::task::JoinHandle<()>, String) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let handle = tokio::spawn(async move {
+        loop {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                return;
+            };
+            let body = response_body.clone();
+            tokio::spawn(async move {
+                let mut buf = vec![0u8; 4096];
+                let _ = socket.read(&mut buf).await;
+                let payload = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = socket.write_all(payload.as_bytes()).await;
+                let _ = socket.shutdown().await;
+            });
+        }
+    });
+    (handle, format!("http://127.0.0.1:{port}"))
+}
+
 async fn spawn_mock_searxng() -> (tokio::task::JoinHandle<()>, String) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -355,4 +380,203 @@ async fn settings_patch_rejects_bearer_token() {
         StatusCode::UNAUTHORIZED,
         "system settings must reject Bearer authentication"
     );
+}
+
+#[tokio::test]
+async fn web_search_tavily_uses_persisted_base_url() {
+    let _env = TestEnvironment::start("web-search-tavily").await.unwrap();
+    let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
+    let state = bootstrap_state(&config).await.unwrap();
+    let (cookie, csrf) = login_and_csrf(state.clone()).await;
+    let (handle, base) = spawn_localhost_responder(
+        json!({
+          "results": [
+            { "title": "Tav", "url": "https://example.com/tav", "content": "from tavily" }
+          ]
+        })
+        .to_string(),
+    )
+    .await;
+
+    let patch = build_app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/system/settings")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .header("x-csrf-token", &csrf)
+                .body(Body::from(
+                    json!({
+                      "providerMode": "openai-compatible",
+                      "language": "en",
+                      "defaultQueryLimit": 25,
+                      "searchProvider": "tavily",
+                      "searchApiKey": "test-key",
+                      "tavilyBaseUrl": base
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(patch.status(), StatusCode::OK);
+
+    let response = build_app(state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/web-search")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .header("x-csrf-token", &csrf)
+                .body(Body::from(
+                    json!({ "query": "tavily query", "maxResults": 3 }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload = read_json(response.into_body()).await;
+    let results = payload.get("results").and_then(Value::as_array).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0]["title"].as_str(), Some("Tav"));
+    assert_eq!(results[0]["url"].as_str(), Some("https://example.com/tav"));
+
+    handle.abort();
+}
+
+#[tokio::test]
+async fn web_search_serpapi_uses_persisted_base_url() {
+    let _env = TestEnvironment::start("web-search-serpapi").await.unwrap();
+    let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
+    let state = bootstrap_state(&config).await.unwrap();
+    let (cookie, csrf) = login_and_csrf(state.clone()).await;
+    let (handle, base) = spawn_localhost_responder(
+        json!({
+          "organic_results": [
+            { "title": "Serp", "link": "https://example.com/serp", "snippet": "from serpapi" }
+          ]
+        })
+        .to_string(),
+    )
+    .await;
+
+    let patch = build_app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/system/settings")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .header("x-csrf-token", &csrf)
+                .body(Body::from(
+                    json!({
+                      "providerMode": "openai-compatible",
+                      "language": "en",
+                      "defaultQueryLimit": 25,
+                      "searchProvider": "serpapi",
+                      "searchApiKey": "test-key",
+                      "serpapiEngine": "google",
+                      "serpapiBaseUrl": base
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(patch.status(), StatusCode::OK);
+
+    let response = build_app(state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/web-search")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .header("x-csrf-token", &csrf)
+                .body(Body::from(
+                    json!({ "query": "serpapi query", "maxResults": 3 }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload = read_json(response.into_body()).await;
+    let results = payload.get("results").and_then(Value::as_array).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0]["title"].as_str(), Some("Serp"));
+    assert_eq!(results[0]["url"].as_str(), Some("https://example.com/serp"));
+
+    handle.abort();
+}
+
+#[tokio::test]
+async fn web_search_ollama_uses_persisted_url() {
+    let _env = TestEnvironment::start("web-search-ollama").await.unwrap();
+    let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
+    let state = bootstrap_state(&config).await.unwrap();
+    let (cookie, csrf) = login_and_csrf(state.clone()).await;
+    let (handle, base) = spawn_localhost_responder(
+        json!({
+          "results": [
+            { "title": "Olla", "url": "https://example.com/olla", "content": "from ollama" }
+          ]
+        })
+        .to_string(),
+    )
+    .await;
+
+    let patch = build_app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/system/settings")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .header("x-csrf-token", &csrf)
+                .body(Body::from(
+                    json!({
+                      "providerMode": "openai-compatible",
+                      "language": "en",
+                      "defaultQueryLimit": 25,
+                      "searchProvider": "ollama",
+                      "searchApiKey": "test-key",
+                      "ollamaSearchUrl": base
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(patch.status(), StatusCode::OK);
+
+    let response = build_app(state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/web-search")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .header("x-csrf-token", &csrf)
+                .body(Body::from(
+                    json!({ "query": "ollama query", "maxResults": 3 }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload = read_json(response.into_body()).await;
+    let results = payload.get("results").and_then(Value::as_array).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0]["title"].as_str(), Some("Olla"));
+    assert_eq!(results[0]["url"].as_str(), Some("https://example.com/olla"));
+
+    handle.abort();
 }
