@@ -126,22 +126,42 @@ pub async fn find_by_token(
   }))
 }
 
-pub async fn list_tokens_for_user(
+pub async fn list_tokens_for_user_scoped(
   state: &AppState,
   user_id: &str,
+  scope: Option<&str>,
 ) -> Result<Vec<ApiTokenRecord>, ApiError> {
-  let rows = sqlx::query_as::<
-    _,
-    (String, String, Option<String>, String, String, Option<String>, Option<String>, String),
-  >(
-    "SELECT id, user_id, project_id, name, token_prefix, last_used_at, revoked_at, created_at
-     FROM api_tokens
-     WHERE user_id = $1
-     ORDER BY created_at DESC",
-  )
-  .bind(user_id)
-  .fetch_all(&state.pool)
-  .await
+  let rows = match scope {
+    None => {
+      sqlx::query_as::<
+        _,
+        (String, String, Option<String>, String, String, Option<String>, Option<String>, String),
+      >(
+        "SELECT id, user_id, project_id, name, token_prefix, last_used_at, revoked_at, created_at
+         FROM api_tokens
+         WHERE user_id = $1
+         ORDER BY created_at DESC",
+      )
+      .bind(user_id)
+      .fetch_all(&state.pool)
+      .await
+    }
+    Some(project_id) => {
+      sqlx::query_as::<
+        _,
+        (String, String, Option<String>, String, String, Option<String>, Option<String>, String),
+      >(
+        "SELECT id, user_id, project_id, name, token_prefix, last_used_at, revoked_at, created_at
+         FROM api_tokens
+         WHERE user_id = $1 AND project_id = $2
+         ORDER BY created_at DESC",
+      )
+      .bind(user_id)
+      .bind(project_id)
+      .fetch_all(&state.pool)
+      .await
+    }
+  }
   .map_err(ApiError::from)?;
 
   Ok(
@@ -163,24 +183,59 @@ pub async fn list_tokens_for_user(
   )
 }
 
-pub async fn revoke_token(
+pub async fn list_tokens_for_user(
   state: &AppState,
   user_id: &str,
+) -> Result<Vec<ApiTokenRecord>, ApiError> {
+  list_tokens_for_user_scoped(state, user_id, None).await
+}
+
+pub async fn revoke_token_scoped(
+  state: &AppState,
+  user_id: &str,
+  scope: Option<&str>,
   token_id: &str,
 ) -> Result<bool, ApiError> {
   let now = OffsetDateTime::now_utc()
     .format(&Rfc3339)
     .map_err(|_| ApiError::internal("failed to format revoked_at"))?;
-  let result = sqlx::query(
-    "UPDATE api_tokens SET revoked_at = $1 WHERE id = $2 AND user_id = $3 AND revoked_at IS NULL",
-  )
-  .bind(&now)
-  .bind(token_id)
-  .bind(user_id)
-  .execute(&state.pool)
-  .await
+  let result = match scope {
+    None => {
+      sqlx::query(
+        "UPDATE api_tokens
+         SET revoked_at = $1
+         WHERE id = $2 AND user_id = $3 AND revoked_at IS NULL",
+      )
+      .bind(&now)
+      .bind(token_id)
+      .bind(user_id)
+      .execute(&state.pool)
+      .await
+    }
+    Some(project_id) => {
+      sqlx::query(
+        "UPDATE api_tokens
+         SET revoked_at = $1
+         WHERE id = $2 AND user_id = $3 AND project_id = $4 AND revoked_at IS NULL",
+      )
+      .bind(&now)
+      .bind(token_id)
+      .bind(user_id)
+      .bind(project_id)
+      .execute(&state.pool)
+      .await
+    }
+  }
   .map_err(ApiError::from)?;
   Ok(result.rows_affected() > 0)
+}
+
+pub async fn revoke_token(
+  state: &AppState,
+  user_id: &str,
+  token_id: &str,
+) -> Result<bool, ApiError> {
+  revoke_token_scoped(state, user_id, None, token_id).await
 }
 
 /// Non-fatal opportunistic write — caller logs errors and continues.
