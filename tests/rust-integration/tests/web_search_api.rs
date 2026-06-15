@@ -70,26 +70,108 @@ async fn web_search_against_mock_searxng_returns_results() {
     searxng_handle.await.unwrap();
 }
 
-async fn spawn_localhost_responder(response_body: String) -> (tokio::task::JoinHandle<()>, String) {
+async fn spawn_mock_tavily_validating() -> (tokio::task::JoinHandle<()>, String) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let handle = tokio::spawn(async move {
-        loop {
-            let Ok((mut socket, _)) = listener.accept().await else {
-                return;
-            };
-            let body = response_body.clone();
-            tokio::spawn(async move {
-                let mut buf = vec![0u8; 4096];
-                let _ = socket.read(&mut buf).await;
-                let payload = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-                    body.len(),
-                    body
-                );
-                let _ = socket.write_all(payload.as_bytes()).await;
-                let _ = socket.shutdown().await;
-            });
+        if let Ok((mut socket, _)) = listener.accept().await {
+            let mut buf = vec![0u8; 8192];
+            let n = socket.read(&mut buf).await.unwrap_or(0);
+            let raw = String::from_utf8_lossy(&buf[..n]);
+            let request_line = raw.lines().next().unwrap_or("");
+            assert!(
+                request_line.starts_with("POST /search "),
+                "tavily: expected POST /search, got: {request_line}"
+            );
+            assert!(raw.contains("\"api_key\""), "tavily: body missing api_key");
+            assert!(raw.contains("\"query\""), "tavily: body missing query");
+            assert!(raw.contains("\"search_depth\""), "tavily: body missing search_depth");
+            assert!(raw.contains("\"max_results\""), "tavily: body missing max_results");
+            let body = json!({
+              "results": [
+                { "title": "Tav", "url": "https://example.com/tav", "content": "from tavily" }
+              ]
+            })
+            .to_string();
+            let payload = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = socket.write_all(payload.as_bytes()).await;
+            let _ = socket.shutdown().await;
+        }
+    });
+    (handle, format!("http://127.0.0.1:{port}"))
+}
+
+async fn spawn_mock_serpapi_validating() -> (tokio::task::JoinHandle<()>, String) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let handle = tokio::spawn(async move {
+        if let Ok((mut socket, _)) = listener.accept().await {
+            let mut buf = vec![0u8; 8192];
+            let n = socket.read(&mut buf).await.unwrap_or(0);
+            let raw = String::from_utf8_lossy(&buf[..n]);
+            let request_line = raw.lines().next().unwrap_or("");
+            assert!(
+                request_line.starts_with("GET /search?"),
+                "serpapi: expected GET /search?..., got: {request_line}"
+            );
+            assert!(request_line.contains("engine="), "serpapi: missing engine= param");
+            assert!(request_line.contains("q="), "serpapi: missing q= param");
+            assert!(request_line.contains("api_key="), "serpapi: missing api_key= param");
+            assert!(request_line.contains("num="), "serpapi: missing num= param");
+            let body = json!({
+              "organic_results": [
+                { "title": "Serp", "link": "https://example.com/serp", "snippet": "from serpapi" }
+              ]
+            })
+            .to_string();
+            let payload = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = socket.write_all(payload.as_bytes()).await;
+            let _ = socket.shutdown().await;
+        }
+    });
+    (handle, format!("http://127.0.0.1:{port}"))
+}
+
+async fn spawn_mock_ollama_validating() -> (tokio::task::JoinHandle<()>, String) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let handle = tokio::spawn(async move {
+        if let Ok((mut socket, _)) = listener.accept().await {
+            let mut buf = vec![0u8; 8192];
+            let n = socket.read(&mut buf).await.unwrap_or(0);
+            let raw = String::from_utf8_lossy(&buf[..n]);
+            let request_line = raw.lines().next().unwrap_or("");
+            assert!(
+                request_line.starts_with("POST /api/web_search "),
+                "ollama: expected POST /api/web_search, got: {request_line}"
+            );
+            assert!(
+                raw.to_lowercase().contains("authorization: bearer "),
+                "ollama: missing Authorization Bearer header"
+            );
+            assert!(raw.contains("\"query\""), "ollama: body missing query");
+            assert!(raw.contains("\"max_results\""), "ollama: body missing max_results");
+            let body = json!({
+              "results": [
+                { "title": "Olla", "url": "https://example.com/olla", "content": "from ollama" }
+              ]
+            })
+            .to_string();
+            let payload = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = socket.write_all(payload.as_bytes()).await;
+            let _ = socket.shutdown().await;
         }
     });
     (handle, format!("http://127.0.0.1:{port}"))
@@ -388,15 +470,7 @@ async fn web_search_tavily_uses_persisted_base_url() {
     let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
     let state = bootstrap_state(&config).await.unwrap();
     let (cookie, csrf) = login_and_csrf(state.clone()).await;
-    let (handle, base) = spawn_localhost_responder(
-        json!({
-          "results": [
-            { "title": "Tav", "url": "https://example.com/tav", "content": "from tavily" }
-          ]
-        })
-        .to_string(),
-    )
-    .await;
+    let (handle, base) = spawn_mock_tavily_validating().await;
 
     let patch = build_app(state.clone())
         .oneshot(
@@ -454,15 +528,7 @@ async fn web_search_serpapi_uses_persisted_base_url() {
     let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
     let state = bootstrap_state(&config).await.unwrap();
     let (cookie, csrf) = login_and_csrf(state.clone()).await;
-    let (handle, base) = spawn_localhost_responder(
-        json!({
-          "organic_results": [
-            { "title": "Serp", "link": "https://example.com/serp", "snippet": "from serpapi" }
-          ]
-        })
-        .to_string(),
-    )
-    .await;
+    let (handle, base) = spawn_mock_serpapi_validating().await;
 
     let patch = build_app(state.clone())
         .oneshot(
@@ -521,15 +587,7 @@ async fn web_search_ollama_uses_persisted_url() {
     let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
     let state = bootstrap_state(&config).await.unwrap();
     let (cookie, csrf) = login_and_csrf(state.clone()).await;
-    let (handle, base) = spawn_localhost_responder(
-        json!({
-          "results": [
-            { "title": "Olla", "url": "https://example.com/olla", "content": "from ollama" }
-          ]
-        })
-        .to_string(),
-    )
-    .await;
+    let (handle, base) = spawn_mock_ollama_validating().await;
 
     let patch = build_app(state.clone())
         .oneshot(
