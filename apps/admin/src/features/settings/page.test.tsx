@@ -179,4 +179,42 @@ describe("settings page web search section", () => {
 
     expect(runWebSearch).toHaveBeenCalledWith({ query: "hello world" });
   });
+
+  it("calls reset when the form becomes dirty", async () => {
+    const user = userEvent.setup();
+    const queryClient = new QueryClient();
+    settingsData.mockReturnValue({
+      providerMode: "openai-compatible",
+      language: "en",
+      defaultQueryLimit: 25,
+      providerBaseUrl: null,
+      providerApiKeyConfigured: false,
+      providerModel: null,
+      providerEmbeddingModel: null,
+      providerTimeoutSeconds: 30,
+      searchProvider: "none",
+      searchApiKeyConfigured: false,
+      serpapiEngine: "google",
+      searxngUrl: null,
+      searxngCategories: ["general"],
+      ollamaSearchUrl: null,
+      tavilyBaseUrl: null,
+      serpapiBaseUrl: null,
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <SettingsPage />
+      </QueryClientProvider>,
+    );
+
+    resetWebSearch.mockClear();
+
+    await user.type(
+      screen.getByPlaceholderText("Leave blank to keep the current key"),
+      "x",
+    );
+
+    expect(resetWebSearch).toHaveBeenCalled();
+  });
 });
