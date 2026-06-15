@@ -580,3 +580,66 @@ async fn web_search_ollama_uses_persisted_url() {
 
     handle.abort();
 }
+
+#[tokio::test]
+async fn patch_settings_search_api_key_configured_reflects_db_state() {
+    let _env = TestEnvironment::start("settings-search-api-key-truth").await.unwrap();
+    let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
+    let state = bootstrap_state(&config).await.unwrap();
+    let (cookie, csrf) = login_and_csrf(state.clone()).await;
+
+    let initial = build_app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/system/settings")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .header("x-csrf-token", &csrf)
+                .body(Body::from(
+                    json!({
+                      "providerMode": "openai-compatible",
+                      "language": "en",
+                      "defaultQueryLimit": 25,
+                      "searchProvider": "tavily",
+                      "searchApiKey": "first-search-secret"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(initial.status(), StatusCode::OK);
+    let body = read_json(initial.into_body()).await;
+    assert_eq!(body["searchApiKeyConfigured"], json!(true));
+
+    let preserve = build_app(state)
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/system/settings")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .header("x-csrf-token", &csrf)
+                .body(Body::from(
+                    json!({
+                      "providerMode": "openai-compatible",
+                      "language": "en",
+                      "defaultQueryLimit": 25,
+                      "searchProvider": "tavily"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(preserve.status(), StatusCode::OK);
+    let body = read_json(preserve.into_body()).await;
+    assert_eq!(
+        body["searchApiKeyConfigured"],
+        json!(true),
+        "searchApiKeyConfigured must reflect DB state, not request payload"
+    );
+}
