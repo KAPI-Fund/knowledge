@@ -356,7 +356,11 @@ export function SettingsPage() {
             </label>
             <div className="flex gap-2">
               <Button
-                disabled={runWebSearch.isPending || testQuery.trim().length === 0}
+                disabled={
+                  runWebSearch.isPending ||
+                  testQuery.trim().length === 0 ||
+                  isDirty
+                }
                 onClick={async () => {
                   setTestError("");
                   try {
@@ -370,6 +374,11 @@ export function SettingsPage() {
                 Test Search
               </Button>
             </div>
+            {isDirty ? (
+              <p className="text-xs text-muted-foreground">
+                Save settings before testing — current config in the form differs from the saved config.
+              </p>
+            ) : null}
             {testError ? (
               <Alert>
                 <AlertTitle>Web search failed</AlertTitle>
