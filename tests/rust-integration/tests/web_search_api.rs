@@ -129,3 +129,64 @@ async fn read_json(body: Body) -> Value {
     let bytes = to_bytes(body, usize::MAX).await.unwrap();
     serde_json::from_slice(&bytes).unwrap()
 }
+
+#[tokio::test]
+async fn patch_settings_response_reflects_db_state() {
+    let _env = TestEnvironment::start("settings-response-truth").await.unwrap();
+    let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
+    let state = bootstrap_state(&config).await.unwrap();
+    let (cookie, csrf) = login_and_csrf(state.clone()).await;
+
+    let initial = build_app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/system/settings")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .header("x-csrf-token", &csrf)
+                .body(Body::from(
+                    json!({
+                      "providerMode": "openai-compatible",
+                      "language": "en",
+                      "defaultQueryLimit": 25,
+                      "providerApiKey": "first-secret"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(initial.status(), StatusCode::OK);
+    let body = read_json(initial.into_body()).await;
+    assert_eq!(body["providerApiKeyConfigured"], json!(true));
+
+    let preserve = build_app(state)
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/system/settings")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .header("x-csrf-token", &csrf)
+                .body(Body::from(
+                    json!({
+                      "providerMode": "openai-compatible",
+                      "language": "en",
+                      "defaultQueryLimit": 25
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(preserve.status(), StatusCode::OK);
+    let body = read_json(preserve.into_body()).await;
+    assert_eq!(
+        body["providerApiKeyConfigured"],
+        json!(true),
+        "providerApiKeyConfigured must reflect DB state, not request payload"
+    );
+}

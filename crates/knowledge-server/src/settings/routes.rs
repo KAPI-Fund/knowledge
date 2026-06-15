@@ -36,13 +36,13 @@ pub struct UpdateSettingsRequest {
   pub searxng_categories: Option<Vec<String>>,
   #[serde(default)]
   pub ollama_search_url: Option<String>,
+  #[serde(default)]
+  pub tavily_base_url: Option<String>,
+  #[serde(default)]
+  pub serpapi_base_url: Option<String>,
 }
 
-async fn get_settings(
-  State(state): State<AppState>,
-  headers: HeaderMap,
-) -> Result<Json<serde_json::Value>, ApiError> {
-  require_session(&state, &headers).await?;
+async fn build_settings_response(state: &AppState) -> Result<serde_json::Value, ApiError> {
   let (
     provider_mode,
     language,
@@ -58,6 +58,8 @@ async fn get_settings(
     searxng_url,
     searxng_categories,
     ollama_search_url,
+    tavily_base_url,
+    serpapi_base_url,
   ) = sqlx::query_as::<_, (
     String,
     String,
@@ -73,6 +75,8 @@ async fn get_settings(
     Option<String>,
     serde_json::Value,
     Option<String>,
+    String,
+    String,
   )>(
     "SELECT
       provider_mode,
@@ -88,7 +92,9 @@ async fn get_settings(
       serpapi_engine,
       searxng_url,
       searxng_categories,
-      ollama_search_url
+      ollama_search_url,
+      tavily_base_url,
+      serpapi_base_url
      FROM system_settings
      WHERE id = 1",
   )
@@ -96,7 +102,7 @@ async fn get_settings(
   .await
   .map_err(ApiError::from)?;
 
-  Ok(Json(json!({
+  Ok(json!({
     "providerMode": provider_mode,
     "language": language,
     "defaultQueryLimit": default_query_limit,
@@ -110,8 +116,18 @@ async fn get_settings(
     "serpapiEngine": serpapi_engine,
     "searxngUrl": searxng_url,
     "searxngCategories": searxng_categories,
-    "ollamaSearchUrl": ollama_search_url
-  })))
+    "ollamaSearchUrl": ollama_search_url,
+    "tavilyBaseUrl": tavily_base_url,
+    "serpapiBaseUrl": serpapi_base_url,
+  }))
+}
+
+async fn get_settings(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+  require_session(&state, &headers).await?;
+  Ok(Json(build_settings_response(&state).await?))
 }
 
 async fn update_settings(
@@ -139,7 +155,9 @@ async fn update_settings(
          serpapi_engine = COALESCE($11, serpapi_engine),
          searxng_url = $12,
          searxng_categories = COALESCE($13, searxng_categories),
-         ollama_search_url = $14
+         ollama_search_url = $14,
+         tavily_base_url = COALESCE(NULLIF($15, ''), tavily_base_url),
+         serpapi_base_url = COALESCE(NULLIF($16, ''), serpapi_base_url)
      WHERE id = 1",
   )
   .bind(&payload.provider_mode)
@@ -156,26 +174,13 @@ async fn update_settings(
   .bind(payload.searxng_url.as_deref())
   .bind(searxng_categories_value)
   .bind(payload.ollama_search_url.as_deref())
+  .bind(payload.tavily_base_url.as_deref())
+  .bind(payload.serpapi_base_url.as_deref())
   .execute(&state.pool)
   .await
   .map_err(ApiError::from)?;
 
-  Ok(Json(json!({
-    "providerMode": payload.provider_mode,
-    "language": payload.language,
-    "defaultQueryLimit": payload.default_query_limit,
-    "providerBaseUrl": payload.provider_base_url,
-    "providerApiKeyConfigured": payload.provider_api_key.as_deref().is_some_and(|value| !value.is_empty()),
-    "providerModel": payload.provider_model,
-    "providerEmbeddingModel": payload.provider_embedding_model,
-    "providerTimeoutSeconds": payload.provider_timeout_seconds,
-    "searchProvider": payload.search_provider,
-    "searchApiKeyConfigured": payload.search_api_key.as_deref().is_some_and(|value| !value.is_empty()),
-    "serpapiEngine": payload.serpapi_engine,
-    "searxngUrl": payload.searxng_url,
-    "searxngCategories": payload.searxng_categories,
-    "ollamaSearchUrl": payload.ollama_search_url
-  })))
+  Ok(Json(build_settings_response(&state).await?))
 }
 
 async fn require_session(state: &AppState, headers: &HeaderMap) -> Result<(), ApiError> {
