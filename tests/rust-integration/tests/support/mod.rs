@@ -94,6 +94,7 @@ impl TestEnvironment {
 pub async fn bootstrap_state_without_scheduler(config: &AppConfig) -> Result<AppState> {
     let pool = knowledge_server::db::pool::connect_pool(&config.database_url).await?;
     knowledge_server::db::migrate::run(&pool).await?;
+    knowledge_server::seed_admin_user(&pool, config).await?;
     let cache = CacheStore::connect(&config.redis_url).await?;
 
     Ok(AppState {

@@ -128,7 +128,7 @@ async fn seed_runtime_settings(pool: &PgPool, config: &AppConfig) -> anyhow::Res
     Ok(())
 }
 
-async fn seed_admin_user(pool: &PgPool, config: &AppConfig) -> anyhow::Result<()> {
+pub async fn seed_admin_user(pool: &PgPool, config: &AppConfig) -> anyhow::Result<()> {
     let admin_exists =
         sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users WHERE username = 'admin'")
             .fetch_one(pool)

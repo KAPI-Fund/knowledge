@@ -418,12 +418,23 @@ async fn conversations_are_private_to_their_owner() {
         .unwrap()
         .to_string();
 
-    // Second user: login auto-creates the account; membership added directly.
+    // Second user: create the account explicitly (login no longer auto-creates), membership added directly.
+    let alice_id = uuid::Uuid::new_v4().to_string();
+    let alice_hash =
+        knowledge_server::auth::password::hash_password("alice-password").unwrap();
+    sqlx::query(
+        "INSERT INTO users (id, username, password_hash, role, created_at)
+         VALUES ($1, $2, $3, $4, $5)",
+    )
+    .bind(&alice_id)
+    .bind("alice")
+    .bind(&alice_hash)
+    .bind("member")
+    .bind("2026-06-12T00:00:00Z")
+    .execute(&state.pool)
+    .await
+    .unwrap();
     let (alice_cookie, alice_csrf) = login_as(state.clone(), "alice", "alice-password").await;
-    let alice_id = sqlx::query_scalar::<_, String>("SELECT id FROM users WHERE username = 'alice'")
-        .fetch_one(&state.pool)
-        .await
-        .unwrap();
     sqlx::query(
         "INSERT INTO project_members (id, project_id, user_id, role, can_import, created_at)
          VALUES ($1, $2, $3, 'member', FALSE, $4)",

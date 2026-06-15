@@ -21,6 +21,7 @@ async fn bootstrap_seeds_provider_defaults_and_admin_user_when_env_is_present() 
     provider_model: Some("gpt-5.4".to_string()),
     provider_timeout_seconds: Some(180),
     session_ttl_hours: 12,
+    admin_password: Some("secret-password".to_string()),
   };
 
   let state = bootstrap_state(&config).await?;
