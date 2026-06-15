@@ -12,6 +12,45 @@ import { useProjectTasksQuery } from "../tasks/queries";
 
 import { useCreateDeepResearchTaskMutation } from "./queries";
 
+function renderTaskResult(task: { result?: unknown; error?: unknown }) {
+  if (task.error) {
+    const message =
+      typeof task.error === "object" && task.error && "message" in task.error
+        ? String((task.error as { message?: unknown }).message ?? task.error)
+        : String(task.error);
+    return <p className="text-destructive">Error: {message}</p>;
+  }
+  if (
+    typeof task.result === "object" &&
+    task.result &&
+    "savedPath" in task.result
+  ) {
+    const result = task.result as {
+      savedPath?: string;
+      sourceCount?: number;
+      errors?: string[];
+    };
+    return (
+      <div className="grid gap-1">
+        {result.savedPath ? (
+          <p>
+            Saved: <code>{result.savedPath}</code>
+          </p>
+        ) : null}
+        {typeof result.sourceCount === "number" ? (
+          <p>Sources used: {result.sourceCount}</p>
+        ) : null}
+        {result.errors && result.errors.length > 0 ? (
+          <p className="text-muted-foreground">
+            Source errors: {result.errors.join("; ")}
+          </p>
+        ) : null}
+      </div>
+    );
+  }
+  return null;
+}
+
 export function DeepResearchPage() {
   const { projectId = "" } = useParams();
   const [topic, setTopic] = useState("");
@@ -89,6 +128,9 @@ export function DeepResearchPage() {
                   <StatusBadge value={task.status} />
                 </div>
               </CardHeader>
+              <CardContent className="grid gap-2 text-sm">
+                {renderTaskResult(task)}
+              </CardContent>
             </Card>
           ))}
         </div>

@@ -975,15 +975,8 @@ async fn run_deep_research_executor(
   });
 
   let relative_path = format!("wiki/queries/research-{slug}.md");
-  let absolute_path = root
-    .safe_join(&relative_path)
+  save_wiki_page(&root, &relative_path, &page_content)
     .map_err(|error| ApiError::bad_request(error.to_string()))?;
-  if let Some(parent) = absolute_path.parent() {
-    std::fs::create_dir_all(parent)
-      .map_err(|error| ApiError::internal(error.to_string()))?;
-  }
-  std::fs::write(&absolute_path, &page_content)
-    .map_err(|error| ApiError::internal(error.to_string()))?;
   research_update_index(&root, &slug, topic)
     .map_err(|error| ApiError::internal(error.to_string()))?;
 
