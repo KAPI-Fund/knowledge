@@ -252,3 +252,76 @@ async fn wait_for_task_terminal(state: &knowledge_server::app::state::AppState, 
     }
     panic!("deep research task did not reach a terminal state");
 }
+
+#[tokio::test]
+async fn deep_research_marks_task_failed_when_no_sources_found() {
+    let temp = tempdir().unwrap();
+    let _env = TestEnvironment::start("deep-research-no-sources").await.unwrap();
+    let mock_openai = MockOpenAiServer::start(MockScenario::deep_research_success())
+        .await
+        .unwrap();
+    let (searxng_handle, searxng_base) = spawn_mock_searxng_with_empty_results().await;
+    let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
+    let state = bootstrap_state(&config).await.unwrap();
+    let (cookie, csrf) = login_and_csrf(state.clone()).await;
+    let project_root = temp.path().join("dr-no-sources-project");
+    let project_id = create_project(state.clone(), &cookie, &csrf, project_root).await;
+
+    configure_settings(&state, &mock_openai, &searxng_base).await;
+
+    let response = build_app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/projects/{project_id}/deep-research"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .header("x-csrf-token", &csrf)
+                .body(Body::from(json!({ "topic": "Knowledge Graphs" }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let task_id = read_json(response.into_body()).await["taskId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    wait_for_task_terminal(&state, &task_id).await;
+
+    let task = store::get_task_by_id(&state, &task_id).await.unwrap();
+    assert_eq!(task.status, "failed");
+    let error = task.error.expect("failed task should record an error");
+    let serialized = serde_json::to_string(&error).unwrap();
+    assert!(
+        serialized.contains("no research sources found"),
+        "expected failure reason in task.error, got: {serialized}"
+    );
+
+    searxng_handle.abort();
+}
+
+async fn spawn_mock_searxng_with_empty_results() -> (tokio::task::JoinHandle<()>, String) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let handle = tokio::spawn(async move {
+        loop {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                return;
+            };
+            tokio::spawn(async move {
+                let mut buf = vec![0u8; 4096];
+                let _ = socket.read(&mut buf).await;
+                let body = json!({ "results": [] }).to_string();
+                let payload = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = socket.write_all(payload.as_bytes()).await;
+                let _ = socket.shutdown().await;
+            });
+        }
+    });
+    (handle, format!("http://127.0.0.1:{port}"))
+}
