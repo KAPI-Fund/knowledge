@@ -22,6 +22,7 @@ pub enum MockScenario {
     IngestWithPageMergeSuccess,
     IngestThenSweepLlmSuccess,
     DedupSuccess,
+    DeepResearchSuccess,
     RetryableError,
     InvalidRequest,
 }
@@ -74,6 +75,11 @@ impl MockScenario {
     #[allow(dead_code)]
     pub fn dedup_success() -> Self {
         Self::DedupSuccess
+    }
+
+    #[allow(dead_code)]
+    pub fn deep_research_success() -> Self {
+        Self::DeepResearchSuccess
     }
 
     #[allow(dead_code)]
@@ -623,6 +629,26 @@ async fn chat_completions_json(state: MockState, payload: Value) -> (StatusCode,
                 StatusCode::OK,
                 Json(json!({
                   "id": "chatcmpl-mock-dedup",
+                  "object": "chat.completion",
+                  "created": 1_717_171_717,
+                  "model": "mock-model",
+                  "choices": [
+                    {
+                      "index": 0,
+                      "message": { "role": "assistant", "content": content },
+                      "finish_reason": "stop"
+                    }
+                  ],
+                  "usage": { "prompt_tokens": 17, "completion_tokens": 25, "total_tokens": 42 }
+                })),
+            )
+        }
+        MockScenario::DeepResearchSuccess => {
+            let content = "# Knowledge Graphs\n\nGraphs of typed entities and relations [1]. They power retrieval-augmented generation [2].".to_string();
+            (
+                StatusCode::OK,
+                Json(json!({
+                  "id": "chatcmpl-mock-research",
                   "object": "chat.completion",
                   "created": 1_717_171_717,
                   "model": "mock-model",
