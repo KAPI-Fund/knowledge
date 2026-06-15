@@ -16,6 +16,10 @@ vi.mock("./queries", () => ({
   useRevokeApiTokenMutation: () => ({ mutateAsync: mockRevokeToken, isPending: false }),
 }));
 
+vi.mock("../projects/queries", () => ({
+  useProjectsQuery: () => ({ data: [{ id: "project-1", name: "Demo Project" }] }),
+}));
+
 function renderPage() {
   const queryClient = new QueryClient();
   render(
@@ -98,5 +102,50 @@ describe("api tokens page", () => {
 
     expect(screen.getByText("revoked")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Revoke" })).not.toBeInTheDocument();
+  });
+
+  it("mints a project-scoped token when a scope is selected", async () => {
+    const user = userEvent.setup();
+    mockTokensList.mockReturnValue({ tokens: [] });
+    mockCreateToken.mockResolvedValue({
+      id: "token-2",
+      name: "scoped",
+      projectId: "project-1",
+      prefix: "abcd1234",
+      createdAt: "2026-06-15T00:00:00Z",
+      token: "plaintext-scoped",
+    });
+
+    renderPage();
+
+    await user.type(screen.getByLabelText("Token Name"), "scoped");
+    await user.selectOptions(screen.getByLabelText("Token Scope"), "project-1");
+    await user.click(screen.getByRole("button", { name: "Mint Token" }));
+
+    expect(mockCreateToken).toHaveBeenCalledWith({
+      name: "scoped",
+      projectId: "project-1",
+    });
+  });
+
+  it("renders the project column for tokens", () => {
+    mockTokensList.mockReturnValue({
+      tokens: [
+        {
+          id: "token-1",
+          name: "scoped-bot",
+          projectId: "project-1",
+          prefix: "abcd1234",
+          lastUsedAt: null,
+          revokedAt: null,
+          createdAt: "2026-06-12T00:00:00Z",
+        },
+      ],
+    });
+
+    renderPage();
+
+    expect(screen.getByText("scoped-bot")).toBeInTheDocument();
+    expect(screen.getByText("project-1")).toBeInTheDocument();
   });
 });
