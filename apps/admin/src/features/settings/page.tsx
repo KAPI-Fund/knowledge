@@ -25,6 +25,8 @@ export function SettingsPage() {
   const [searxngUrl, setSearxngUrl] = useState("");
   const [searxngCategories, setSearxngCategories] = useState("general");
   const [ollamaSearchUrl, setOllamaSearchUrl] = useState("");
+  const [tavilyBaseUrl, setTavilyBaseUrl] = useState("");
+  const [serpapiBaseUrl, setSerpapiBaseUrl] = useState("");
   const [testQuery, setTestQuery] = useState("");
   const [testError, setTestError] = useState("");
   const runWebSearch = useRunWebSearchMutation();
@@ -53,6 +55,8 @@ export function SettingsPage() {
     setSearxngUrl(settings.data.searxngUrl ?? "");
     setSearxngCategories((settings.data.searxngCategories ?? ["general"]).join(", "));
     setOllamaSearchUrl(settings.data.ollamaSearchUrl ?? "");
+    setTavilyBaseUrl(settings.data.tavilyBaseUrl ?? "");
+    setSerpapiBaseUrl(settings.data.serpapiBaseUrl ?? "");
   }, [
     settings.data?.providerMode,
     settings.data?.language,
@@ -66,6 +70,8 @@ export function SettingsPage() {
     settings.data?.searxngUrl,
     settings.data?.searxngCategories,
     settings.data?.ollamaSearchUrl,
+    settings.data?.tavilyBaseUrl,
+    settings.data?.serpapiBaseUrl,
     isDirty,
   ]);
 
@@ -87,6 +93,8 @@ export function SettingsPage() {
       searxngUrl,
       searxngCategories: categories.length > 0 ? categories : ["general"],
       ollamaSearchUrl,
+      tavilyBaseUrl,
+      serpapiBaseUrl,
       ...(providerApiKey.trim()
         ? {
             providerApiKey: providerApiKey.trim(),
@@ -308,6 +316,32 @@ export function SettingsPage() {
                 }}
                 placeholder="https://ollama.com"
                 value={ollamaSearchUrl}
+              />
+            </label>
+          ) : null}
+          {searchProvider === "tavily" ? (
+            <label className="grid gap-2 text-sm font-medium">
+              Tavily Base URL (advanced)
+              <Input
+                onChange={(event) => {
+                  setIsDirty(true);
+                  setTavilyBaseUrl(event.target.value);
+                }}
+                placeholder="https://api.tavily.com"
+                value={tavilyBaseUrl}
+              />
+            </label>
+          ) : null}
+          {searchProvider === "serpapi" ? (
+            <label className="grid gap-2 text-sm font-medium">
+              SerpApi Base URL (advanced)
+              <Input
+                onChange={(event) => {
+                  setIsDirty(true);
+                  setSerpapiBaseUrl(event.target.value);
+                }}
+                placeholder="https://serpapi.com"
+                value={serpapiBaseUrl}
               />
             </label>
           ) : null}

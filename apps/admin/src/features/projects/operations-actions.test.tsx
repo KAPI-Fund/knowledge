@@ -360,6 +360,8 @@ describe("operations actions", () => {
       searxngUrl: "",
       searxngCategories: ["general"],
       ollamaSearchUrl: "",
+      tavilyBaseUrl: "",
+      serpapiBaseUrl: "",
     });
   });
 
