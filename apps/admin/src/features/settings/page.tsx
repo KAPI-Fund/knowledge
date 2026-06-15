@@ -6,7 +6,7 @@ import { Button } from "../../components/ui/button";
 import { Card, CardContent } from "../../components/ui/card";
 import { Input } from "../../components/ui/input";
 
-import { useSystemSettingsQuery, useUpdateSystemSettingsMutation } from "./queries";
+import { useRunWebSearchMutation, useSystemSettingsQuery, useUpdateSystemSettingsMutation } from "./queries";
 
 export function SettingsPage() {
   const settings = useSystemSettingsQuery();
@@ -19,6 +19,15 @@ export function SettingsPage() {
   const [providerModel, setProviderModel] = useState("");
   const [providerEmbeddingModel, setProviderEmbeddingModel] = useState("");
   const [providerTimeoutSeconds, setProviderTimeoutSeconds] = useState("60");
+  const [searchProvider, setSearchProvider] = useState("none");
+  const [searchApiKey, setSearchApiKey] = useState("");
+  const [serpapiEngine, setSerpapiEngine] = useState("google");
+  const [searxngUrl, setSearxngUrl] = useState("");
+  const [searxngCategories, setSearxngCategories] = useState("general");
+  const [ollamaSearchUrl, setOllamaSearchUrl] = useState("");
+  const [testQuery, setTestQuery] = useState("");
+  const [testError, setTestError] = useState("");
+  const runWebSearch = useRunWebSearchMutation();
   const [saveMessage, setSaveMessage] = useState("");
   const [isDirty, setIsDirty] = useState(false);
   const hydratedFrom = useRef<string>("");
@@ -39,6 +48,11 @@ export function SettingsPage() {
     setProviderModel(settings.data.providerModel ?? "");
     setProviderEmbeddingModel(settings.data.providerEmbeddingModel ?? "");
     setProviderTimeoutSeconds(String(settings.data.providerTimeoutSeconds ?? 60));
+    setSearchProvider(settings.data.searchProvider ?? "none");
+    setSerpapiEngine(settings.data.serpapiEngine ?? "google");
+    setSearxngUrl(settings.data.searxngUrl ?? "");
+    setSearxngCategories((settings.data.searxngCategories ?? ["general"]).join(", "));
+    setOllamaSearchUrl(settings.data.ollamaSearchUrl ?? "");
   }, [
     settings.data?.providerMode,
     settings.data?.language,
@@ -47,10 +61,19 @@ export function SettingsPage() {
     settings.data?.providerModel,
     settings.data?.providerEmbeddingModel,
     settings.data?.providerTimeoutSeconds,
+    settings.data?.searchProvider,
+    settings.data?.serpapiEngine,
+    settings.data?.searxngUrl,
+    settings.data?.searxngCategories,
+    settings.data?.ollamaSearchUrl,
     isDirty,
   ]);
 
   async function handleSave() {
+    const categories = searxngCategories
+      .split(",")
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0);
     const payload = {
       providerMode,
       language,
@@ -59,9 +82,19 @@ export function SettingsPage() {
       providerModel,
       providerEmbeddingModel,
       providerTimeoutSeconds: Number(providerTimeoutSeconds),
+      searchProvider,
+      serpapiEngine,
+      searxngUrl,
+      searxngCategories: categories.length > 0 ? categories : ["general"],
+      ollamaSearchUrl,
       ...(providerApiKey.trim()
         ? {
             providerApiKey: providerApiKey.trim(),
+          }
+        : {}),
+      ...(searchApiKey.trim()
+        ? {
+            searchApiKey: searchApiKey.trim(),
           }
         : {}),
     };
@@ -71,6 +104,7 @@ export function SettingsPage() {
       setIsDirty(false);
       setSaveMessage("Settings saved.");
       setProviderApiKey("");
+      setSearchApiKey("");
     } catch (error) {
       setSaveMessage(error instanceof Error ? error.message : "Failed to save settings.");
     }
@@ -177,6 +211,152 @@ export function SettingsPage() {
           ) : null}
           <div className="flex justify-end">
             <Button onClick={handleSave}>Save Settings</Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="panel">
+        <CardContent className="grid gap-4 p-6">
+          <h2 className="text-lg font-semibold">Web Search</h2>
+          <label className="grid gap-2 text-sm font-medium">
+            Search Provider
+            <select
+              aria-label="Search Provider"
+              className="rounded border bg-background px-3 py-2"
+              onChange={(event) => {
+                setIsDirty(true);
+                setSearchProvider(event.target.value);
+              }}
+              value={searchProvider}
+            >
+              <option value="none">none</option>
+              <option value="tavily">tavily</option>
+              <option value="serpapi">serpapi</option>
+              <option value="searxng">searxng</option>
+              <option value="ollama">ollama</option>
+            </select>
+          </label>
+          {searchProvider !== "none" && searchProvider !== "searxng" ? (
+            <label className="grid gap-2 text-sm font-medium">
+              Search API Key
+              <Input
+                onChange={(event) => {
+                  setIsDirty(true);
+                  setSearchApiKey(event.target.value);
+                }}
+                placeholder="Leave blank to keep the current key"
+                type="password"
+                value={searchApiKey}
+              />
+            </label>
+          ) : null}
+          {settings.data?.searchApiKeyConfigured && searchProvider !== "none" && searchProvider !== "searxng" ? (
+            <p className="text-sm text-muted-foreground">Search API key configured</p>
+          ) : null}
+          {searchProvider === "serpapi" ? (
+            <label className="grid gap-2 text-sm font-medium">
+              SerpApi Engine
+              <select
+                aria-label="SerpApi Engine"
+                className="rounded border bg-background px-3 py-2"
+                onChange={(event) => {
+                  setIsDirty(true);
+                  setSerpapiEngine(event.target.value);
+                }}
+                value={serpapiEngine}
+              >
+                <option value="google">google</option>
+                <option value="google_news">google_news</option>
+                <option value="google_scholar">google_scholar</option>
+                <option value="bing">bing</option>
+                <option value="duckduckgo">duckduckgo</option>
+              </select>
+            </label>
+          ) : null}
+          {searchProvider === "searxng" ? (
+            <>
+              <label className="grid gap-2 text-sm font-medium">
+                SearXNG Instance URL
+                <Input
+                  onChange={(event) => {
+                    setIsDirty(true);
+                    setSearxngUrl(event.target.value);
+                  }}
+                  placeholder="https://search.example.com"
+                  value={searxngUrl}
+                />
+              </label>
+              <label className="grid gap-2 text-sm font-medium">
+                SearXNG Categories (comma-separated)
+                <Input
+                  onChange={(event) => {
+                    setIsDirty(true);
+                    setSearxngCategories(event.target.value);
+                  }}
+                  value={searxngCategories}
+                />
+              </label>
+            </>
+          ) : null}
+          {searchProvider === "ollama" ? (
+            <label className="grid gap-2 text-sm font-medium">
+              Ollama Search URL
+              <Input
+                onChange={(event) => {
+                  setIsDirty(true);
+                  setOllamaSearchUrl(event.target.value);
+                }}
+                placeholder="https://ollama.com"
+                value={ollamaSearchUrl}
+              />
+            </label>
+          ) : null}
+          <div className="grid gap-2 border-t pt-4">
+            <label className="grid gap-2 text-sm font-medium">
+              Test Query
+              <Input
+                onChange={(event) => setTestQuery(event.target.value)}
+                placeholder="e.g. knowledge graphs"
+                value={testQuery}
+              />
+            </label>
+            <div className="flex gap-2">
+              <Button
+                disabled={runWebSearch.isPending || testQuery.trim().length === 0}
+                onClick={async () => {
+                  setTestError("");
+                  try {
+                    await runWebSearch.mutateAsync({ query: testQuery.trim() });
+                  } catch (error) {
+                    setTestError(error instanceof Error ? error.message : "Web search failed.");
+                  }
+                }}
+                variant="outline"
+              >
+                Test Search
+              </Button>
+            </div>
+            {testError ? (
+              <Alert>
+                <AlertTitle>Web search failed</AlertTitle>
+                <AlertDescription>{testError}</AlertDescription>
+              </Alert>
+            ) : null}
+            {runWebSearch.data?.results.length ? (
+              <ul className="grid gap-3">
+                {runWebSearch.data.results.map((result) => (
+                  <li key={result.url} className="rounded border p-3">
+                    <a className="font-medium" href={result.url} rel="noreferrer" target="_blank">
+                      {result.title}
+                    </a>
+                    {result.source ? (
+                      <p className="text-xs text-muted-foreground">{result.source}</p>
+                    ) : null}
+                    {result.snippet ? <p className="mt-1 text-sm">{result.snippet}</p> : null}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
           </div>
         </CardContent>
       </Card>

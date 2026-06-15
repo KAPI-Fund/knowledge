@@ -9,6 +9,7 @@ use crate::chat;
 use crate::projects;
 use crate::settings;
 use crate::users;
+use crate::web_search;
 
 pub fn build_router(state: AppState) -> Router {
   Router::new()
@@ -18,6 +19,7 @@ pub fn build_router(state: AppState) -> Router {
     .merge(projects::routes::router())
     .merge(settings::routes::router())
     .merge(users::routes::router())
+    .merge(web_search::routes::router())
     .with_state(state)
 }
 

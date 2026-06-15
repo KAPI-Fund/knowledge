@@ -6,10 +6,29 @@ import { describe, expect, it, vi } from "vitest";
 import { SettingsPage } from "./page";
 
 const updateSettings = vi.fn();
+const runWebSearch = vi.fn();
+const settingsData = vi.fn();
 
 vi.mock("./queries", () => ({
   useSystemSettingsQuery: () => ({
-    data: {
+    data: settingsData(),
+    isLoading: false,
+  }),
+  useUpdateSystemSettingsMutation: () => ({
+    mutateAsync: updateSettings,
+  }),
+  useRunWebSearchMutation: () => ({
+    mutateAsync: runWebSearch,
+    isPending: false,
+    data: undefined,
+  }),
+}));
+
+describe("SettingsPage", () => {
+  it("omits providerApiKey when the field is blank", async () => {
+    const user = userEvent.setup();
+    const queryClient = new QueryClient();
+    settingsData.mockReturnValue({
       providerMode: "openai-compatible",
       language: "en",
       defaultQueryLimit: 5,
@@ -18,18 +37,13 @@ vi.mock("./queries", () => ({
       providerModel: "gpt-5.4",
       providerEmbeddingModel: "",
       providerTimeoutSeconds: 60,
-    },
-    isLoading: false,
-  }),
-  useUpdateSystemSettingsMutation: () => ({
-    mutateAsync: updateSettings,
-  }),
-}));
-
-describe("SettingsPage", () => {
-  it("omits providerApiKey when the field is blank", async () => {
-    const user = userEvent.setup();
-    const queryClient = new QueryClient();
+      searchProvider: "none",
+      searchApiKeyConfigured: false,
+      serpapiEngine: "google",
+      searxngUrl: null,
+      searxngCategories: ["general"],
+      ollamaSearchUrl: null,
+    });
     updateSettings.mockResolvedValue({
       providerMode: "openai-compatible",
       language: "en",
@@ -54,5 +68,70 @@ describe("SettingsPage", () => {
         providerApiKey: "",
       }),
     );
+  });
+});
+
+describe("settings page web search section", () => {
+  it("renders the search provider fields and Test Search button", () => {
+    const queryClient = new QueryClient();
+    settingsData.mockReturnValue({
+      providerMode: "openai-compatible",
+      language: "en",
+      defaultQueryLimit: 25,
+      providerBaseUrl: null,
+      providerApiKeyConfigured: false,
+      providerModel: null,
+      providerEmbeddingModel: null,
+      providerTimeoutSeconds: 30,
+      searchProvider: "searxng",
+      searchApiKeyConfigured: false,
+      serpapiEngine: "google",
+      searxngUrl: null,
+      searxngCategories: ["general"],
+      ollamaSearchUrl: null,
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <SettingsPage />
+      </QueryClientProvider>,
+    );
+
+    expect(screen.getByLabelText(/Search Provider/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/SearXNG Instance URL/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Test Search/i })).toBeInTheDocument();
+  });
+
+  it("calls runWebSearch with the typed query when Test Search is clicked", async () => {
+    const user = userEvent.setup();
+    const queryClient = new QueryClient();
+    settingsData.mockReturnValue({
+      providerMode: "openai-compatible",
+      language: "en",
+      defaultQueryLimit: 25,
+      providerBaseUrl: null,
+      providerApiKeyConfigured: false,
+      providerModel: null,
+      providerEmbeddingModel: null,
+      providerTimeoutSeconds: 30,
+      searchProvider: "searxng",
+      searchApiKeyConfigured: false,
+      serpapiEngine: "google",
+      searxngUrl: "http://127.0.0.1:18080",
+      searxngCategories: ["general"],
+      ollamaSearchUrl: null,
+    });
+    runWebSearch.mockResolvedValue({ results: [] });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <SettingsPage />
+      </QueryClientProvider>,
+    );
+
+    await user.type(screen.getByLabelText(/Test Query/i), "hello world");
+    await user.click(screen.getByRole("button", { name: /Test Search/i }));
+
+    expect(runWebSearch).toHaveBeenCalledWith({ query: "hello world" });
   });
 });
