@@ -179,6 +179,66 @@ async fn read_json(body: Body) -> Value {
     serde_json::from_slice(&bytes).unwrap()
 }
 
+#[tokio::test]
+async fn deep_research_via_bearer_token() {
+    let temp = tempdir().unwrap();
+    let _env = TestEnvironment::start("deep-research-bearer").await.unwrap();
+    let mock_openai = MockOpenAiServer::start(MockScenario::deep_research_success())
+        .await
+        .unwrap();
+    let (searxng_handle, searxng_base) = spawn_mock_searxng().await;
+    let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
+    let state = bootstrap_state(&config).await.unwrap();
+    let (cookie, csrf) = login_and_csrf(state.clone()).await;
+    let project_root = temp.path().join("dr-bearer-project");
+    let project_id = create_project(state.clone(), &cookie, &csrf, project_root.clone()).await;
+
+    configure_settings(&state, &mock_openai, &searxng_base).await;
+
+    let mint = build_app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/users/me/api-tokens")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .header("x-csrf-token", &csrf)
+                .body(Body::from(
+                    json!({ "name": "dr", "projectId": project_id }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let token = read_json(mint.into_body()).await["token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let response = build_app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/projects/{project_id}/deep-research"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::from(json!({ "topic": "Knowledge Graphs" }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let task_id = read_json(response.into_body()).await["taskId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    wait_for_task_terminal(&state, &task_id).await;
+    let task = store::get_task_by_id(&state, &task_id).await.unwrap();
+    assert_eq!(task.status, "succeeded");
+
+    searxng_handle.abort();
+}
+
 async fn wait_for_task_terminal(state: &knowledge_server::app::state::AppState, task_id: &str) {
     for _ in 0..120 {
         let progressed = scheduler::run_scheduler_tick(state).await.unwrap_or(false);

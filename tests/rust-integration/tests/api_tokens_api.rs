@@ -200,3 +200,156 @@ async fn read_json(body: Body) -> Value {
     let bytes = to_bytes(body, usize::MAX).await.unwrap();
     serde_json::from_slice(&bytes).unwrap()
 }
+
+#[tokio::test]
+async fn project_scoped_token_cannot_mint_unscoped() {
+    let temp = tempdir().unwrap();
+    let _env = TestEnvironment::start("api-tokens-no-escalate-mint").await.unwrap();
+    let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
+    let state = bootstrap_state(&config).await.unwrap();
+    let (cookie, csrf) = login_and_csrf(state.clone()).await;
+    let project_root = temp.path().join("scope-project");
+    let project_id = create_project(state.clone(), &cookie, &csrf, project_root).await;
+
+    let scoped_token = mint_and_id(state.clone(), &cookie, &csrf, Some(&project_id)).await.1;
+
+    let response = build_app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/users/me/api-tokens")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("authorization", format!("Bearer {scoped_token}"))
+                .body(Body::from(
+                    json!({ "name": "escalation", "projectId": null }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn project_scoped_token_cannot_mint_for_other_project() {
+    let temp = tempdir().unwrap();
+    let _env = TestEnvironment::start("api-tokens-no-escalate-cross").await.unwrap();
+    let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
+    let state = bootstrap_state(&config).await.unwrap();
+    let (cookie, csrf) = login_and_csrf(state.clone()).await;
+    let project_a_root = temp.path().join("project-a");
+    let project_a = create_project(state.clone(), &cookie, &csrf, project_a_root).await;
+    let project_b_root = temp.path().join("project-b");
+    let project_b = create_project(state.clone(), &cookie, &csrf, project_b_root).await;
+
+    let scoped_a = mint_and_id(state.clone(), &cookie, &csrf, Some(&project_a)).await.1;
+
+    let response = build_app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/users/me/api-tokens")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("authorization", format!("Bearer {scoped_a}"))
+                .body(Body::from(
+                    json!({ "name": "cross", "projectId": project_b }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn project_scoped_token_list_and_revoke_only_see_same_scope() {
+    let temp = tempdir().unwrap();
+    let _env = TestEnvironment::start("api-tokens-scope-isolation").await.unwrap();
+    let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
+    let state = bootstrap_state(&config).await.unwrap();
+    let (cookie, csrf) = login_and_csrf(state.clone()).await;
+    let project_root = temp.path().join("scope-iso");
+    let project_id = create_project(state.clone(), &cookie, &csrf, project_root).await;
+
+    let unscoped_id = mint_and_id(state.clone(), &cookie, &csrf, None).await;
+    let scoped_id = mint_and_id(state.clone(), &cookie, &csrf, Some(&project_id)).await;
+    let scoped_token = scoped_id.1.clone();
+
+    let listed = build_app(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri("/api/users/me/api-tokens")
+                .header("authorization", format!("Bearer {}", scoped_token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(listed.status(), StatusCode::OK);
+    let payload = read_json(listed.into_body()).await;
+    let ids = payload["tokens"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|token| token["id"].as_str().unwrap().to_string())
+        .collect::<Vec<_>>();
+    assert!(ids.contains(&scoped_id.0), "scoped token should see itself");
+    assert!(!ids.contains(&unscoped_id.0), "scoped token must not see unscoped tokens");
+
+    let denied = build_app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/users/me/api-tokens/{}/revoke", unscoped_id.0))
+                .header("authorization", format!("Bearer {}", scoped_token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), StatusCode::NOT_FOUND);
+
+    let allowed = build_app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/users/me/api-tokens/{}/revoke", scoped_id.0))
+                .header("authorization", format!("Bearer {}", scoped_token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(allowed.status(), StatusCode::OK);
+}
+
+async fn mint_and_id(
+    state: knowledge_server::app::state::AppState,
+    cookie: &str,
+    csrf: &str,
+    project_id: Option<&str>,
+) -> (String, String) {
+    let body = match project_id {
+        Some(value) => json!({ "name": "test", "projectId": value }),
+        None => json!({ "name": "test", "projectId": null }),
+    };
+    let response = build_app(state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/users/me/api-tokens")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, cookie)
+                .header("x-csrf-token", csrf)
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let payload = read_json(response.into_body()).await;
+    (
+        payload["id"].as_str().unwrap().to_string(),
+        payload["token"].as_str().unwrap().to_string(),
+    )
+}

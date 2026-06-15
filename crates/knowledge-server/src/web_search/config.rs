@@ -28,13 +28,16 @@ impl WebSearchConfig {
   }
 }
 
-pub(crate) fn parse_provider(value: &str) -> Option<WebSearchProvider> {
+pub(crate) fn parse_provider(value: &str) -> Result<Option<WebSearchProvider>, ApiError> {
   match value {
-    "tavily" => Some(WebSearchProvider::Tavily),
-    "serpapi" => Some(WebSearchProvider::SerpApi),
-    "searxng" => Some(WebSearchProvider::SearXng),
-    "ollama" => Some(WebSearchProvider::Ollama),
-    _ => None,
+    "none" => Ok(None),
+    "tavily" => Ok(Some(WebSearchProvider::Tavily)),
+    "serpapi" => Ok(Some(WebSearchProvider::SerpApi)),
+    "searxng" => Ok(Some(WebSearchProvider::SearXng)),
+    "ollama" => Ok(Some(WebSearchProvider::Ollama)),
+    other => Err(ApiError::internal(format!(
+      "invalid search_provider in system_settings: {other:?}"
+    ))),
   }
 }
 
@@ -63,9 +66,20 @@ pub async fn load_web_search_config(state: &AppState) -> Result<Option<WebSearch
     searxng_url,
     searxng_categories,
     ollama_search_url,
+    tavily_base_url,
+    serpapi_base_url,
   ) = sqlx::query_as::<
     _,
-    (String, Option<String>, Option<String>, Option<String>, Value, Option<String>),
+    (
+      String,
+      Option<String>,
+      Option<String>,
+      Option<String>,
+      Value,
+      Option<String>,
+      String,
+      String,
+    ),
   >(
     "SELECT
        search_provider,
@@ -73,7 +87,9 @@ pub async fn load_web_search_config(state: &AppState) -> Result<Option<WebSearch
        serpapi_engine,
        searxng_url,
        searxng_categories,
-       ollama_search_url
+       ollama_search_url,
+       tavily_base_url,
+       serpapi_base_url
      FROM system_settings
      WHERE id = 1",
   )
@@ -81,7 +97,7 @@ pub async fn load_web_search_config(state: &AppState) -> Result<Option<WebSearch
   .await
   .map_err(ApiError::from)?;
 
-  let Some(provider) = parse_provider(&search_provider) else {
+  let Some(provider) = parse_provider(&search_provider)? else {
     return Ok(None);
   };
 
@@ -94,8 +110,8 @@ pub async fn load_web_search_config(state: &AppState) -> Result<Option<WebSearch
     ollama_search_url: ollama_search_url
       .filter(|value| !value.trim().is_empty())
       .unwrap_or_else(|| "https://ollama.com".to_string()),
-    tavily_base_url: "https://api.tavily.com".to_string(),
-    serpapi_base_url: "https://serpapi.com".to_string(),
+    tavily_base_url,
+    serpapi_base_url,
   }))
 }
 
@@ -105,17 +121,21 @@ mod tests {
 
   #[test]
   fn parse_provider_maps_known_values() {
-    assert_eq!(parse_provider("tavily"), Some(WebSearchProvider::Tavily));
-    assert_eq!(parse_provider("serpapi"), Some(WebSearchProvider::SerpApi));
-    assert_eq!(parse_provider("searxng"), Some(WebSearchProvider::SearXng));
-    assert_eq!(parse_provider("ollama"), Some(WebSearchProvider::Ollama));
+    assert_eq!(parse_provider("tavily").unwrap(), Some(WebSearchProvider::Tavily));
+    assert_eq!(parse_provider("serpapi").unwrap(), Some(WebSearchProvider::SerpApi));
+    assert_eq!(parse_provider("searxng").unwrap(), Some(WebSearchProvider::SearXng));
+    assert_eq!(parse_provider("ollama").unwrap(), Some(WebSearchProvider::Ollama));
   }
 
   #[test]
-  fn parse_provider_returns_none_for_sentinel_and_unknown() {
-    assert!(parse_provider("none").is_none());
-    assert!(parse_provider("").is_none());
-    assert!(parse_provider("google").is_none());
+  fn parse_provider_treats_none_sentinel_as_disabled() {
+    assert!(parse_provider("none").unwrap().is_none());
+  }
+
+  #[test]
+  fn parse_provider_errors_on_invalid_value() {
+    assert!(parse_provider("google").is_err());
+    assert!(parse_provider("").is_err());
   }
 
   #[test]

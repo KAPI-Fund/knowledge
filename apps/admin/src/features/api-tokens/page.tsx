@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/table";
 
 import type { ApiTokenCreateResponse } from "../shared/api";
+import { useProjectsQuery } from "../projects/queries";
 
 import {
   useApiTokensQuery,
@@ -25,11 +26,14 @@ import {
 
 export function ApiTokensPage() {
   const [name, setName] = useState("");
+  const [scopeProjectId, setScopeProjectId] = useState<string>("");
   const [mintedToken, setMintedToken] = useState<ApiTokenCreateResponse | null>(null);
   const tokensQuery = useApiTokensQuery();
+  const projectsQuery = useProjectsQuery();
   const createMutation = useCreateApiTokenMutation();
   const revokeMutation = useRevokeApiTokenMutation();
   const tokens = tokensQuery.data?.tokens ?? [];
+  const projects = projectsQuery.data ?? [];
 
   return (
     <PageSection
@@ -44,7 +48,7 @@ export function ApiTokensPage() {
             afterwards.
           </CardDescription>
         </CardHeader>
-        <CardContent className="grid gap-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
+        <CardContent className="grid gap-4">
           <label className="grid gap-2 text-sm font-medium">
             Token Name
             <Input
@@ -54,19 +58,38 @@ export function ApiTokensPage() {
               value={name}
             />
           </label>
-          <Button
-            disabled={createMutation.isPending || name.trim().length === 0}
-            onClick={async () => {
-              const result = await createMutation.mutateAsync({
-                name: name.trim(),
-                projectId: null,
-              });
-              setMintedToken(result);
-              setName("");
-            }}
-          >
-            Mint Token
-          </Button>
+          <label className="grid gap-2 text-sm font-medium">
+            Token Scope
+            <select
+              aria-label="Token Scope"
+              className="rounded border bg-background px-3 py-2"
+              onChange={(event) => setScopeProjectId(event.target.value)}
+              value={scopeProjectId}
+            >
+              <option value="">No scope (system-wide)</option>
+              {projects.map((project) => (
+                <option key={project.id} value={project.id}>
+                  {project.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="flex justify-end">
+            <Button
+              disabled={createMutation.isPending || name.trim().length === 0}
+              onClick={async () => {
+                const result = await createMutation.mutateAsync({
+                  name: name.trim(),
+                  projectId: scopeProjectId.length > 0 ? scopeProjectId : null,
+                });
+                setMintedToken(result);
+                setName("");
+                setScopeProjectId("");
+              }}
+            >
+              Mint Token
+            </Button>
+          </div>
         </CardContent>
       </Card>
 
@@ -110,6 +133,7 @@ export function ApiTokensPage() {
                 <TableRow>
                   <TableHead>Name</TableHead>
                   <TableHead>Prefix</TableHead>
+                  <TableHead>Project</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Last Used</TableHead>
                   <TableHead>Created</TableHead>
@@ -123,6 +147,7 @@ export function ApiTokensPage() {
                     <TableCell>
                       <code>{token.prefix}…</code>
                     </TableCell>
+                    <TableCell>{token.projectId ?? "—"}</TableCell>
                     <TableCell>
                       {token.revokedAt ? (
                         <Badge variant="outline">revoked</Badge>

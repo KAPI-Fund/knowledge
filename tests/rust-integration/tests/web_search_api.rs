@@ -129,3 +129,135 @@ async fn read_json(body: Body) -> Value {
     let bytes = to_bytes(body, usize::MAX).await.unwrap();
     serde_json::from_slice(&bytes).unwrap()
 }
+
+#[tokio::test]
+async fn patch_settings_response_reflects_db_state() {
+    let _env = TestEnvironment::start("settings-response-truth").await.unwrap();
+    let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
+    let state = bootstrap_state(&config).await.unwrap();
+    let (cookie, csrf) = login_and_csrf(state.clone()).await;
+
+    let initial = build_app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/system/settings")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .header("x-csrf-token", &csrf)
+                .body(Body::from(
+                    json!({
+                      "providerMode": "openai-compatible",
+                      "language": "en",
+                      "defaultQueryLimit": 25,
+                      "providerApiKey": "first-secret"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(initial.status(), StatusCode::OK);
+    let body = read_json(initial.into_body()).await;
+    assert_eq!(body["providerApiKeyConfigured"], json!(true));
+
+    let preserve = build_app(state)
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/system/settings")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .header("x-csrf-token", &csrf)
+                .body(Body::from(
+                    json!({
+                      "providerMode": "openai-compatible",
+                      "language": "en",
+                      "defaultQueryLimit": 25
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(preserve.status(), StatusCode::OK);
+    let body = read_json(preserve.into_body()).await;
+    assert_eq!(
+        body["providerApiKeyConfigured"],
+        json!(true),
+        "providerApiKeyConfigured must reflect DB state, not request payload"
+    );
+}
+
+#[tokio::test]
+async fn web_search_via_bearer_token() {
+    let _env = TestEnvironment::start("web-search-bearer").await.unwrap();
+    let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
+    let state = bootstrap_state(&config).await.unwrap();
+    let (cookie, csrf) = login_and_csrf(state.clone()).await;
+    let (searxng_handle, searxng_base) = spawn_mock_searxng().await;
+
+    let patch = build_app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/system/settings")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .header("x-csrf-token", &csrf)
+                .body(Body::from(
+                    json!({
+                      "providerMode": "openai-compatible",
+                      "language": "en",
+                      "defaultQueryLimit": 25,
+                      "searchProvider": "searxng",
+                      "searxngUrl": searxng_base,
+                      "searxngCategories": ["general"]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(patch.status(), StatusCode::OK);
+
+    let mint = build_app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/users/me/api-tokens")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .header("x-csrf-token", &csrf)
+                .body(Body::from(json!({ "name": "web-search-bearer" }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(mint.status(), StatusCode::CREATED);
+    let token = read_json(mint.into_body()).await["token"].as_str().unwrap().to_string();
+
+    let response = build_app(state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/web-search")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::from(
+                    json!({ "query": "knowledge graphs", "maxResults": 3 }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload = read_json(response.into_body()).await;
+    let results = payload.get("results").and_then(Value::as_array).unwrap();
+    assert_eq!(results.len(), 1);
+
+    searxng_handle.abort();
+}

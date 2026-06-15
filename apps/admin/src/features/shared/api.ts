@@ -191,6 +191,8 @@ const settingsSchema = z.object({
   searxngUrl: z.string().nullable().optional(),
   searxngCategories: z.array(z.string()).nullable().optional(),
   ollamaSearchUrl: z.string().nullable().optional(),
+  tavilyBaseUrl: z.string().nullable().optional(),
+  serpapiBaseUrl: z.string().nullable().optional(),
 });
 
 const webSearchResultSchema = z.object({
@@ -1022,6 +1024,8 @@ export async function updateSystemSettings(input: {
   searxngUrl?: string;
   searxngCategories?: string[];
   ollamaSearchUrl?: string;
+  tavilyBaseUrl?: string;
+  serpapiBaseUrl?: string;
 }) {
   const payload = {
     providerMode: input.providerMode,
@@ -1036,6 +1040,8 @@ export async function updateSystemSettings(input: {
     searxngUrl: input.searxngUrl,
     searxngCategories: input.searxngCategories,
     ollamaSearchUrl: input.ollamaSearchUrl,
+    tavilyBaseUrl: input.tavilyBaseUrl,
+    serpapiBaseUrl: input.serpapiBaseUrl,
     ...(input.providerApiKey?.trim()
       ? {
           providerApiKey: input.providerApiKey.trim(),

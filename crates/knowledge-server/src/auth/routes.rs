@@ -11,10 +11,10 @@ use uuid::Uuid;
 
 use crate::app::state::AppState;
 use crate::auth::api_token::{
-  create_api_token, list_tokens_for_user, revoke_token, CreateApiTokenInput,
+  create_api_token, list_tokens_for_user_scoped, revoke_token_scoped, CreateApiTokenInput,
 };
 use crate::auth::password::{hash_password, verify_password};
-use crate::auth::principal::resolve_principal;
+use crate::auth::principal::{resolve_principal, AuthScope};
 use crate::auth::session::{create_session, destroy_session, find_session};
 use crate::http::error::ApiError;
 
@@ -210,6 +210,18 @@ async fn create_api_token_handler(
   if trimmed.is_empty() || trimmed.len() > 100 {
     return Err(ApiError::bad_request("name must be 1\u{2013}100 characters"));
   }
+  // Scope containment: project-scoped Bearer principals can only mint
+  // tokens for their own scope, never null and never another project.
+  if principal.scope == AuthScope::ApiToken
+    && let Some(scope) = principal.project_id.as_deref()
+  {
+    let requested = payload.project_id.as_deref();
+    if requested != Some(scope) {
+      return Err(ApiError::forbidden(
+        "project-scoped api tokens can only mint tokens for the same project",
+      ));
+    }
+  }
   if let Some(project_id) = payload.project_id.as_deref() {
     let membership = sqlx::query_scalar::<_, i64>(
       "SELECT COUNT(*) FROM project_members WHERE project_id = $1 AND user_id = $2",
@@ -252,7 +264,12 @@ async fn list_api_tokens_handler(
   headers: HeaderMap,
 ) -> Result<impl IntoResponse, ApiError> {
   let principal = resolve_principal(&state, &headers).await?;
-  let tokens = list_tokens_for_user(&state, &principal.user_id).await?;
+  let scope = if principal.scope == AuthScope::ApiToken {
+    principal.project_id.as_deref()
+  } else {
+    None
+  };
+  let tokens = list_tokens_for_user_scoped(&state, &principal.user_id, scope).await?;
   let payload = tokens
     .into_iter()
     .map(|token| {
@@ -289,7 +306,12 @@ async fn revoke_api_token_handler(
       return Err(ApiError::unauthorized("invalid csrf token"));
     }
   }
-  let revoked = revoke_token(&state, &principal.user_id, &token_id).await?;
+  let scope = if principal.scope == AuthScope::ApiToken {
+    principal.project_id.as_deref()
+  } else {
+    None
+  };
+  let revoked = revoke_token_scoped(&state, &principal.user_id, scope, &token_id).await?;
   if !revoked {
     return Err(ApiError::not_found("token not found"));
   }

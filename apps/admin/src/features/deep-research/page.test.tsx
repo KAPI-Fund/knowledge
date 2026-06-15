@@ -75,4 +75,41 @@ describe("deep research page", () => {
     expect(screen.getByText("Deep research: KG")).toBeInTheDocument();
     expect(screen.queryByText("Ingest")).not.toBeInTheDocument();
   });
+
+  it("renders the saved path and source count for a succeeded task", () => {
+    mockTasks.mockReturnValue([
+      {
+        id: "task-1",
+        taskType: "project.deep_research",
+        title: "Deep research: KG",
+        status: "succeeded",
+        createdAt: "2026-06-15T00:00:00Z",
+        updatedAt: "2026-06-15T00:01:00Z",
+        result: {
+          savedPath: "wiki/queries/research-kg.md",
+          sourceCount: 3,
+          errors: [],
+        },
+      },
+    ]);
+    renderPage();
+    expect(screen.getByText("wiki/queries/research-kg.md")).toBeInTheDocument();
+    expect(screen.getByText("Sources used: 3")).toBeInTheDocument();
+  });
+
+  it("renders the error message for a failed task", () => {
+    mockTasks.mockReturnValue([
+      {
+        id: "task-1",
+        taskType: "project.deep_research",
+        title: "Deep research: KG",
+        status: "failed",
+        createdAt: "2026-06-15T00:00:00Z",
+        updatedAt: "2026-06-15T00:01:00Z",
+        error: { message: "no sources found" },
+      },
+    ]);
+    renderPage();
+    expect(screen.getByText(/Error: no sources found/)).toBeInTheDocument();
+  });
 });
