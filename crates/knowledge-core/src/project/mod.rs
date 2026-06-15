@@ -7,6 +7,7 @@ pub mod lint;
 pub mod multimodal;
 pub mod page_merge;
 pub mod queries;
+pub mod research;
 pub mod root;
 pub mod reviews;
 pub mod scaffold;

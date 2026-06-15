@@ -6,6 +6,7 @@ use serde_json::json;
 use crate::auth;
 use crate::app::state::AppState;
 use crate::chat;
+use crate::deep_research;
 use crate::projects;
 use crate::settings;
 use crate::users;
@@ -16,6 +17,7 @@ pub fn build_router(state: AppState) -> Router {
     .route("/api/health", get(health))
     .merge(auth::routes::router())
     .merge(chat::routes::router())
+    .merge(deep_research::routes::router())
     .merge(projects::routes::router())
     .merge(settings::routes::router())
     .merge(users::routes::router())

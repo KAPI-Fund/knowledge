@@ -4,6 +4,7 @@ pub mod cache;
 pub mod chat;
 pub mod config;
 pub mod db;
+pub mod deep_research;
 pub mod http;
 pub mod multimodal;
 pub mod projects;

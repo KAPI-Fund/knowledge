@@ -5,6 +5,7 @@ use time::format_description::well_known::Rfc3339;
 use time::{Duration, OffsetDateTime};
 
 use crate::app::state::AppState;
+use crate::deep_research::collect_research_sources;
 use crate::multimodal::{
   caption_image, inject_images_into_source_summary, load_cached_caption, save_cached_caption,
 };
@@ -13,6 +14,7 @@ use crate::providers::{OpenAiCompatibleProvider, ProviderError, ProviderTextRequ
 use crate::projects::audit::{append_audit_log, CreateAuditLog};
 use crate::projects::service::project_root_for_id;
 use crate::query::{execute_project_query, ExecuteProjectQueryInput, QueryExecutionError};
+use crate::web_search::config::load_web_search_config;
 use crate::retrieval::dedup::{
   select_dedup_candidate_pages, DEDUP_MAX_CANDIDATE_PAGES, DEDUP_SIMILARITY_THRESHOLD,
 };
@@ -43,6 +45,9 @@ use knowledge_core::project::lint::{
   build_semantic_lint_prompt, parse_semantic_lint_response, run_structural_lint,
 };
 use knowledge_core::project::queries::{save_query_page, SaveQueryPageInput, SavedQueryCitation};
+use knowledge_core::project::research::{
+  render_research_page, RenderResearchPageInput, RenderResearchReference,
+};
 use knowledge_core::project::reviews::{
   build_review_sweep_prompt, parse_review_resolution_ids, resolve_review_ids,
   sweep_resolved_reviews, update_review_status,
@@ -72,6 +77,7 @@ pub async fn run_task_executor(state: &AppState, task: &TaskRecord) -> Result<()
     "project.update_review" => run_update_review_executor(state, &task).await.map_err(Into::into),
     "project.dedup_detect" => run_dedup_detect_executor(state, &task).await.map_err(Into::into),
     "project.dedup_merge" => run_dedup_merge_executor(state, &task).await.map_err(Into::into),
+    "project.deep_research" => run_deep_research_executor(state, &task).await.map_err(Into::into),
     _ => Err(TaskExecutionError::from(ApiError::bad_request("unsupported task type"))),
   };
 
@@ -833,6 +839,198 @@ fn write_dedup_backup(
   std::fs::write(&backup_path, &entry.content)
     .map_err(|error| ApiError::internal(error.to_string()))?;
   Ok(())
+}
+
+const RESEARCH_WIKI_INDEX_MAX_BYTES: usize = 8 * 1024;
+
+async fn run_deep_research_executor(
+  state: &AppState,
+  task: &TaskRecord,
+) -> Result<Value, ApiError> {
+  let root = project_root_for_id(state, &task.project_id).await?;
+  let provider = load_ingest_provider(state)
+    .await?
+    .ok_or_else(|| ApiError::bad_request("deep research requires an openai-compatible provider"))?;
+  let search_config = load_web_search_config(state)
+    .await?
+    .ok_or_else(|| ApiError::bad_request("deep research requires a configured web search provider"))?;
+
+  let topic = read_string(&task.payload, "topic")?;
+  let topic = topic.trim();
+  if topic.is_empty() {
+    return Err(ApiError::bad_request("topic is required"));
+  }
+  let queries_value = task.payload.get("searchQueries");
+  let queries: Vec<String> = queries_value
+    .and_then(Value::as_array)
+    .map(|values| {
+      values
+        .iter()
+        .filter_map(|value| value.as_str().map(str::to_string))
+        .filter(|value| !value.trim().is_empty())
+        .collect()
+    })
+    .unwrap_or_default();
+  let queries = if queries.is_empty() {
+    vec![topic.to_string()]
+  } else {
+    queries
+  };
+
+  let sources = collect_research_sources(&queries, &search_config).await?;
+  if sources.results.is_empty() {
+    return Err(ApiError::bad_request(format!(
+      "no research sources found{}",
+      if sources.errors.is_empty() {
+        String::new()
+      } else {
+        format!(": {}", sources.errors.join("; "))
+      }
+    )));
+  }
+
+  let source_context = sources
+    .results
+    .iter()
+    .enumerate()
+    .map(|(index, item)| {
+      format!(
+        "[{}] **{}** ({})\n{}",
+        index + 1,
+        item.title,
+        item.source,
+        item.snippet
+      )
+    })
+    .collect::<Vec<_>>()
+    .join("\n\n");
+
+  let mut wiki_index = try_read_project_file(&root, "wiki/index.md");
+  if wiki_index.len() > RESEARCH_WIKI_INDEX_MAX_BYTES {
+    tracing::debug!(
+      "truncating wiki/index.md from {} bytes to {} for deep research synthesizer",
+      wiki_index.len(),
+      RESEARCH_WIKI_INDEX_MAX_BYTES
+    );
+    wiki_index.truncate(RESEARCH_WIKI_INDEX_MAX_BYTES);
+  }
+
+  let mut system_parts = vec![
+    "You are a research assistant. Synthesize the collected research sources into a comprehensive wiki page.".to_string(),
+    String::new(),
+    "## Cross-referencing (IMPORTANT)".to_string(),
+    "- The wiki already has existing pages listed in the Wiki Index below.".to_string(),
+    "- When your synthesis mentions an entity or concept that exists in the wiki, ALWAYS use [[wikilink]] syntax to link to it.".to_string(),
+    "- For example, if the wiki has an entity 'anthropic', write [[anthropic]] when mentioning it.".to_string(),
+    "- This is critical for connecting new research to existing knowledge in the graph.".to_string(),
+    String::new(),
+    "## Writing Rules".to_string(),
+    "- Organize into clear sections with headings".to_string(),
+    "- Cite sources using [N] notation".to_string(),
+    "- Note contradictions or gaps".to_string(),
+    "- Suggest additional sources worth finding".to_string(),
+    "- Neutral, encyclopedic tone".to_string(),
+  ];
+  if !wiki_index.trim().is_empty() {
+    system_parts.push(String::new());
+    system_parts.push(format!(
+      "## Existing Wiki Index (link to these pages with [[wikilink]])\n{wiki_index}"
+    ));
+  }
+  let system_prompt = system_parts.join("\n");
+
+  let user_prompt = format!(
+    "Research topic: **{topic}**\n\n## Research Sources\n\n{source_context}\n\nSynthesize into a wiki page."
+  );
+
+  let response = provider
+    .complete_text(ProviderTextRequest {
+      system_prompt,
+      user_prompt,
+    })
+    .await
+    .map_err(TaskExecutionError::from_provider_error)
+    .map_err(TaskExecutionError::into_api_error)?;
+
+  let now = OffsetDateTime::now_utc()
+    .format(&Rfc3339)
+    .map_err(|_| ApiError::internal("failed to format timestamp"))?;
+  let date = now[..10].to_string();
+  let slug = research_slug(topic);
+  let references = sources
+    .results
+    .iter()
+    .map(|item| RenderResearchReference {
+      title: item.title.clone(),
+      url: item.url.clone(),
+      source: item.source.clone(),
+    })
+    .collect::<Vec<_>>();
+  let page_content = render_research_page(&RenderResearchPageInput {
+    topic: topic.to_string(),
+    slug: slug.clone(),
+    date,
+    synthesis: response.text,
+    references,
+  });
+
+  let relative_path = format!("wiki/queries/research-{slug}.md");
+  let absolute_path = root
+    .safe_join(&relative_path)
+    .map_err(|error| ApiError::bad_request(error.to_string()))?;
+  if let Some(parent) = absolute_path.parent() {
+    std::fs::create_dir_all(parent)
+      .map_err(|error| ApiError::internal(error.to_string()))?;
+  }
+  std::fs::write(&absolute_path, &page_content)
+    .map_err(|error| ApiError::internal(error.to_string()))?;
+  research_update_index(&root, &slug, topic)
+    .map_err(|error| ApiError::internal(error.to_string()))?;
+
+  Ok(json!({
+    "savedPath": relative_path,
+    "sourceCount": sources.results.len(),
+    "errors": sources.errors
+  }))
+}
+
+fn research_slug(topic: &str) -> String {
+  let mut slug = String::new();
+  let mut last_dash = false;
+  for ch in topic.chars() {
+    if ch.is_ascii_alphanumeric() {
+      slug.push(ch.to_ascii_lowercase());
+      last_dash = false;
+    } else if !last_dash && !slug.is_empty() {
+      slug.push('-');
+      last_dash = true;
+    }
+  }
+  let trimmed = slug.trim_end_matches('-').to_string();
+  if trimmed.is_empty() { "research".to_string() } else { trimmed }
+}
+
+fn research_update_index(
+  root: &knowledge_core::project::root::ProjectRoot,
+  slug: &str,
+  topic: &str,
+) -> std::io::Result<()> {
+  let path = root.as_path().join("wiki/index.md");
+  let existing = std::fs::read_to_string(&path).unwrap_or_default();
+  let entry = format!("- [[queries/research-{slug}]] - Research: {topic}\n");
+  if existing.contains(entry.trim_end()) {
+    return Ok(());
+  }
+  let marker = "## Queries\n";
+  let updated = if let Some(index) = existing.find(marker) {
+    let insert_at = index + marker.len();
+    let mut updated = existing.clone();
+    updated.insert_str(insert_at, &entry);
+    updated
+  } else {
+    format!("{existing}\n## Queries\n{entry}")
+  };
+  std::fs::write(path, updated)
 }
 
 async fn append_task_audit_log(

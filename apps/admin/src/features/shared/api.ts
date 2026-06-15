@@ -932,6 +932,28 @@ export async function dismissProjectDuplicateGroup(input: {
   );
 }
 
+export async function createDeepResearchTask(input: {
+  projectId: string;
+  topic: string;
+  searchQueries?: string[];
+}) {
+  return apiFetch(
+    `/api/projects/${input.projectId}/deep-research`,
+    {
+      method: "POST",
+      headers: csrfHeader(),
+      body: JSON.stringify({
+        topic: input.topic,
+        searchQueries: input.searchQueries,
+      }),
+    },
+    z.object({
+      taskId: z.string(),
+      status: z.string(),
+    }),
+  );
+}
+
 const apiTokenSchema = z.object({
   id: z.string(),
   name: z.string(),
