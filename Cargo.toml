@@ -27,6 +27,7 @@ office_oxide = "=0.1.2"
 pdfium-render = "0.9"
 rand_core = { version = "0.6.4", features = ["getrandom"] }
 redis = { version = "0.32.7", features = ["tokio-comp"] }
+regex = "1.11"
 reqwest = { version = "0.12.24", default-features = false, features = ["json", "rustls-tls", "stream"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
