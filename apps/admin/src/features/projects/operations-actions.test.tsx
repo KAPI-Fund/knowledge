@@ -125,6 +125,7 @@ vi.mock("../settings/queries", () => ({
   }),
   useRunWebSearchMutation: () => ({
     mutateAsync: vi.fn(),
+    reset: vi.fn(),
     isPending: false,
     data: undefined,
   }),

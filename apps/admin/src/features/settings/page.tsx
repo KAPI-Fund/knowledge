@@ -75,6 +75,13 @@ export function SettingsPage() {
     isDirty,
   ]);
 
+  useEffect(() => {
+    if (isDirty) {
+      runWebSearch.reset();
+      setTestError("");
+    }
+  }, [isDirty, runWebSearch]);
+
   async function handleSave() {
     const categories = searxngCategories
       .split(",")
