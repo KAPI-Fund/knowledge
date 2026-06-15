@@ -265,7 +265,7 @@ async fn deep_research_marks_task_failed_when_no_sources_found() {
     let state = bootstrap_state(&config).await.unwrap();
     let (cookie, csrf) = login_and_csrf(state.clone()).await;
     let project_root = temp.path().join("dr-no-sources-project");
-    let project_id = create_project(state.clone(), &cookie, &csrf, project_root).await;
+    let project_id = create_project(state.clone(), &cookie, &csrf, project_root.clone()).await;
 
     configure_settings(&state, &mock_openai, &searxng_base).await;
 
@@ -296,6 +296,20 @@ async fn deep_research_marks_task_failed_when_no_sources_found() {
     assert!(
         serialized.contains("no research sources found"),
         "expected failure reason in task.error, got: {serialized}"
+    );
+
+    // Failure path must not write a query page into the scaffolded wiki/queries/ dir
+    let wiki_queries_dir = project_root.join("wiki").join("queries");
+    assert!(
+        !wiki_queries_dir.exists() || std::fs::read_dir(&wiki_queries_dir).unwrap().count() == 0,
+        "failure path must not write any wiki/queries/ files"
+    );
+    // index.md is created by project scaffolding; the failure path must not append a query entry
+    let index_contents =
+        std::fs::read_to_string(project_root.join("wiki").join("index.md")).unwrap();
+    assert!(
+        !index_contents.contains("[[queries/"),
+        "failure path must not add a query entry to wiki/index.md, got: {index_contents}"
     );
 
     searxng_handle.abort();
