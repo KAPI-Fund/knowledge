@@ -12,6 +12,7 @@ pub struct AppConfig {
   pub provider_model: Option<String>,
   pub provider_timeout_seconds: Option<i64>,
   pub session_ttl_hours: u64,
+  pub admin_password: Option<String>,
 }
 
 impl AppConfig {
@@ -30,6 +31,7 @@ impl AppConfig {
       provider_model: None,
       provider_timeout_seconds: None,
       session_ttl_hours: 12,
+      admin_password: Some("secret-password".to_string()),
     }
   }
 
@@ -59,6 +61,7 @@ impl AppConfig {
     let provider_timeout_seconds = std::env::var("KNOWLEDGE_PROVIDER_TIMEOUT_SECONDS")
       .ok()
       .and_then(|value| value.parse::<i64>().ok());
+    let admin_password = std::env::var("KNOWLEDGE_ADMIN_PASSWORD").ok();
 
     Self {
       bind_addr,
@@ -71,6 +74,7 @@ impl AppConfig {
       provider_model,
       provider_timeout_seconds,
       session_ttl_hours: 12,
+      admin_password,
     }
   }
 }

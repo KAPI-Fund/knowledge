@@ -195,3 +195,47 @@ async fn concurrent_login_requests_do_not_fail_when_bootstrapping_admin() {
   assert_eq!(first.unwrap().status(), StatusCode::OK);
   assert_eq!(second.unwrap().status(), StatusCode::OK);
 }
+
+#[tokio::test]
+async fn login_rejects_unknown_username() {
+  let env = TestEnvironment::start("login-unknown-user").await.unwrap();
+  let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+
+  let response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri("/api/auth/login")
+        .header("content-type", "application/json")
+        .body(Body::from(
+          json!({ "username": "hacker", "password": "any-password" }).to_string(),
+        ))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+  assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+  let count =
+    sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users WHERE username = 'hacker'")
+      .fetch_one(&state.pool)
+      .await
+      .unwrap();
+  assert_eq!(count, 0, "unknown username must not be persisted to the database");
+}
+
+#[tokio::test]
+async fn bootstrap_without_admin_password_skips_admin_creation() {
+  let env = TestEnvironment::start("bootstrap-no-pwd").await.unwrap();
+  let mut config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
+  config.admin_password = None;
+  let state = bootstrap_state(&config).await.unwrap();
+
+  let count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users")
+    .fetch_one(&state.pool)
+    .await
+    .unwrap();
+  assert_eq!(count, 0, "bootstrap must not create any user when admin_password is None");
+}

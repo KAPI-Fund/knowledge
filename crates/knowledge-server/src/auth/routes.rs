@@ -5,15 +5,12 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use time::format_description::well_known::Rfc3339;
-use time::OffsetDateTime;
-use uuid::Uuid;
 
 use crate::app::state::AppState;
 use crate::auth::api_token::{
   create_api_token, list_tokens_for_user_scoped, revoke_token_scoped, CreateApiTokenInput,
 };
-use crate::auth::password::{hash_password, verify_password};
+use crate::auth::password::verify_password;
 use crate::auth::principal::{resolve_principal, AuthScope};
 use crate::auth::session::{create_session, destroy_session, find_session};
 use crate::http::error::ApiError;
@@ -49,15 +46,14 @@ async fn login(
   State(state): State<AppState>,
   Json(payload): Json<LoginRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-  ensure_admin_user(&state, &payload.username, &payload.password).await?;
-
   let user = sqlx::query_as::<_, (String, String, String)>(
     "SELECT id, username, password_hash FROM users WHERE username = $1",
   )
   .bind(&payload.username)
-  .fetch_one(&state.pool)
+  .fetch_optional(&state.pool)
   .await
-  .map_err(ApiError::from)?;
+  .map_err(ApiError::from)?
+  .ok_or_else(|| ApiError::unauthorized("invalid credentials"))?;
 
   if !verify_password(&payload.password, &user.2)? {
     return Err(ApiError::unauthorized("invalid credentials"));
@@ -144,32 +140,6 @@ async fn me(
       "role": role
     }
   })))
-}
-
-async fn ensure_admin_user(
-  state: &AppState,
-  username: &str,
-  password: &str,
-) -> Result<(), ApiError> {
-  let created_at = OffsetDateTime::now_utc()
-    .format(&Rfc3339)
-    .map_err(|_| ApiError::internal("failed to format created_at"))?;
-
-  sqlx::query(
-    "INSERT INTO users (id, username, password_hash, role, created_at)
-     VALUES ($1, $2, $3, $4, $5)
-     ON CONFLICT (username) DO NOTHING",
-  )
-  .bind(Uuid::new_v4().to_string())
-  .bind(username)
-  .bind(hash_password(password)?)
-  .bind("admin")
-  .bind(created_at)
-  .execute(&state.pool)
-  .await
-  .map_err(ApiError::from)?;
-
-  Ok(())
 }
 
 #[derive(Debug, Clone, Deserialize)]

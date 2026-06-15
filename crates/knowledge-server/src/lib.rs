@@ -36,6 +36,7 @@ pub async fn bootstrap_state(config: &AppConfig) -> anyhow::Result<AppState> {
     let pool = db::pool::connect_pool(&config.database_url).await?;
     db::migrate::run(&pool).await?;
     seed_runtime_settings(&pool, config).await?;
+    seed_admin_user(&pool, config).await?;
     let cache = CacheStore::connect(&config.redis_url).await?;
     let state = AppState {
         pool,
@@ -101,9 +102,6 @@ async fn seed_runtime_settings(pool: &PgPool, config: &AppConfig) -> anyhow::Res
     }
 
     let timeout_seconds = config.provider_timeout_seconds.or(current_timeout_seconds);
-    let now = OffsetDateTime::now_utc()
-        .format(&Rfc3339)
-        .unwrap_or_else(|_| String::from("1970-01-01T00:00:00Z"));
 
     sqlx::query(
         "UPDATE system_settings
@@ -127,26 +125,42 @@ async fn seed_runtime_settings(pool: &PgPool, config: &AppConfig) -> anyhow::Res
     .execute(pool)
     .await?;
 
+    Ok(())
+}
+
+async fn seed_admin_user(pool: &PgPool, config: &AppConfig) -> anyhow::Result<()> {
     let admin_exists =
         sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users WHERE username = 'admin'")
             .fetch_one(pool)
             .await?;
-
-    if admin_exists == 0 {
-        let password_hash = crate::auth::password::hash_password("secret-password")
-            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-        sqlx::query(
-            "INSERT INTO users (id, username, password_hash, role, created_at)
-       VALUES ($1, $2, $3, $4, $5)",
-        )
-        .bind(Uuid::new_v4().to_string())
-        .bind("admin")
-        .bind(password_hash)
-        .bind("admin")
-        .bind(now)
-        .execute(pool)
-        .await?;
+    if admin_exists > 0 {
+        return Ok(());
     }
+
+    let Some(ref bootstrap_password) = config.admin_password else {
+        tracing::warn!(
+            "no admin user exists and KNOWLEDGE_ADMIN_PASSWORD is not set — \
+             set it to create a first admin on startup"
+        );
+        return Ok(());
+    };
+
+    let password_hash = crate::auth::password::hash_password(bootstrap_password)
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    let now = OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .unwrap_or_else(|_| String::from("1970-01-01T00:00:00Z"));
+    sqlx::query(
+        "INSERT INTO users (id, username, password_hash, role, created_at)
+     VALUES ($1, $2, $3, $4, $5)",
+    )
+    .bind(Uuid::new_v4().to_string())
+    .bind("admin")
+    .bind(password_hash)
+    .bind("admin")
+    .bind(now)
+    .execute(pool)
+    .await?;
 
     Ok(())
 }
