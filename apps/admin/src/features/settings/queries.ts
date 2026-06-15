@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { getSystemSettings, updateSystemSettings } from "../shared/api";
+import { getSystemSettings, runWebSearch, updateSystemSettings } from "../shared/api";
 
 export function useSystemSettingsQuery() {
   return useQuery({
@@ -18,4 +18,8 @@ export function useUpdateSystemSettingsMutation() {
       await queryClient.invalidateQueries({ queryKey: ["system-settings"] });
     },
   });
+}
+
+export function useRunWebSearchMutation() {
+  return useMutation({ mutationFn: runWebSearch });
 }

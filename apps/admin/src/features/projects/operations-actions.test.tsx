@@ -123,6 +123,11 @@ vi.mock("../settings/queries", () => ({
   useUpdateSystemSettingsMutation: () => ({
     mutateAsync: updateSettings,
   }),
+  useRunWebSearchMutation: () => ({
+    mutateAsync: vi.fn(),
+    isPending: false,
+    data: undefined,
+  }),
 }));
 
 vi.mock("../sources/queries", () => ({
@@ -350,6 +355,11 @@ describe("operations actions", () => {
       providerModel: "",
       providerEmbeddingModel: "",
       providerTimeoutSeconds: 60,
+      searchProvider: "none",
+      serpapiEngine: "google",
+      searxngUrl: "",
+      searxngCategories: ["general"],
+      ollamaSearchUrl: "",
     });
   });
 

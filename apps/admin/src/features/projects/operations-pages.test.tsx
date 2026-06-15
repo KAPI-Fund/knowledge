@@ -181,6 +181,11 @@ vi.mock("../settings/queries", () => ({
   useUpdateSystemSettingsMutation: () => ({
     mutateAsync: vi.fn(),
   }),
+  useRunWebSearchMutation: () => ({
+    mutateAsync: vi.fn(),
+    isPending: false,
+    data: undefined,
+  }),
 }));
 
 vi.mock("../search/queries", () => ({
