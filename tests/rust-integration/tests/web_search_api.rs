@@ -828,3 +828,65 @@ async fn patch_settings_replacement_key_wins_over_clear() {
             .unwrap();
     assert_eq!(stored.as_deref(), Some("new-secret"));
 }
+
+#[tokio::test]
+async fn patch_settings_can_clear_search_api_key() {
+    let _env = TestEnvironment::start("settings-search-key-clear").await.unwrap();
+    let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
+    let state = bootstrap_state(&config).await.unwrap();
+    let (cookie, csrf) = login_and_csrf(state.clone()).await;
+
+    let set_key = build_app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/system/settings")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .header("x-csrf-token", &csrf)
+                .body(Body::from(
+                    json!({
+                      "providerMode": "openai-compatible",
+                      "language": "en",
+                      "defaultQueryLimit": 25,
+                      "searchProvider": "tavily",
+                      "searchApiKey": "my-search-secret"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(set_key.status(), StatusCode::OK);
+    assert_eq!(read_json(set_key.into_body()).await["searchApiKeyConfigured"], json!(true));
+
+    let clear_key = build_app(state)
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/system/settings")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .header("x-csrf-token", &csrf)
+                .body(Body::from(
+                    json!({
+                      "providerMode": "openai-compatible",
+                      "language": "en",
+                      "defaultQueryLimit": 25,
+                      "searchProvider": "tavily",
+                      "clearSearchApiKey": true
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(clear_key.status(), StatusCode::OK);
+    assert_eq!(
+        read_json(clear_key.into_body()).await["searchApiKeyConfigured"],
+        json!(false),
+        "clearSearchApiKey:true must set searchApiKeyConfigured to false"
+    );
+}

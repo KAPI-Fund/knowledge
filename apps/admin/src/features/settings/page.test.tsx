@@ -200,6 +200,45 @@ describe("SettingsPage", () => {
     await user.click(screen.getByRole("button", { name: "Save Settings" }));
     expect(updateSettings.mock.calls[0][0]).not.toHaveProperty("clearProviderApiKey");
   });
+
+  it("sends clearSearchApiKey when the search remove key is clicked then saved", async () => {
+    const user = userEvent.setup();
+    const queryClient = new QueryClient();
+    settingsData.mockReturnValue({
+      providerMode: "openai-compatible",
+      language: "en",
+      defaultQueryLimit: 25,
+      providerBaseUrl: null,
+      providerApiKeyConfigured: false,
+      providerModel: null,
+      providerEmbeddingModel: null,
+      providerTimeoutSeconds: 30,
+      searchProvider: "tavily",
+      searchApiKeyConfigured: true,
+      serpapiEngine: "google",
+      searxngUrl: null,
+      searxngCategories: ["general"],
+      ollamaSearchUrl: null,
+      tavilyBaseUrl: null,
+      serpapiBaseUrl: null,
+    });
+    updateSettings.mockClear();
+    updateSettings.mockResolvedValue({ searchApiKeyConfigured: false });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <SettingsPage />
+      </QueryClientProvider>,
+    );
+
+    await user.click(screen.getByRole("button", { name: /remove configured key/i }));
+    expect(screen.getByText("Key will be removed on save")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Save Settings" }));
+    expect(updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ clearSearchApiKey: true }),
+    );
+  });
 });
 
 describe("settings page web search section", () => {
