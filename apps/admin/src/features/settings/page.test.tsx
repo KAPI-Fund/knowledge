@@ -114,6 +114,92 @@ describe("SettingsPage", () => {
       expect.objectContaining({ clearProviderApiKey: true }),
     );
   });
+
+  it("a typed replacement key cancels a pending clear", async () => {
+    const user = userEvent.setup();
+    const queryClient = new QueryClient();
+    settingsData.mockReturnValue({
+      providerMode: "openai-compatible",
+      language: "en",
+      defaultQueryLimit: 25,
+      providerBaseUrl: null,
+      providerApiKeyConfigured: true,
+      providerModel: null,
+      providerEmbeddingModel: null,
+      providerTimeoutSeconds: 30,
+      searchProvider: "none",
+      searchApiKeyConfigured: false,
+      serpapiEngine: "google",
+      searxngUrl: null,
+      searxngCategories: ["general"],
+      ollamaSearchUrl: null,
+      tavilyBaseUrl: null,
+      serpapiBaseUrl: null,
+    });
+    updateSettings.mockClear();
+    updateSettings.mockResolvedValue({ providerApiKeyConfigured: true });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <SettingsPage />
+      </QueryClientProvider>,
+    );
+
+    await user.click(screen.getByRole("button", { name: /remove configured key/i }));
+    expect(screen.getByText("Key will be removed on save")).toBeInTheDocument();
+
+    await user.type(
+      screen.getByPlaceholderText("Leave blank to keep the current key"),
+      "new-key",
+    );
+    await user.click(screen.getByRole("button", { name: "Save Settings" }));
+
+    const payload = updateSettings.mock.calls[0][0];
+    expect(payload).toMatchObject({ providerApiKey: "new-key" });
+    expect(payload).not.toHaveProperty("clearProviderApiKey");
+  });
+
+  it("undo cancels a pending clear without sending the flag", async () => {
+    const user = userEvent.setup();
+    const queryClient = new QueryClient();
+    settingsData.mockReturnValue({
+      providerMode: "openai-compatible",
+      language: "en",
+      defaultQueryLimit: 25,
+      providerBaseUrl: null,
+      providerApiKeyConfigured: true,
+      providerModel: null,
+      providerEmbeddingModel: null,
+      providerTimeoutSeconds: 30,
+      searchProvider: "none",
+      searchApiKeyConfigured: false,
+      serpapiEngine: "google",
+      searxngUrl: null,
+      searxngCategories: ["general"],
+      ollamaSearchUrl: null,
+      tavilyBaseUrl: null,
+      serpapiBaseUrl: null,
+    });
+    updateSettings.mockClear();
+    updateSettings.mockResolvedValue({ providerApiKeyConfigured: true });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <SettingsPage />
+      </QueryClientProvider>,
+    );
+
+    await user.click(screen.getByRole("button", { name: /remove configured key/i }));
+    expect(screen.getByText("Key will be removed on save")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /^undo$/i }));
+    expect(
+      screen.getByRole("button", { name: /remove configured key/i }),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Save Settings" }));
+    expect(updateSettings.mock.calls[0][0]).not.toHaveProperty("clearProviderApiKey");
+  });
 });
 
 describe("settings page web search section", () => {

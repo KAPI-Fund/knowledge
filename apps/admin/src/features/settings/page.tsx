@@ -114,8 +114,8 @@ export function SettingsPage() {
             searchApiKey: searchApiKey.trim(),
           }
         : {}),
-      ...(clearProviderApiKey ? { clearProviderApiKey: true } : {}),
-      ...(clearSearchApiKey ? { clearSearchApiKey: true } : {}),
+      ...(clearProviderApiKey && !providerApiKey.trim() ? { clearProviderApiKey: true } : {}),
+      ...(clearSearchApiKey && !searchApiKey.trim() ? { clearSearchApiKey: true } : {}),
     };
 
     try {
@@ -185,6 +185,9 @@ export function SettingsPage() {
               onChange={(event) => {
                 setIsDirty(true);
                 setProviderApiKey(event.target.value);
+                if (event.target.value.trim()) {
+                  setClearProviderApiKey(false);
+                }
               }}
               placeholder="Leave blank to keep the current key"
               type="password"
@@ -193,7 +196,16 @@ export function SettingsPage() {
           </label>
           {settings.data?.providerApiKeyConfigured ? (
             clearProviderApiKey ? (
-              <p className="text-sm text-muted-foreground">Key will be removed on save</p>
+              <div className="flex items-center gap-3">
+                <p className="text-sm text-muted-foreground">Key will be removed on save</p>
+                <button
+                  className="text-sm underline text-left"
+                  onClick={() => setClearProviderApiKey(false)}
+                  type="button"
+                >
+                  Undo
+                </button>
+              </div>
             ) : (
               <button
                 className="text-sm text-destructive underline text-left"
@@ -277,6 +289,9 @@ export function SettingsPage() {
                 onChange={(event) => {
                   setIsDirty(true);
                   setSearchApiKey(event.target.value);
+                  if (event.target.value.trim()) {
+                    setClearSearchApiKey(false);
+                  }
                 }}
                 placeholder="Leave blank to keep the current key"
                 type="password"
@@ -286,7 +301,16 @@ export function SettingsPage() {
           ) : null}
           {settings.data?.searchApiKeyConfigured && searchProvider !== "none" && searchProvider !== "searxng" ? (
             clearSearchApiKey ? (
-              <p className="text-sm text-muted-foreground">Key will be removed on save</p>
+              <div className="flex items-center gap-3">
+                <p className="text-sm text-muted-foreground">Key will be removed on save</p>
+                <button
+                  className="text-sm underline text-left"
+                  onClick={() => setClearSearchApiKey(false)}
+                  type="button"
+                >
+                  Undo
+                </button>
+              </div>
             ) : (
               <button
                 className="text-sm text-destructive underline text-left"
