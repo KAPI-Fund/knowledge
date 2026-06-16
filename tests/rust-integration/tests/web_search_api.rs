@@ -761,3 +761,70 @@ async fn patch_settings_can_clear_provider_api_key() {
         "clearProviderApiKey:true must set providerApiKeyConfigured to false"
     );
 }
+
+#[tokio::test]
+async fn patch_settings_replacement_key_wins_over_clear() {
+    let _env = TestEnvironment::start("settings-replace-beats-clear").await.unwrap();
+    let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
+    let state = bootstrap_state(&config).await.unwrap();
+    let (cookie, csrf) = login_and_csrf(state.clone()).await;
+
+    let set_key = build_app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/system/settings")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .header("x-csrf-token", &csrf)
+                .body(Body::from(
+                    json!({
+                      "providerMode": "openai-compatible",
+                      "language": "en",
+                      "defaultQueryLimit": 25,
+                      "providerApiKey": "old-secret"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(set_key.status(), StatusCode::OK);
+
+    let replace = build_app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/system/settings")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .header("x-csrf-token", &csrf)
+                .body(Body::from(
+                    json!({
+                      "providerMode": "openai-compatible",
+                      "language": "en",
+                      "defaultQueryLimit": 25,
+                      "providerApiKey": "new-secret",
+                      "clearProviderApiKey": true
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(replace.status(), StatusCode::OK);
+    assert_eq!(
+        read_json(replace.into_body()).await["providerApiKeyConfigured"],
+        json!(true),
+        "a supplied replacement key must take precedence over clearProviderApiKey"
+    );
+
+    let stored: Option<String> =
+        sqlx::query_scalar("SELECT provider_api_key FROM system_settings WHERE id = 1")
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+    assert_eq!(stored.as_deref(), Some("new-secret"));
+}
