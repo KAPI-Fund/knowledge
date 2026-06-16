@@ -83,10 +83,10 @@ async fn spawn_mock_tavily_validating() -> (tokio::task::JoinHandle<()>, String)
                 request_line.starts_with("POST /search "),
                 "tavily: expected POST /search, got: {request_line}"
             );
-            assert!(raw.contains("\"api_key\""), "tavily: body missing api_key");
-            assert!(raw.contains("\"query\""), "tavily: body missing query");
-            assert!(raw.contains("\"search_depth\""), "tavily: body missing search_depth");
-            assert!(raw.contains("\"max_results\""), "tavily: body missing max_results");
+            assert!(raw.contains("\"api_key\":\"test-key\""), "tavily: api_key value not locked: {raw}");
+            assert!(raw.contains("\"query\":\"tavily query\""), "tavily: query value not locked: {raw}");
+            assert!(raw.contains("\"search_depth\":\"advanced\""), "tavily: search_depth must be advanced: {raw}");
+            assert!(raw.contains("\"max_results\":3"), "tavily: max_results must be 3: {raw}");
             let body = json!({
               "results": [
                 { "title": "Tav", "url": "https://example.com/tav", "content": "from tavily" }
@@ -118,10 +118,10 @@ async fn spawn_mock_serpapi_validating() -> (tokio::task::JoinHandle<()>, String
                 request_line.starts_with("GET /search?"),
                 "serpapi: expected GET /search?..., got: {request_line}"
             );
-            assert!(request_line.contains("engine="), "serpapi: missing engine= param");
-            assert!(request_line.contains("q="), "serpapi: missing q= param");
-            assert!(request_line.contains("api_key="), "serpapi: missing api_key= param");
-            assert!(request_line.contains("num="), "serpapi: missing num= param");
+            assert!(request_line.contains("engine=google"), "serpapi: engine value not locked: {request_line}");
+            assert!(request_line.contains("q=serpapi-query"), "serpapi: query value not locked: {request_line}");
+            assert!(request_line.contains("api_key=test-key"), "serpapi: api_key value not locked: {request_line}");
+            assert!(request_line.contains("num=3"), "serpapi: num must be 3: {request_line}");
             let body = json!({
               "organic_results": [
                 { "title": "Serp", "link": "https://example.com/serp", "snippet": "from serpapi" }
@@ -154,11 +154,11 @@ async fn spawn_mock_ollama_validating() -> (tokio::task::JoinHandle<()>, String)
                 "ollama: expected POST /api/web_search, got: {request_line}"
             );
             assert!(
-                raw.to_lowercase().contains("authorization: bearer "),
-                "ollama: missing Authorization Bearer header"
+                raw.to_lowercase().contains("authorization: bearer test-key"),
+                "ollama: Bearer token value not locked: {raw}"
             );
-            assert!(raw.contains("\"query\""), "ollama: body missing query");
-            assert!(raw.contains("\"max_results\""), "ollama: body missing max_results");
+            assert!(raw.contains("\"query\":\"ollama query\""), "ollama: query value not locked: {raw}");
+            assert!(raw.contains("\"max_results\":3"), "ollama: max_results must be 3: {raw}");
             let body = json!({
               "results": [
                 { "title": "Olla", "url": "https://example.com/olla", "content": "from ollama" }
@@ -565,7 +565,7 @@ async fn web_search_serpapi_uses_persisted_base_url() {
                 .header(header::COOKIE, &cookie)
                 .header("x-csrf-token", &csrf)
                 .body(Body::from(
-                    json!({ "query": "serpapi query", "maxResults": 3 }).to_string(),
+                    json!({ "query": "serpapi-query", "maxResults": 3 }).to_string(),
                 ))
                 .unwrap(),
         )
