@@ -161,6 +161,16 @@ vi.mock("../search/queries", () => ({
   }),
 }));
 
+vi.mock("../graph/graph-canvas", () => ({
+  GraphCanvas: ({ nodes }: { nodes: { id: string; label: string }[] }) => (
+    <div data-testid="graph-canvas">
+      {nodes.map((node) => (
+        <span key={node.id}>{node.label}</span>
+      ))}
+    </div>
+  ),
+}));
+
 vi.mock("../graph/queries", () => ({
   useProjectGraphQuery: (...args: unknown[]) => {
     graphQuerySpy(...args);
@@ -173,6 +183,7 @@ vi.mock("../graph/queries", () => ({
             nodeType: "source",
             path: "wiki/sources/demo.md",
             linkCount: 2,
+            sources: [],
           },
         ],
         edges: [
@@ -280,15 +291,10 @@ describe("operations actions", () => {
       </QueryClientProvider>,
     );
 
-    expect(screen.getByText("Nodes: 1")).toBeInTheDocument();
-    expect(screen.getByText("Edges: 1")).toBeInTheDocument();
-    expect(screen.getByText("Links 2")).toBeInTheDocument();
-    await user.type(screen.getByLabelText("Graph Filter"), "demo");
-    await user.clear(screen.getByLabelText("Node Limit"));
-    await user.type(screen.getByLabelText("Node Limit"), "25");
-    await user.selectOptions(screen.getByLabelText("Node Type"), "source");
-    await user.click(screen.getByRole("button", { name: "Apply Graph Filters" }));
-    expect(graphQuerySpy).toHaveBeenLastCalledWith("project-1", "demo", "source", 25);
+    expect(screen.getByTestId("graph-canvas")).toBeInTheDocument();
+    expect(screen.getByText("Demo")).toBeInTheDocument();
+    await user.type(screen.getByLabelText("Search graph"), "demo");
+    expect(graphQuerySpy).toHaveBeenLastCalledWith("project-1");
 
     cleanup();
     render(
