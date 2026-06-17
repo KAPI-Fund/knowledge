@@ -291,11 +291,26 @@ fn extract_frontmatter_field(content: &str, field: &str) -> Option<String> {
 /// Parse a `sources:` frontmatter entry. Supports an inline list
 /// (`sources: [a, b]`) and a YAML block list (`sources:` followed by
 /// `  - item` lines). Ported from upstream graph-relevance.ts extractFrontmatter.
+///
+/// Only the YAML frontmatter block (between the opening `---` and the next
+/// `---` at the top of the file) is scanned — mirroring how
+/// `extract_frontmatter_field` bounds its search.  A `sources:` line that
+/// appears in the document body is ignored.
 fn extract_sources(content: &str) -> Vec<String> {
+  // Collect only the lines inside the frontmatter block, consistent with
+  // extract_frontmatter_field.
+  let mut lines = content.lines();
+  if lines.next().map(str::trim) != Some("---") {
+    return Vec::new();
+  }
+  let fm_lines: Vec<&str> = lines
+    .take_while(|line| line.trim() != "---")
+    .collect();
+
   let mut in_block = false;
   let mut sources = Vec::new();
 
-  for line in content.lines() {
+  for line in fm_lines {
     if in_block {
       let trimmed = line.trim_start();
       if let Some(item) = trimmed.strip_prefix('-') {
@@ -453,6 +468,12 @@ mod tests {
   #[test]
   fn returns_empty_when_no_sources() {
     let content = "---\ntitle: Demo\ntype: concept\n---\nBody";
+    assert!(extract_sources(content).is_empty());
+  }
+
+  #[test]
+  fn ignores_sources_outside_frontmatter() {
+    let content = "---\ntitle: Demo\n---\nBody mentions sources: [ignored.pdf]";
     assert!(extract_sources(content).is_empty());
   }
 }
