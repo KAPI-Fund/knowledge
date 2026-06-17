@@ -201,6 +201,16 @@ vi.mock("../search/queries", () => ({
   }),
 }));
 
+vi.mock("../graph/graph-canvas", () => ({
+  GraphCanvas: ({ nodes }: { nodes: { id: string; label: string }[] }) => (
+    <div data-testid="graph-canvas">
+      {nodes.map((node) => (
+        <span key={node.id}>{node.label}</span>
+      ))}
+    </div>
+  ),
+}));
+
 vi.mock("../graph/queries", () => ({
   useProjectGraphQuery: () => ({
     data: {
@@ -211,6 +221,7 @@ vi.mock("../graph/queries", () => ({
           nodeType: "source",
           path: "wiki/sources/demo.md",
           linkCount: 1,
+          sources: [],
         },
       ],
       edges: [
