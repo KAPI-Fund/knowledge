@@ -2,15 +2,13 @@ import { useQuery } from "@tanstack/react-query";
 
 import { getProjectGraph, getProjectGraphNeighbors } from "../shared/api";
 
-export function useProjectGraphQuery(
-  projectId: string,
-  query: string,
-  nodeType: string,
-  limit: number,
-) {
+export const GRAPH_NODE_LIMIT = 1000;
+
+export function useProjectGraphQuery(projectId: string) {
   return useQuery({
-    queryKey: ["project-graph", projectId, query, nodeType, limit],
-    queryFn: () => getProjectGraph({ projectId, query, nodeType, limit }),
+    queryKey: ["project-graph", projectId, GRAPH_NODE_LIMIT],
+    queryFn: () => getProjectGraph({ projectId, limit: GRAPH_NODE_LIMIT }),
+    enabled: Boolean(projectId),
   });
 }
 
