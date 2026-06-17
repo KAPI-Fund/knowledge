@@ -240,6 +240,7 @@ const graphSchema = z.object({
       nodeType: z.string(),
       path: z.string(),
       linkCount: z.number(),
+      sources: z.array(z.string()).default([]),
     }),
   ),
   edges: z.array(
@@ -258,6 +259,7 @@ const graphNeighborsSchema = z.object({
     nodeType: z.string(),
     path: z.string(),
     linkCount: z.number(),
+    sources: z.array(z.string()).default([]),
   }),
   neighbors: z.array(
     z.object({
@@ -266,6 +268,7 @@ const graphNeighborsSchema = z.object({
       nodeType: z.string(),
       path: z.string(),
       linkCount: z.number(),
+      sources: z.array(z.string()).default([]),
     }),
   ),
 });
