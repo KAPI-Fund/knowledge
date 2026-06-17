@@ -16,6 +16,7 @@ pub struct GraphNode {
   pub node_type: String,
   pub path: String,
   pub link_count: usize,
+  pub sources: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -40,6 +41,7 @@ struct PageRecord {
   node_type: String,
   path: String,
   links: Vec<String>,
+  sources: Vec<String>,
 }
 
 pub fn build_graph(project_root: &Path) -> Result<(Vec<GraphNode>, Vec<GraphEdge>), io::Error> {
@@ -136,6 +138,7 @@ fn materialize_graph(
       node_type: page.node_type,
       path: page.path,
       link_count: *link_counts.get(&page.id).unwrap_or(&0),
+      sources: page.sources,
     })
     .collect::<Vec<_>>();
   let mut edges = edge_weights
@@ -229,6 +232,7 @@ fn collect_pages(root: &Path, project_root: &Path, pages: &mut Vec<PageRecord>) 
       label: extract_title(&content, &id),
       node_type: extract_type(&content),
       links: extract_wikilinks(&content),
+      sources: extract_sources(&content),
       id,
       path: relative_path,
     });
@@ -282,6 +286,63 @@ fn extract_frontmatter_field(content: &str, field: &str) -> Option<String> {
   }
 
   None
+}
+
+/// Parse a `sources:` frontmatter entry. Supports an inline list
+/// (`sources: [a, b]`) and a YAML block list (`sources:` followed by
+/// `  - item` lines). Ported from upstream graph-relevance.ts extractFrontmatter.
+fn extract_sources(content: &str) -> Vec<String> {
+  let mut in_block = false;
+  let mut sources = Vec::new();
+
+  for line in content.lines() {
+    if in_block {
+      let trimmed = line.trim_start();
+      if let Some(item) = trimmed.strip_prefix('-') {
+        let value = clean_source_token(item.trim());
+        if !value.is_empty() {
+          sources.push(value);
+        }
+        continue;
+      }
+      // A non-indented, non-`-` line ends the block.
+      if !line.starts_with(char::is_whitespace) {
+        in_block = false;
+      } else {
+        continue;
+      }
+    }
+
+    let trimmed = line.trim_start();
+    if let Some(rest) = trimmed.strip_prefix("sources:") {
+      let rest = rest.trim();
+      if rest.is_empty() {
+        in_block = true;
+      } else if let Some(inner) = rest.strip_prefix('[').and_then(|r| r.strip_suffix(']')) {
+        for token in inner.split(',') {
+          let value = clean_source_token(token.trim());
+          if !value.is_empty() {
+            sources.push(value);
+          }
+        }
+      } else {
+        let value = clean_source_token(rest);
+        if !value.is_empty() {
+          sources.push(value);
+        }
+      }
+    }
+  }
+
+  sources
+}
+
+fn clean_source_token(token: &str) -> String {
+  token
+    .trim()
+    .trim_matches(|c| c == '"' || c == '\'')
+    .trim()
+    .to_string()
 }
 
 fn extract_wikilinks(content: &str) -> Vec<String> {
@@ -365,4 +426,33 @@ fn node_matches_query(node: &GraphNode, tokens: &[String]) -> bool {
   .to_lowercase();
 
   tokens.iter().all(|token| haystack.contains(token))
+}
+
+#[cfg(test)]
+mod tests {
+  use super::extract_sources;
+
+  #[test]
+  fn extracts_block_form_sources() {
+    let content = "---\ntitle: Demo\nsources:\n  - alpha.pdf\n  - beta.docx\ntype: concept\n---\nBody";
+    assert_eq!(
+      extract_sources(content),
+      vec!["alpha.pdf".to_string(), "beta.docx".to_string()]
+    );
+  }
+
+  #[test]
+  fn extracts_inline_form_sources() {
+    let content = "---\nsources: [alpha.pdf, \"beta.docx\"]\n---\nBody";
+    assert_eq!(
+      extract_sources(content),
+      vec!["alpha.pdf".to_string(), "beta.docx".to_string()]
+    );
+  }
+
+  #[test]
+  fn returns_empty_when_no_sources() {
+    let content = "---\ntitle: Demo\ntype: concept\n---\nBody";
+    assert!(extract_sources(content).is_empty());
+  }
 }
