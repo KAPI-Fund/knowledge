@@ -1,3 +1,4 @@
+import { lazy, Suspense } from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 
 import { AppShell } from "../components/layout/app-shell";
@@ -11,7 +12,6 @@ import { DashboardPage } from "../features/dashboard/page";
 import { DedupPage } from "../features/dedup/page";
 import { DeepResearchPage } from "../features/deep-research/page";
 import { FilesPage } from "../features/files/page";
-import { GraphPage } from "../features/graph/page";
 import { LintPage } from "../features/lint/page";
 import { ProjectDetailPage } from "../features/projects/detail-page";
 import { ProjectsPage } from "../features/projects/page";
@@ -23,6 +23,10 @@ import { SourceWatchPage } from "../features/source-watch/page";
 import { SourcesPage } from "../features/sources/page";
 import { TasksPage } from "../features/tasks/page";
 import { UsersPage } from "../features/users/page";
+
+const GraphPage = lazy(() =>
+  import("../features/graph/page").then((module) => ({ default: module.GraphPage })),
+);
 
 export function AppRoutes() {
   return (
@@ -41,7 +45,16 @@ export function AppRoutes() {
             <Route path="query" element={<QueryPage />} />
             <Route path="chat" element={<ChatPage />} />
             <Route path="lint" element={<LintPage />} />
-            <Route path="graph" element={<GraphPage />} />
+            <Route
+              path="graph"
+              element={
+                <Suspense
+                  fallback={<div className="p-6 text-sm text-muted-foreground">Loading graph…</div>}
+                >
+                  <GraphPage />
+                </Suspense>
+              }
+            />
             <Route path="tasks" element={<TasksPage />} />
             <Route path="reviews" element={<ReviewsPage />} />
             <Route path="dedup" element={<DedupPage />} />
