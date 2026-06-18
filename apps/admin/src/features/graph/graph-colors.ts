@@ -61,6 +61,20 @@ export const GRAPH_PALETTE: GraphThemePalette = {
   activeEdge: "#1e293b",
 };
 
+/** Base Sigma container settings, light palette. Port of graph-view.tsx:1006-1017. */
+export const SIGMA_BASE_SETTINGS = {
+  defaultNodeType: "circle",
+  defaultEdgeColor: GRAPH_PALETTE.defaultEdge,
+  defaultNodeColor: NODE_TYPE_COLORS.other,
+  labelColor: { color: GRAPH_PALETTE.label },
+  hideEdgesOnMove: true,
+  hideLabelsOnMove: true,
+  renderEdgeLabels: false,
+  labelSize: 13,
+  labelWeight: "bold",
+  stagePadding: 30,
+} as const;
+
 export function nodeColor(type: string): string {
   if (NODE_TYPE_COLORS[type]) return NODE_TYPE_COLORS[type];
   let hash = 0;

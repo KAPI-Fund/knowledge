@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { SigmaContainer } from "@react-sigma/core";
 import "@react-sigma/core/lib/style.css";
-import { DEFAULT_GRAPH_SPACING, DEFAULT_NODE_SCALE } from "./graph-colors";
+import { DEFAULT_GRAPH_SPACING, DEFAULT_NODE_SCALE, SIGMA_BASE_SETTINGS } from "./graph-colors";
 import { GraphLoader, type ColorMode } from "./graph-loader";
 import { GraphRenderSettings, type HoverState } from "./graph-render-settings";
 import { EventHandler } from "./graph-events";
@@ -18,16 +18,6 @@ export interface GraphCanvasProps {
   graphSpacing?: number;
 }
 
-const SIGMA_SETTINGS = {
-  defaultNodeType: "circle",
-  hideEdgesOnMove: true,
-  hideLabelsOnMove: true,
-  renderEdgeLabels: false,
-  labelSize: 13,
-  labelWeight: "bold",
-  stagePadding: 30,
-} as const;
-
 export function GraphCanvas({
   nodes,
   edges,
@@ -41,7 +31,7 @@ export function GraphCanvas({
 
   return (
     <div data-testid="graph-canvas" className="relative h-full w-full">
-      <SigmaContainer style={{ height: "100%", width: "100%" }} settings={SIGMA_SETTINGS}>
+      <SigmaContainer style={{ height: "100%", width: "100%" }} settings={SIGMA_BASE_SETTINGS}>
         <GraphLoader
           nodes={nodes}
           edges={edges}
