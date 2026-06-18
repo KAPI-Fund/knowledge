@@ -24,7 +24,7 @@ vi.mock("./graph-canvas", () => ({
           </button>
           <button
             aria-label={`context ${node.label}`}
-            onClick={() => onNodeContextMenu?.(node.id, 0, 0)}
+            onClick={() => onNodeContextMenu?.(node.id, 130, 90)}
             type="button"
           >
             ctx {node.label}
@@ -154,6 +154,34 @@ describe("GraphPage", () => {
 
     await user.click(screen.getByRole("button", { name: "Show" }));
     expect(screen.getByRole("button", { name: "Alpha" })).toBeInTheDocument();
+  });
+
+  it("positions the context menu relative to the graph container", async () => {
+    const user = userEvent.setup();
+    const rectSpy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+      left: 20,
+      top: 10,
+      right: 0,
+      bottom: 0,
+      width: 0,
+      height: 0,
+      x: 20,
+      y: 10,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    try {
+      renderPage();
+      await user.click(screen.getByRole("button", { name: "context Alpha" }));
+      // mock canvas forwards client (130, 90); container rect is (20, 10),
+      // so the menu must render at (110, 80) — container-relative (upstream
+      // graph-view.tsx:660-671).
+      const menu = screen.getByRole("button", { name: "Hide this node" }).parentElement!;
+      expect(menu.style.left).toBe("110px");
+      expect(menu.style.top).toBe("80px");
+    } finally {
+      rectSpy.mockRestore();
+    }
   });
 
   it("resets hidden-node state when switching projects", async () => {

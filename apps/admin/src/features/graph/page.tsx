@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { EyeOff, Filter, Lightbulb, Palette } from "lucide-react";
 
@@ -42,6 +42,7 @@ function GraphView({ projectId }: { projectId: string }) {
   const [showInsights, setShowInsights] = useState(false);
   const [dismissedInsights, setDismissedInsights] = useState<Set<string>>(() => new Set());
   const [contextMenu, setContextMenu] = useState<{ id: string; x: number; y: number } | null>(null);
+  const graphContainerRef = useRef<HTMLDivElement>(null);
 
   const model = useMemo(
     () => buildGraphModel(graph.data?.nodes ?? [], graph.data?.edges ?? []),
@@ -100,7 +101,14 @@ function GraphView({ projectId }: { projectId: string }) {
   }
 
   function handleNodeContextMenu(nodeId: string, x: number, y: number) {
-    setContextMenu(nodeId ? { id: nodeId, x, y } : null);
+    if (!nodeId) {
+      setContextMenu(null);
+      return;
+    }
+    // Store container-relative coords; the menu is positioned inside the
+    // relative graph container. Port of upstream graph-view.tsx:660-671.
+    const rect = graphContainerRef.current?.getBoundingClientRect();
+    setContextMenu({ id: nodeId, x: rect ? x - rect.left : x, y: rect ? y - rect.top : y });
   }
 
   function hideNode(nodeId: string) {
@@ -191,7 +199,7 @@ function GraphView({ projectId }: { projectId: string }) {
         <RouteStatePane description="Loading project graph." state="loading" title="Graph" />
       ) : (
         <div className="graph-layout">
-          <div className="relative h-[680px] overflow-hidden rounded-lg border">
+          <div ref={graphContainerRef} className="relative h-[680px] overflow-hidden rounded-lg border">
             {searched.nodes.length > 0 ? (
               <>
                 <GraphCanvas
