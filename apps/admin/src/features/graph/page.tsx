@@ -48,12 +48,12 @@ export function GraphPage() {
     [filtered, search],
   );
   const surprising = useMemo(
-    () => findSurprisingConnections(searched.nodes, searched.edges, model.communities),
-    [searched, model.communities],
+    () => findSurprisingConnections(model.nodes, model.edges, model.communities),
+    [model],
   );
   const gaps = useMemo(
-    () => detectKnowledgeGaps(searched.nodes, searched.edges, model.communities),
-    [searched, model.communities],
+    () => detectKnowledgeGaps(model.nodes, model.edges, model.communities),
+    [model],
   );
   const selectedNode = useMemo(
     () => searched.nodes.find((node) => node.id === selectedNodeId) ?? null,
@@ -150,7 +150,7 @@ export function GraphPage() {
                   onNodeClick={handleNodeClick}
                 />
                 <GraphLegend
-                  nodes={searched.nodes}
+                  nodes={model.nodes}
                   communities={model.communities}
                   colorMode={colorMode}
                   hiddenTypes={filters.hiddenTypes}

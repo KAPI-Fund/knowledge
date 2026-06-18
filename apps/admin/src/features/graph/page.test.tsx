@@ -28,6 +28,7 @@ vi.mock("./queries", () => ({
       nodes: [
         { id: "a", label: "Alpha", nodeType: "concept", path: "wiki/a.md", linkCount: 2, sources: ["s1.pdf"] },
         { id: "b", label: "Beta", nodeType: "concept", path: "wiki/b.md", linkCount: 2, sources: ["s1.pdf"] },
+        { id: "ov", label: "Overview", nodeType: "overview", path: "wiki/overview.md", linkCount: 0, sources: [] },
       ],
       edges: [{ source: "a", target: "b", weight: 2 }],
     },
@@ -60,5 +61,13 @@ describe("GraphPage", () => {
     expect(screen.getByLabelText("Search graph")).toBeInTheDocument();
     expect(screen.getByText("Alpha")).toBeInTheDocument();
     expect(screen.getByText("Beta")).toBeInTheDocument();
+  });
+
+  it("legend reflects the full graph, including types filtered from the view", () => {
+    renderPage();
+    // 'overview' is structural and hidden from the canvas by default, but the
+    // legend is full-graph (upstream graph-view.tsx:795-798), so its type shows.
+    expect(screen.queryByRole("button", { name: "Overview" })).not.toBeInTheDocument();
+    expect(screen.getByText("overview")).toBeInTheDocument();
   });
 });
