@@ -9,16 +9,27 @@ vi.mock("./graph-canvas", () => ({
     nodes,
     highlightedNodes,
     onNodeClick,
+    onNodeContextMenu,
   }: {
     nodes: { id: string; label: string }[];
     highlightedNodes: Set<string>;
     onNodeClick: (id: string) => void;
+    onNodeContextMenu?: (id: string, x: number, y: number) => void;
   }) => (
     <div data-testid="graph-canvas" data-highlighted={[...highlightedNodes].join(",")}>
       {nodes.map((node) => (
-        <button key={node.id} onClick={() => onNodeClick(node.id)} type="button">
-          {node.label}
-        </button>
+        <div key={node.id}>
+          <button onClick={() => onNodeClick(node.id)} type="button">
+            {node.label}
+          </button>
+          <button
+            aria-label={`context ${node.label}`}
+            onClick={() => onNodeContextMenu?.(node.id, 0, 0)}
+            type="button"
+          >
+            ctx {node.label}
+          </button>
+        </div>
       ))}
     </div>
   ),
@@ -107,5 +118,18 @@ describe("GraphPage", () => {
     const gapButton = screen.getByRole("button", { name: /isolated page/i });
     await user.click(within(gapButton.closest("li")!).getByRole("button", { name: "Dismiss insight" }));
     expect(screen.getByTestId("graph-canvas")).toHaveAttribute("data-highlighted", "");
+  });
+
+  it("hides a node via the context menu and restores it from the hidden panel", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    expect(screen.getByRole("button", { name: "Alpha" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "context Alpha" }));
+    await user.click(screen.getByRole("button", { name: "Hide this node" }));
+    expect(screen.queryByRole("button", { name: "Alpha" })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Show" }));
+    expect(screen.getByRole("button", { name: "Alpha" })).toBeInTheDocument();
   });
 });

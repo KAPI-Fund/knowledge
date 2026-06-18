@@ -14,6 +14,7 @@ export interface GraphCanvasProps {
   colorMode: ColorMode;
   highlightedNodes: Set<string>;
   onNodeClick: (nodeId: string) => void;
+  onNodeContextMenu?: (nodeId: string, x: number, y: number) => void;
   nodeScale?: number;
   graphSpacing?: number;
 }
@@ -24,6 +25,7 @@ export function GraphCanvas({
   colorMode,
   highlightedNodes,
   onNodeClick,
+  onNodeContextMenu = () => {},
   nodeScale = DEFAULT_NODE_SCALE,
   graphSpacing = DEFAULT_GRAPH_SPACING,
 }: GraphCanvasProps) {
@@ -44,7 +46,11 @@ export function GraphCanvas({
           highlightedNodes={highlightedNodes}
           nodeCount={nodes.length}
         />
-        <EventHandler onNodeClick={onNodeClick} onHoverChange={setHoverState} />
+        <EventHandler
+          onNodeClick={onNodeClick}
+          onNodeContextMenu={onNodeContextMenu}
+          onHoverChange={setHoverState}
+        />
         <ZoomControls />
       </SigmaContainer>
     </div>
