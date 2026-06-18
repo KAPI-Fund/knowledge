@@ -21,9 +21,6 @@ export function GraphInsightsPanel({
   onDismiss,
   onClose,
 }: GraphInsightsPanelProps) {
-  const visibleSurprising = surprising;
-  const visibleGaps = gaps;
-
   return (
     <Card>
       <CardHeader className="flex flex-row items-center justify-between space-y-0">
@@ -41,11 +38,11 @@ export function GraphInsightsPanel({
             <Link2 className="h-3.5 w-3.5 text-sky-500" />
             Surprising connections
           </h3>
-          {visibleSurprising.length === 0 ? (
+          {surprising.length === 0 ? (
             <p className="text-xs text-muted-foreground">No surprising connections in the current view.</p>
           ) : (
             <ul className="grid gap-2">
-              {visibleSurprising.map((item) => {
+              {surprising.map((item) => {
                 const active = highlightedNodes.has(item.source.id) && highlightedNodes.has(item.target.id);
                 return (
                   <li key={item.key}>
@@ -83,11 +80,11 @@ export function GraphInsightsPanel({
             <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
             Knowledge gaps
           </h3>
-          {visibleGaps.length === 0 ? (
+          {gaps.length === 0 ? (
             <p className="text-xs text-muted-foreground">No knowledge gaps detected in the current view.</p>
           ) : (
             <ul className="grid gap-2">
-              {visibleGaps.map((gap) => {
+              {gaps.map((gap) => {
                 const key = knowledgeGapKey(gap);
                 return (
                   <li key={key}>
