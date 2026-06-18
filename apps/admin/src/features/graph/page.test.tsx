@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("./graph-canvas", () => ({
@@ -60,6 +60,29 @@ function renderPage() {
   return render(
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={["/projects/p1/graph"]}>
+        <Routes>
+          <Route element={<GraphPage />} path="/projects/:projectId/graph" />
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+}
+
+function NavTo({ to, label }: { to: string; label: string }) {
+  const navigate = useNavigate();
+  return (
+    <button onClick={() => navigate(to)} type="button">
+      {label}
+    </button>
+  );
+}
+
+function renderWithProjectNav() {
+  const client = new QueryClient();
+  return render(
+    <QueryClientProvider client={client}>
+      <MemoryRouter initialEntries={["/projects/p1/graph"]}>
+        <NavTo label="go p2" to="/projects/p2/graph" />
         <Routes>
           <Route element={<GraphPage />} path="/projects/:projectId/graph" />
         </Routes>
@@ -130,6 +153,18 @@ describe("GraphPage", () => {
     expect(screen.queryByRole("button", { name: "Alpha" })).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Show" }));
+    expect(screen.getByRole("button", { name: "Alpha" })).toBeInTheDocument();
+  });
+
+  it("resets hidden-node state when switching projects", async () => {
+    const user = userEvent.setup();
+    renderWithProjectNav();
+
+    await user.click(screen.getByRole("button", { name: "context Alpha" }));
+    await user.click(screen.getByRole("button", { name: "Hide this node" }));
+    expect(screen.queryByRole("button", { name: "Alpha" })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "go p2" }));
     expect(screen.getByRole("button", { name: "Alpha" })).toBeInTheDocument();
   });
 });

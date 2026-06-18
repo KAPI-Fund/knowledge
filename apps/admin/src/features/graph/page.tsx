@@ -22,6 +22,12 @@ import type { GraphFilterState } from "./types";
 
 export function GraphPage() {
   const { projectId = "" } = useParams();
+  // Key by projectId so switching projects remounts the view and resets all
+  // graph state (hidden nodes, dismissed insights, highlight, selection, search).
+  return <GraphView key={projectId} projectId={projectId} />;
+}
+
+function GraphView({ projectId }: { projectId: string }) {
   const graph = useProjectGraphQuery(projectId);
 
   const [search, setSearch] = useState("");
