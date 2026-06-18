@@ -1,18 +1,15 @@
-import { useState } from "react";
 import { AlertTriangle, Lightbulb, Link2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { knowledgeGapKey } from "./graph-insights";
 import type { KnowledgeGap, SurprisingConnection } from "./types";
-
-function knowledgeGapKey(gap: KnowledgeGap): string {
-  return `${gap.type}:${gap.nodeIds.join(",")}`;
-}
 
 interface GraphInsightsPanelProps {
   surprising: SurprisingConnection[];
   gaps: KnowledgeGap[];
   highlightedNodes: Set<string>;
   onHighlight: (nodeIds: Set<string>) => void;
+  onDismiss: (key: string, ids?: Set<string>) => void;
   onClose: () => void;
 }
 
@@ -21,20 +18,11 @@ export function GraphInsightsPanel({
   gaps,
   highlightedNodes,
   onHighlight,
+  onDismiss,
   onClose,
 }: GraphInsightsPanelProps) {
-  const [dismissed, setDismissed] = useState<Set<string>>(() => new Set());
-
-  const visibleSurprising = surprising.filter((item) => !dismissed.has(item.key));
-  const visibleGaps = gaps.filter((gap) => !dismissed.has(knowledgeGapKey(gap)));
-
-  function dismiss(key: string) {
-    setDismissed((prev) => {
-      const next = new Set(prev);
-      next.add(key);
-      return next;
-    });
-  }
+  const visibleSurprising = surprising;
+  const visibleGaps = gaps;
 
   return (
     <Card>
@@ -75,7 +63,7 @@ export function GraphInsightsPanel({
                         <button
                           aria-label="Dismiss insight"
                           className="text-muted-foreground hover:text-foreground"
-                          onClick={() => dismiss(item.key)}
+                          onClick={() => onDismiss(item.key, new Set([item.source.id, item.target.id]))}
                           type="button"
                         >
                           <X className="h-3 w-3" />
@@ -115,7 +103,7 @@ export function GraphInsightsPanel({
                         <button
                           aria-label="Dismiss insight"
                           className="text-muted-foreground hover:text-foreground"
-                          onClick={() => dismiss(key)}
+                          onClick={() => onDismiss(key, new Set(gap.nodeIds))}
                           type="button"
                         >
                           <X className="h-3 w-3" />

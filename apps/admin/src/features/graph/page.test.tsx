@@ -1,17 +1,20 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("./graph-canvas", () => ({
   GraphCanvas: ({
     nodes,
+    highlightedNodes,
     onNodeClick,
   }: {
     nodes: { id: string; label: string }[];
+    highlightedNodes: Set<string>;
     onNodeClick: (id: string) => void;
   }) => (
-    <div data-testid="graph-canvas">
+    <div data-testid="graph-canvas" data-highlighted={[...highlightedNodes].join(",")}>
       {nodes.map((node) => (
         <button key={node.id} onClick={() => onNodeClick(node.id)} type="button">
           {node.label}
@@ -29,6 +32,7 @@ vi.mock("./queries", () => ({
         { id: "a", label: "Alpha", nodeType: "concept", path: "wiki/a.md", linkCount: 2, sources: ["s1.pdf"] },
         { id: "b", label: "Beta", nodeType: "concept", path: "wiki/b.md", linkCount: 2, sources: ["s1.pdf"] },
         { id: "ov", label: "Overview", nodeType: "overview", path: "wiki/overview.md", linkCount: 0, sources: [] },
+        { id: "iso", label: "Iso", nodeType: "concept", path: "wiki/iso.md", linkCount: 0, sources: [] },
       ],
       edges: [{ source: "a", target: "b", weight: 2 }],
     },
@@ -69,5 +73,39 @@ describe("GraphPage", () => {
     // legend is full-graph (upstream graph-view.tsx:795-798), so its type shows.
     expect(screen.queryByRole("button", { name: "Overview" })).not.toBeInTheDocument();
     expect(screen.getByText("overview")).toBeInTheDocument();
+  });
+
+  it("clears the highlight when the insights panel is closed", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(screen.getByRole("button", { name: "Insights" }));
+    await user.click(screen.getByRole("button", { name: /isolated page/i }));
+    expect(screen.getByTestId("graph-canvas")).toHaveAttribute("data-highlighted", "iso");
+    await user.click(screen.getByRole("button", { name: "Close insights" }));
+    expect(screen.getByTestId("graph-canvas")).toHaveAttribute("data-highlighted", "");
+  });
+
+  it("keeps dismissed insights dismissed across a panel toggle", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(screen.getByRole("button", { name: "Insights" }));
+    const gapButton = screen.getByRole("button", { name: /isolated page/i });
+    await user.click(within(gapButton.closest("li")!).getByRole("button", { name: "Dismiss insight" }));
+    expect(screen.queryByText(/isolated page/i)).not.toBeInTheDocument();
+    // toggle the panel off and back on
+    await user.click(screen.getByRole("button", { name: "Insights" }));
+    await user.click(screen.getByRole("button", { name: "Insights" }));
+    expect(screen.queryByText(/isolated page/i)).not.toBeInTheDocument();
+  });
+
+  it("clears a matching highlight when its insight is dismissed", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(screen.getByRole("button", { name: "Insights" }));
+    await user.click(screen.getByRole("button", { name: /isolated page/i }));
+    expect(screen.getByTestId("graph-canvas")).toHaveAttribute("data-highlighted", "iso");
+    const gapButton = screen.getByRole("button", { name: /isolated page/i });
+    await user.click(within(gapButton.closest("li")!).getByRole("button", { name: "Dismiss insight" }));
+    expect(screen.getByTestId("graph-canvas")).toHaveAttribute("data-highlighted", "");
   });
 });

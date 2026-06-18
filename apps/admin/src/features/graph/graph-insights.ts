@@ -6,6 +6,11 @@ import type {
   SurprisingConnection,
 } from "./types";
 
+/** Stable key for a knowledge gap, used for dismissal. Mirrors upstream key shape. */
+export function knowledgeGapKey(gap: KnowledgeGap): string {
+  return `${gap.type}:${gap.nodeIds.join(",")}`;
+}
+
 /** Find edges that connect across communities, across types, or peripheral-to-hub.
  * Verbatim port of upstream graph-insights.ts:31-102. */
 export function findSurprisingConnections(

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 import { Filter, Lightbulb, Palette } from "lucide-react";
 
@@ -14,7 +14,7 @@ import { GraphLegend } from "./graph-legend";
 import { NodeDetailPanel } from "./node-detail-panel";
 import { applyGraphFilters, DEFAULT_GRAPH_FILTERS } from "./graph-filters";
 import { applyGraphSearch } from "./graph-search";
-import { detectKnowledgeGaps, findSurprisingConnections } from "./graph-insights";
+import { detectKnowledgeGaps, findSurprisingConnections, knowledgeGapKey } from "./graph-insights";
 import { buildGraphModel } from "./wiki-graph";
 import { useProjectGraphQuery } from "./queries";
 import type { ColorMode } from "./graph-loader";
@@ -34,6 +34,7 @@ export function GraphPage() {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [highlightedNodes, setHighlightedNodes] = useState<Set<string>>(() => new Set());
   const [showInsights, setShowInsights] = useState(false);
+  const [dismissedInsights, setDismissedInsights] = useState<Set<string>>(() => new Set());
 
   const model = useMemo(
     () => buildGraphModel(graph.data?.nodes ?? [], graph.data?.edges ?? []),
@@ -54,6 +55,23 @@ export function GraphPage() {
   const gaps = useMemo(
     () => detectKnowledgeGaps(model.nodes, model.edges, model.communities),
     [model],
+  );
+  const visibleSurprising = useMemo(
+    () => surprising.filter((item) => !dismissedInsights.has(item.key)),
+    [surprising, dismissedInsights],
+  );
+  const visibleGaps = useMemo(
+    () => gaps.filter((gap) => !dismissedInsights.has(knowledgeGapKey(gap))),
+    [gaps, dismissedInsights],
+  );
+  const dismissInsight = useCallback(
+    (key: string, ids?: Set<string>) => {
+      setDismissedInsights((prev) => new Set([...prev, key]));
+      if (ids && highlightedNodes.size === ids.size && [...ids].every((id) => highlightedNodes.has(id))) {
+        setHighlightedNodes(new Set());
+      }
+    },
+    [highlightedNodes],
   );
   const selectedNode = useMemo(
     () => searched.nodes.find((node) => node.id === selectedNodeId) ?? null,
@@ -110,7 +128,12 @@ export function GraphPage() {
           </Button>
           <Button
             aria-pressed={showInsights}
-            onClick={() => setShowInsights((value) => !value)}
+            onClick={() =>
+              setShowInsights((value) => {
+                if (value) setHighlightedNodes(new Set());
+                return !value;
+              })
+            }
             size="sm"
             variant={showInsights ? "default" : "outline"}
           >
@@ -173,11 +196,15 @@ export function GraphPage() {
             />
             {showInsights ? (
               <GraphInsightsPanel
-                surprising={surprising}
-                gaps={gaps}
+                surprising={visibleSurprising}
+                gaps={visibleGaps}
                 highlightedNodes={highlightedNodes}
                 onHighlight={setHighlightedNodes}
-                onClose={() => setShowInsights(false)}
+                onDismiss={dismissInsight}
+                onClose={() => {
+                  setShowInsights(false);
+                  setHighlightedNodes(new Set());
+                }}
               />
             ) : null}
           </div>
