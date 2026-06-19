@@ -13,6 +13,7 @@ pub mod query;
 pub mod retrieval;
 pub mod settings;
 pub mod tasks;
+pub mod tenancy;
 pub mod users;
 pub mod web_search;
 
