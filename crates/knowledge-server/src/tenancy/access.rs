@@ -25,8 +25,8 @@ pub async fn project_access_role(
     project_id: &str,
     user_id: &str,
 ) -> Result<Option<AccessRole>, sqlx::Error> {
-    let space = sqlx::query_as::<_, (String, Option<String>, Option<String>)>(
-        "SELECT s.kind, s.owner_user_id, s.org_id \
+    let space = sqlx::query_as::<_, (String, Option<String>, Option<String>, Option<String>)>(
+        "SELECT s.kind, s.owner_user_id, s.org_id, s.team_id \
          FROM spaces s JOIN projects p ON p.space_id = s.id \
          WHERE p.id = $1",
     )
@@ -34,7 +34,7 @@ pub async fn project_access_role(
     .fetch_optional(pool)
     .await?;
 
-    let Some((kind, owner_user_id, org_id)) = space else {
+    let Some((kind, owner_user_id, org_id, team_id)) = space else {
         return Ok(None);
     };
 
@@ -77,6 +77,56 @@ pub async fn project_access_role(
                 }
             }
         }
+        "team" => {
+            let Some(team_id) = team_id else {
+                return Ok(None);
+            };
+            let owning_org = sqlx::query_scalar::<_, String>(
+                "SELECT org_id FROM teams WHERE id = $1",
+            )
+            .bind(&team_id)
+            .fetch_optional(pool)
+            .await?;
+            let Some(owning_org) = owning_org else {
+                return Ok(None);
+            };
+            if is_org_admin(pool, &owning_org, user_id).await? {
+                return Ok(Some(AccessRole::Owner));
+            }
+            let team_role = sqlx::query_scalar::<_, String>(
+                "SELECT role FROM team_members WHERE team_id = $1 AND user_id = $2",
+            )
+            .bind(&team_id)
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await?;
+            if team_role.as_deref() == Some("leader") {
+                return Ok(Some(AccessRole::Editor));
+            }
+            let grant = sqlx::query_scalar::<_, String>(
+                "SELECT role FROM project_members WHERE project_id = $1 AND user_id = $2",
+            )
+            .bind(project_id)
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await?;
+            match grant.as_deref() {
+                Some("owner") | Some("editor") => Ok(Some(AccessRole::Editor)),
+                Some("viewer") => Ok(Some(AccessRole::Viewer)),
+                _ => Ok(None),
+            }
+        }
         _ => Ok(None),
     }
+}
+
+async fn is_org_admin(pool: &PgPool, org_id: &str, user_id: &str) -> Result<bool, sqlx::Error> {
+    let role = sqlx::query_scalar::<_, String>(
+        "SELECT role FROM organization_members WHERE org_id = $1 AND user_id = $2",
+    )
+    .bind(org_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(role.as_deref() == Some("org_admin"))
 }

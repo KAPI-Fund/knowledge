@@ -250,6 +250,46 @@ async fn grant_kb(pool: &sqlx::PgPool, project_id: &str, user_id: &str, role: &s
   .unwrap();
 }
 
+async fn insert_team(pool: &sqlx::PgPool, org_id: &str, slug: &str) -> (String, String) {
+  let team_id = Uuid::new_v4().to_string();
+  sqlx::query(
+    "INSERT INTO teams (id, org_id, name, slug, created_by, created_at) \
+     SELECT $1, $2, $3, $3, om.user_id, '2026-01-01T00:00:00Z' \
+     FROM organization_members om WHERE om.org_id = $2 AND om.role = 'org_admin' LIMIT 1",
+  )
+  .bind(&team_id)
+  .bind(org_id)
+  .bind(slug)
+  .execute(pool)
+  .await
+  .unwrap();
+  let space_id = Uuid::new_v4().to_string();
+  sqlx::query(
+    "INSERT INTO spaces (id, kind, owner_user_id, org_id, team_id, created_at) \
+     VALUES ($1, 'team', NULL, NULL, $2, '2026-01-01T00:00:00Z')",
+  )
+  .bind(&space_id)
+  .bind(&team_id)
+  .execute(pool)
+  .await
+  .unwrap();
+  (team_id, space_id)
+}
+
+async fn add_team_member(pool: &sqlx::PgPool, team_id: &str, user_id: &str, role: &str) {
+  sqlx::query(
+    "INSERT INTO team_members (id, team_id, user_id, role, created_at) \
+     VALUES ($1, $2, $3, $4, '2026-01-01T00:00:00Z')",
+  )
+  .bind(Uuid::new_v4().to_string())
+  .bind(team_id)
+  .bind(user_id)
+  .bind(role)
+  .execute(pool)
+  .await
+  .unwrap();
+}
+
 #[tokio::test]
 async fn access_role_matrix() {
   let env = TestEnvironment::start("tenancy-access-matrix").await.unwrap();
@@ -466,4 +506,73 @@ async fn team_migration_creates_tables_and_constraints() {
   .execute(pool)
   .await;
   assert!(malformed.is_err(), "team space with org_id set must be rejected");
+}
+
+#[tokio::test]
+async fn team_access_role_matrix() {
+  let env = TestEnvironment::start("team-access-matrix").await.unwrap();
+  let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let pool = &state.pool;
+
+  let admin = insert_user(pool, "tam-admin").await;
+  let leader = insert_user(pool, "tam-leader").await;
+  let granted_editor = insert_user(pool, "tam-editor").await;
+  let granted_viewer = insert_user(pool, "tam-viewer").await;
+  let no_grant = insert_user(pool, "tam-nogrant").await;
+  let other_member = insert_user(pool, "tam-other").await;
+  let stranger = insert_user(pool, "tam-stranger").await;
+
+  let (org_id, _org_space) = insert_org(pool, &admin, "tam-org").await;
+  add_org_member(pool, &org_id, &admin, "org_admin").await;
+  add_org_member(pool, &org_id, &leader, "org_member").await;
+  add_org_member(pool, &org_id, &granted_editor, "org_member").await;
+  add_org_member(pool, &org_id, &granted_viewer, "org_member").await;
+  add_org_member(pool, &org_id, &no_grant, "org_member").await;
+  add_org_member(pool, &org_id, &other_member, "org_member").await;
+
+  let (team_id, team_space) = insert_team(pool, &org_id, "team-a").await;
+  let team_project = insert_project_in_space(pool, &team_space, "team-kb").await;
+
+  add_team_member(pool, &team_id, &leader, "leader").await;
+  add_team_member(pool, &team_id, &granted_editor, "member").await;
+  add_team_member(pool, &team_id, &granted_viewer, "member").await;
+  add_team_member(pool, &team_id, &no_grant, "member").await;
+  grant_kb(pool, &team_project, &granted_editor, "editor").await;
+  grant_kb(pool, &team_project, &granted_viewer, "viewer").await;
+
+  // org_admin owns every org KB, including private team KBs.
+  assert_eq!(
+    project_access_role(pool, &team_project, &admin).await.unwrap(),
+    Some(AccessRole::Owner)
+  );
+  // The team leader is editor by default.
+  assert_eq!(
+    project_access_role(pool, &team_project, &leader).await.unwrap(),
+    Some(AccessRole::Editor)
+  );
+  // Granted members get exactly their grant.
+  assert_eq!(
+    project_access_role(pool, &team_project, &granted_editor).await.unwrap(),
+    Some(AccessRole::Editor)
+  );
+  assert_eq!(
+    project_access_role(pool, &team_project, &granted_viewer).await.unwrap(),
+    Some(AccessRole::Viewer)
+  );
+  // A team member with no grant has no access.
+  assert_eq!(
+    project_access_role(pool, &team_project, &no_grant).await.unwrap(),
+    None
+  );
+  // An org member who is not on the team has no access to a private team KB.
+  assert_eq!(
+    project_access_role(pool, &team_project, &other_member).await.unwrap(),
+    None
+  );
+  // A non-member of the org has no access.
+  assert_eq!(
+    project_access_role(pool, &team_project, &stranger).await.unwrap(),
+    None
+  );
 }
