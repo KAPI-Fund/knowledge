@@ -34,14 +34,22 @@ pub async fn create_project(
         .format(&Rfc3339)
         .map_err(|_| ApiError::internal("failed to format created_at"))?;
 
-    sqlx::query("INSERT INTO projects (id, name, root_path, created_at) VALUES ($1, $2, $3, $4)")
-        .bind(&id)
-        .bind(&input.name)
-        .bind(&root_path)
-        .bind(&created_at)
-        .execute(&state.pool)
-        .await
-        .map_err(ApiError::from)?;
+    let space_id =
+        crate::tenancy::spaces::ensure_personal_space(&state.pool, user_id, &created_at)
+            .await
+            .map_err(ApiError::from)?;
+
+    sqlx::query(
+        "INSERT INTO projects (id, name, root_path, space_id, created_at) VALUES ($1, $2, $3, $4, $5)",
+    )
+    .bind(&id)
+    .bind(&input.name)
+    .bind(&root_path)
+    .bind(&space_id)
+    .bind(&created_at)
+    .execute(&state.pool)
+    .await
+    .map_err(ApiError::from)?;
 
     sqlx::query(
     "INSERT INTO project_members (id, project_id, user_id, role, can_import, created_at) VALUES ($1, $2, $3, $4, $5, $6)",
@@ -49,7 +57,7 @@ pub async fn create_project(
   .bind(Uuid::new_v4().to_string())
   .bind(&id)
   .bind(user_id)
-  .bind("project_owner")
+  .bind("owner")
   .bind(true)
   .bind(&created_at)
   .execute(&state.pool)
