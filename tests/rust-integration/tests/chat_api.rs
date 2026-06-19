@@ -418,7 +418,58 @@ async fn conversations_are_private_to_their_owner() {
         .unwrap()
         .to_string();
 
-    // Second user: create the account explicitly (login no longer auto-creates), membership added directly.
+    // Second user gains project access the supported way: the project becomes
+    // org-owned, admin is the org admin, and Alice is an org member granted
+    // editor on this KB. Personal spaces are single-owner; cross-user sharing
+    // happens through organizations.
+    let admin_id = sqlx::query_scalar::<_, String>(
+        "SELECT id FROM users WHERE username = 'admin'",
+    )
+    .fetch_one(&state.pool)
+    .await
+    .unwrap();
+    let org_id = uuid::Uuid::new_v4().to_string();
+    sqlx::query(
+        "INSERT INTO organizations (id, name, slug, created_by, created_at)
+         VALUES ($1, $2, $3, $4, $5)",
+    )
+    .bind(&org_id)
+    .bind("Chat Org")
+    .bind(format!("chat-org-{org_id}"))
+    .bind(&admin_id)
+    .bind("2026-06-12T00:00:00Z")
+    .execute(&state.pool)
+    .await
+    .unwrap();
+    let org_space_id = uuid::Uuid::new_v4().to_string();
+    sqlx::query(
+        "INSERT INTO spaces (id, kind, owner_user_id, org_id, created_at)
+         VALUES ($1, 'org', NULL, $2, $3)",
+    )
+    .bind(&org_space_id)
+    .bind(&org_id)
+    .bind("2026-06-12T00:00:00Z")
+    .execute(&state.pool)
+    .await
+    .unwrap();
+    sqlx::query("UPDATE projects SET space_id = $1 WHERE id = $2")
+        .bind(&org_space_id)
+        .bind(&project_id)
+        .execute(&state.pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO organization_members (id, org_id, user_id, role, created_at)
+         VALUES ($1, $2, $3, 'org_admin', $4)",
+    )
+    .bind(uuid::Uuid::new_v4().to_string())
+    .bind(&org_id)
+    .bind(&admin_id)
+    .bind("2026-06-12T00:00:00Z")
+    .execute(&state.pool)
+    .await
+    .unwrap();
+
     let alice_id = uuid::Uuid::new_v4().to_string();
     let alice_hash =
         knowledge_server::auth::password::hash_password("alice-password").unwrap();
@@ -429,15 +480,26 @@ async fn conversations_are_private_to_their_owner() {
     .bind(&alice_id)
     .bind("alice")
     .bind(&alice_hash)
-    .bind("member")
+    .bind("user")
     .bind("2026-06-12T00:00:00Z")
     .execute(&state.pool)
     .await
     .unwrap();
     let (alice_cookie, alice_csrf) = login_as(state.clone(), "alice", "alice-password").await;
     sqlx::query(
+        "INSERT INTO organization_members (id, org_id, user_id, role, created_at)
+         VALUES ($1, $2, $3, 'org_member', $4)",
+    )
+    .bind(uuid::Uuid::new_v4().to_string())
+    .bind(&org_id)
+    .bind(&alice_id)
+    .bind("2026-06-12T00:00:00Z")
+    .execute(&state.pool)
+    .await
+    .unwrap();
+    sqlx::query(
         "INSERT INTO project_members (id, project_id, user_id, role, can_import, created_at)
-         VALUES ($1, $2, $3, 'member', FALSE, $4)",
+         VALUES ($1, $2, $3, 'editor', TRUE, $4)",
     )
     .bind(uuid::Uuid::new_v4().to_string())
     .bind(&project_id)
