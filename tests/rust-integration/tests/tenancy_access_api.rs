@@ -162,7 +162,7 @@ async fn created_project_belongs_to_owner_personal_space() {
   assert_eq!(member_role, "owner");
 }
 
-use knowledge_server::tenancy::access::{AccessRole, project_access_role};
+use knowledge_server::tenancy::access::{AccessRole, can_manage_kb_access, project_access_role};
 
 /// Insert a bare user row and return its id.
 async fn insert_user(pool: &sqlx::PgPool, username: &str) -> String {
@@ -575,4 +575,48 @@ async fn team_access_role_matrix() {
     project_access_role(pool, &team_project, &stranger).await.unwrap(),
     None
   );
+}
+
+#[tokio::test]
+async fn can_manage_kb_access_matrix() {
+  let env = TestEnvironment::start("team-manage-cap").await.unwrap();
+  let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let pool = &state.pool;
+
+  let admin = insert_user(pool, "cap-admin").await;
+  let leader = insert_user(pool, "cap-leader").await;
+  let other_leader = insert_user(pool, "cap-other-leader").await;
+  let member = insert_user(pool, "cap-member").await;
+
+  let (org_id, org_space) = insert_org(pool, &admin, "cap-org").await;
+  add_org_member(pool, &org_id, &admin, "org_admin").await;
+  add_org_member(pool, &org_id, &leader, "org_member").await;
+  add_org_member(pool, &org_id, &other_leader, "org_member").await;
+  add_org_member(pool, &org_id, &member, "org_member").await;
+
+  let public_project = insert_project_in_space(pool, &org_space, "cap-public-kb").await;
+
+  let (team_id, team_space) = insert_team(pool, &org_id, "cap-team").await;
+  let team_project = insert_project_in_space(pool, &team_space, "cap-team-kb").await;
+  add_team_member(pool, &team_id, &leader, "leader").await;
+  add_team_member(pool, &team_id, &member, "member").await;
+  grant_kb(pool, &team_project, &member, "editor").await;
+
+  let (_other_team, other_team_space) = insert_team(pool, &org_id, "cap-other-team").await;
+  let other_team_project = insert_project_in_space(pool, &other_team_space, "cap-other-kb").await;
+
+  // org_admin can manage grants on every org KB.
+  assert!(can_manage_kb_access(pool, &public_project, &admin).await.unwrap());
+  assert!(can_manage_kb_access(pool, &team_project, &admin).await.unwrap());
+  // A plain org member cannot manage a public KB's grants.
+  assert!(!can_manage_kb_access(pool, &public_project, &member).await.unwrap());
+  // The team leader manages their own team's KB.
+  assert!(can_manage_kb_access(pool, &team_project, &leader).await.unwrap());
+  // A granted (non-leader) member cannot manage grants.
+  assert!(!can_manage_kb_access(pool, &team_project, &member).await.unwrap());
+  // A leader of a different team cannot manage this team's KB.
+  add_team_member(pool, &_other_team, &other_leader, "leader").await;
+  assert!(!can_manage_kb_access(pool, &team_project, &other_leader).await.unwrap());
+  assert!(can_manage_kb_access(pool, &other_team_project, &other_leader).await.unwrap());
 }

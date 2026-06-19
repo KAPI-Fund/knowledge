@@ -120,6 +120,64 @@ pub async fn project_access_role(
     }
 }
 
+/// Whether `user_id` may manage per-KB access grants on `project_id`.
+///
+/// True for the owning org's `org_admin` (public or team KB), and for the
+/// `leader` of the team that owns a team-space KB. Personal-space KBs have no
+/// grant management (the owner controls them implicitly).
+pub async fn can_manage_kb_access(
+    pool: &PgPool,
+    project_id: &str,
+    user_id: &str,
+) -> Result<bool, sqlx::Error> {
+    let space = sqlx::query_as::<_, (String, Option<String>, Option<String>)>(
+        "SELECT s.kind, s.org_id, s.team_id \
+         FROM spaces s JOIN projects p ON p.space_id = s.id \
+         WHERE p.id = $1",
+    )
+    .bind(project_id)
+    .fetch_optional(pool)
+    .await?;
+
+    let Some((kind, org_id, team_id)) = space else {
+        return Ok(false);
+    };
+
+    match kind.as_str() {
+        "org" => {
+            let Some(org_id) = org_id else {
+                return Ok(false);
+            };
+            is_org_admin(pool, &org_id, user_id).await
+        }
+        "team" => {
+            let Some(team_id) = team_id else {
+                return Ok(false);
+            };
+            let owning_org = sqlx::query_scalar::<_, String>(
+                "SELECT org_id FROM teams WHERE id = $1",
+            )
+            .bind(&team_id)
+            .fetch_optional(pool)
+            .await?;
+            if let Some(owning_org) = owning_org {
+                if is_org_admin(pool, &owning_org, user_id).await? {
+                    return Ok(true);
+                }
+            }
+            let team_role = sqlx::query_scalar::<_, String>(
+                "SELECT role FROM team_members WHERE team_id = $1 AND user_id = $2",
+            )
+            .bind(&team_id)
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await?;
+            Ok(team_role.as_deref() == Some("leader"))
+        }
+        _ => Ok(false),
+    }
+}
+
 async fn is_org_admin(pool: &PgPool, org_id: &str, user_id: &str) -> Result<bool, sqlx::Error> {
     let role = sqlx::query_scalar::<_, String>(
         "SELECT role FROM organization_members WHERE org_id = $1 AND user_id = $2",
