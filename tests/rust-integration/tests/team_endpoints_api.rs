@@ -920,3 +920,63 @@ async fn list_projects_member_sees_public_but_not_ungranted_team_kb() {
   assert_eq!(projects[0]["spaceKind"].as_str().unwrap(), "org");
   assert_eq!(projects[0]["role"].as_str().unwrap(), "viewer");
 }
+
+#[tokio::test]
+async fn delete_project_succeeds_for_org_admin() {
+  let env = TestEnvironment::start("team_endpoints_delete_proj").await.unwrap();
+  let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let admin = admin_id(&state.pool).await;
+  let (org_id, org_space) = insert_org(&state.pool, &admin, "acme").await;
+  add_org_member(&state.pool, &org_id, &admin, "org_admin").await;
+  let project_id = insert_project_in_space(&state.pool, &org_space, "public-kb").await;
+  let (cookie, csrf) = login_admin(&state).await;
+
+  let response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("DELETE")
+        .uri(format!("/api/projects/{project_id}"))
+        .header(header::COOKIE, &cookie)
+        .header("x-csrf-token", &csrf)
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::NO_CONTENT);
+  let count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM projects WHERE id = $1")
+    .bind(&project_id)
+    .fetch_one(&state.pool)
+    .await
+    .unwrap();
+  assert_eq!(count, 0);
+}
+
+#[tokio::test]
+async fn delete_project_forbidden_for_viewer() {
+  let env = TestEnvironment::start("team_endpoints_delete_proj_403").await.unwrap();
+  let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let admin = admin_id(&state.pool).await;
+  let founder = insert_user(&state.pool, "founder").await;
+  let (org_id, org_space) = insert_org(&state.pool, &founder, "acme").await;
+  add_org_member(&state.pool, &org_id, &founder, "org_admin").await;
+  add_org_member(&state.pool, &org_id, &admin, "org_member").await; // viewer on public KB
+  let project_id = insert_project_in_space(&state.pool, &org_space, "public-kb").await;
+  let (cookie, csrf) = login_admin(&state).await;
+
+  let response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("DELETE")
+        .uri(format!("/api/projects/{project_id}"))
+        .header(header::COOKIE, &cookie)
+        .header("x-csrf-token", &csrf)
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}

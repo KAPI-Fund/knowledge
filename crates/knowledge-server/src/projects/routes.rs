@@ -43,7 +43,10 @@ pub fn router() -> Router<AppState> {
             "/api/projects",
             get(list_projects_handler).post(create_project_handler),
         )
-        .route("/api/projects/{project_id}", get(project_detail_handler))
+        .route(
+            "/api/projects/{project_id}",
+            get(project_detail_handler).delete(delete_project_handler),
+        )
         .route(
             "/api/projects/{project_id}/members",
             get(list_project_members),
@@ -457,6 +460,46 @@ async fn project_detail_handler(
 ) -> Result<impl IntoResponse, ApiError> {
     let _session = authorized_principal(&state, &headers, Some(&project_id)).await?;
     Ok(Json(project_detail(&state, &project_id).await?))
+}
+
+async fn delete_project_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(project_id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let session = authorized_principal(&state, &headers, None).await?;
+    validate_csrf(&headers, &session)?;
+
+    let exists = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM projects WHERE id = $1")
+        .bind(&project_id)
+        .fetch_one(&state.pool)
+        .await
+        .map_err(ApiError::from)?;
+    if exists == 0 {
+        return Err(ApiError::not_found("project not found"));
+    }
+
+    let role = crate::tenancy::access::project_access_role(
+        &state.pool,
+        &project_id,
+        &session.user_id,
+    )
+    .await
+    .map_err(ApiError::from)?;
+    let can_manage =
+        crate::tenancy::access::can_manage_kb_access(&state.pool, &project_id, &session.user_id)
+            .await
+            .map_err(ApiError::from)?;
+    if role != Some(crate::tenancy::access::AccessRole::Owner) && !can_manage {
+        return Err(ApiError::forbidden("not permitted to delete this project"));
+    }
+
+    sqlx::query("DELETE FROM projects WHERE id = $1")
+        .bind(&project_id)
+        .execute(&state.pool)
+        .await
+        .map_err(ApiError::from)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn list_project_members(
