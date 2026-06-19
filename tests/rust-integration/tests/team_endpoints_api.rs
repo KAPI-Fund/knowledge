@@ -848,3 +848,75 @@ async fn create_project_in_team_space_allows_member() {
     .unwrap();
   assert_eq!(response.status(), StatusCode::CREATED);
 }
+
+#[tokio::test]
+async fn list_projects_org_context_includes_public_and_team_kbs() {
+  let env = TestEnvironment::start("team_endpoints_list_proj_org").await.unwrap();
+  let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let admin = admin_id(&state.pool).await;
+  let (org_id, org_space) = insert_org(&state.pool, &admin, "acme").await;
+  add_org_member(&state.pool, &org_id, &admin, "org_admin").await;
+  insert_project_in_space(&state.pool, &org_space, "public-kb").await;
+  let (_team_id, team_space) = insert_team(&state.pool, &org_id, "platform").await;
+  insert_project_in_space(&state.pool, &team_space, "team-kb").await;
+  let (cookie, _csrf) = login_admin(&state).await;
+
+  let response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("GET")
+        .uri(format!("/api/projects?spaceId={org_space}"))
+        .header(header::COOKIE, &cookie)
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::OK);
+  let body = read_json(response.into_body()).await;
+  let projects = body["projects"].as_array().unwrap();
+  // org_admin is Owner on both the public KB and the team KB.
+  assert_eq!(projects.len(), 2);
+  let kinds: Vec<&str> = projects
+    .iter()
+    .map(|p| p["spaceKind"].as_str().unwrap())
+    .collect();
+  assert!(kinds.contains(&"org"));
+  assert!(kinds.contains(&"team"));
+}
+
+#[tokio::test]
+async fn list_projects_member_sees_public_but_not_ungranted_team_kb() {
+  let env = TestEnvironment::start("team_endpoints_list_proj_member").await.unwrap();
+  let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let admin = admin_id(&state.pool).await;
+  let founder = insert_user(&state.pool, "founder").await;
+  let (org_id, org_space) = insert_org(&state.pool, &founder, "acme").await;
+  add_org_member(&state.pool, &org_id, &founder, "org_admin").await;
+  add_org_member(&state.pool, &org_id, &admin, "org_member").await;
+  insert_project_in_space(&state.pool, &org_space, "public-kb").await;
+  let (_team_id, team_space) = insert_team(&state.pool, &org_id, "platform").await;
+  insert_project_in_space(&state.pool, &team_space, "team-kb").await; // admin not in team
+  let (cookie, _csrf) = login_admin(&state).await;
+
+  let response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("GET")
+        .uri(format!("/api/projects?spaceId={org_space}"))
+        .header(header::COOKIE, &cookie)
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::OK);
+  let body = read_json(response.into_body()).await;
+  let projects = body["projects"].as_array().unwrap();
+  // org_member: Viewer on the public KB, no access to the team KB.
+  assert_eq!(projects.len(), 1);
+  assert_eq!(projects[0]["spaceKind"].as_str().unwrap(), "org");
+  assert_eq!(projects[0]["role"].as_str().unwrap(), "viewer");
+}

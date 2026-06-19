@@ -285,29 +285,167 @@ async fn create_project_handler(
     Ok((StatusCode::CREATED, Json(project)))
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ListProjectsQuery {
+    #[serde(default)]
+    pub space_id: Option<String>,
+}
+
 async fn list_projects_handler(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Query(query): Query<ListProjectsQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let _session = authorized_principal(&state, &headers, None).await?;
-    let rows = sqlx::query_as::<_, (String, String, String, String)>(
-        "SELECT id, name, root_path, created_at FROM projects ORDER BY created_at ASC",
-    )
-    .fetch_all(&state.pool)
-    .await
-    .map_err(ApiError::from)?;
+    let session = authorized_principal(&state, &headers, None).await?;
+    let user_id = session.user_id.clone();
 
-    let projects = rows
-        .into_iter()
-        .map(|(id, name, root_path, created_at)| {
-            json!({
-              "id": id,
-              "name": name,
-              "rootPath": normalize_project_path_string(std::path::Path::new(&root_path)),
-              "createdAt": created_at
+    let space_id = match query.space_id {
+        Some(id) => id,
+        None => {
+            match crate::tenancy::spaces::personal_space_id(&state.pool, &user_id)
+                .await
+                .map_err(ApiError::from)?
+            {
+                Some(id) => id,
+                None => return Ok(Json(json!({ "projects": [] }))),
+            }
+        }
+    };
+
+    let space = sqlx::query_as::<_, (String, Option<String>, Option<String>, Option<String>)>(
+        "SELECT kind, owner_user_id, org_id, team_id FROM spaces WHERE id = $1",
+    )
+    .bind(&space_id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(ApiError::from)?
+    .ok_or_else(|| ApiError::not_found("space not found"))?;
+    let (kind, owner_user_id, org_id, _team_id) = space;
+
+    // candidate rows: (id, name, root_path, created_at, space_kind, team_id, team_slug)
+    type Candidate = (
+        String,
+        String,
+        String,
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+    );
+    let candidates: Vec<Candidate> = match kind.as_str() {
+        "personal" => {
+            if owner_user_id.as_deref() != Some(user_id.as_str()) {
+                return Err(ApiError::forbidden("not your personal space"));
+            }
+            sqlx::query_as::<_, (String, String, String, String)>(
+                "SELECT id, name, root_path, created_at FROM projects \
+                 WHERE space_id = $1 ORDER BY created_at ASC",
+            )
+            .bind(&space_id)
+            .fetch_all(&state.pool)
+            .await
+            .map_err(ApiError::from)?
+            .into_iter()
+            .map(|(id, name, rp, ca)| (id, name, rp, ca, "personal".to_string(), None, None))
+            .collect()
+        }
+        "org" => {
+            let org_id = org_id.ok_or_else(|| ApiError::internal("org space missing org_id"))?;
+            if crate::tenancy::access::org_member_role(&state.pool, &org_id, &user_id)
+                .await
+                .map_err(ApiError::from)?
+                .is_none()
+            {
+                return Err(ApiError::forbidden("not a member of this org"));
+            }
+            sqlx::query_as::<_, Candidate>(
+                "SELECT p.id, p.name, p.root_path, p.created_at, 'org', NULL, NULL \
+                 FROM projects p JOIN spaces s ON s.id = p.space_id \
+                 WHERE s.kind = 'org' AND s.org_id = $1 \
+                 UNION ALL \
+                 SELECT p.id, p.name, p.root_path, p.created_at, 'team', t.id, t.slug \
+                 FROM projects p JOIN spaces s ON s.id = p.space_id \
+                 JOIN teams t ON t.id = s.team_id \
+                 WHERE s.kind = 'team' AND t.org_id = $1 \
+                 ORDER BY 4 ASC",
+            )
+            .bind(&org_id)
+            .fetch_all(&state.pool)
+            .await
+            .map_err(ApiError::from)?
+        }
+        "team" => {
+            let team_id = _team_id.ok_or_else(|| ApiError::internal("team space missing team_id"))?;
+            let owning_org =
+                sqlx::query_scalar::<_, String>("SELECT org_id FROM teams WHERE id = $1")
+                    .bind(&team_id)
+                    .fetch_optional(&state.pool)
+                    .await
+                    .map_err(ApiError::from)?
+                    .ok_or_else(|| ApiError::not_found("team not found"))?;
+            if crate::tenancy::access::org_member_role(&state.pool, &owning_org, &user_id)
+                .await
+                .map_err(ApiError::from)?
+                .is_none()
+            {
+                return Err(ApiError::forbidden("not a member of this org"));
+            }
+            let slug = sqlx::query_scalar::<_, String>("SELECT slug FROM teams WHERE id = $1")
+                .bind(&team_id)
+                .fetch_one(&state.pool)
+                .await
+                .map_err(ApiError::from)?;
+            sqlx::query_as::<_, (String, String, String, String)>(
+                "SELECT id, name, root_path, created_at FROM projects \
+                 WHERE space_id = $1 ORDER BY created_at ASC",
+            )
+            .bind(&space_id)
+            .fetch_all(&state.pool)
+            .await
+            .map_err(ApiError::from)?
+            .into_iter()
+            .map(|(id, name, rp, ca)| {
+                (
+                    id,
+                    name,
+                    rp,
+                    ca,
+                    "team".to_string(),
+                    Some(team_id.clone()),
+                    Some(slug.clone()),
+                )
             })
-        })
-        .collect::<Vec<_>>();
+            .collect()
+        }
+        _ => return Err(ApiError::bad_request("unknown space kind")),
+    };
+
+    let mut projects = Vec::new();
+    for (id, name, root_path, created_at, space_kind, team_id, team_slug) in candidates {
+        let Some(role) =
+            crate::tenancy::access::project_access_role(&state.pool, &id, &user_id)
+                .await
+                .map_err(ApiError::from)?
+        else {
+            continue;
+        };
+        let role_str = match role {
+            crate::tenancy::access::AccessRole::Owner => "owner",
+            crate::tenancy::access::AccessRole::Editor => "editor",
+            crate::tenancy::access::AccessRole::Viewer => "viewer",
+        };
+        projects.push(json!({
+            "id": id,
+            "name": name,
+            "rootPath": normalize_project_path_string(std::path::Path::new(&root_path)),
+            "createdAt": created_at,
+            "spaceKind": space_kind,
+            "teamId": team_id,
+            "teamSlug": team_slug,
+            "role": role_str,
+        }));
+    }
 
     Ok(Json(json!({ "projects": projects })))
 }
