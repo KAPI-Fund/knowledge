@@ -278,3 +278,137 @@ async fn create_org_rejects_duplicate_slug() {
     .unwrap();
   assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
+
+#[tokio::test]
+async fn add_org_member_succeeds_for_org_admin() {
+  let env = TestEnvironment::start("team_endpoints_add_member").await.unwrap();
+  let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let admin = admin_id(&state.pool).await;
+  let (org_id, _space) = insert_org(&state.pool, &admin, "acme").await;
+  add_org_member(&state.pool, &org_id, &admin, "org_admin").await;
+  insert_user(&state.pool, "bob").await;
+  let (cookie, csrf) = login_admin(&state).await;
+
+  let response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri(format!("/api/orgs/{org_id}/members"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::COOKIE, &cookie)
+        .header("x-csrf-token", &csrf)
+        .body(Body::from(
+          json!({ "usernameOrEmail": "bob", "role": "org_member" }).to_string(),
+        ))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::CREATED);
+
+  let role = sqlx::query_scalar::<_, String>(
+    "SELECT om.role FROM organization_members om JOIN users u ON u.id = om.user_id \
+     WHERE om.org_id = $1 AND u.username = 'bob'",
+  )
+  .bind(&org_id)
+  .fetch_one(&state.pool)
+  .await
+  .unwrap();
+  assert_eq!(role, "org_member");
+}
+
+#[tokio::test]
+async fn add_org_member_unknown_user_is_404() {
+  let env = TestEnvironment::start("team_endpoints_add_member_404").await.unwrap();
+  let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let admin = admin_id(&state.pool).await;
+  let (org_id, _space) = insert_org(&state.pool, &admin, "acme").await;
+  add_org_member(&state.pool, &org_id, &admin, "org_admin").await;
+  let (cookie, csrf) = login_admin(&state).await;
+
+  let response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri(format!("/api/orgs/{org_id}/members"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::COOKIE, &cookie)
+        .header("x-csrf-token", &csrf)
+        .body(Body::from(
+          json!({ "usernameOrEmail": "ghost", "role": "org_member" }).to_string(),
+        ))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn add_org_member_requires_org_admin() {
+  let env = TestEnvironment::start("team_endpoints_add_member_403").await.unwrap();
+  let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  // org owned by someone other than the seeded admin; admin is not a member.
+  let founder = insert_user(&state.pool, "founder").await;
+  let (org_id, _space) = insert_org(&state.pool, &founder, "acme").await;
+  add_org_member(&state.pool, &org_id, &founder, "org_admin").await;
+  insert_user(&state.pool, "bob").await;
+  let (cookie, csrf) = login_admin(&state).await;
+
+  let response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri(format!("/api/orgs/{org_id}/members"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::COOKIE, &cookie)
+        .header("x-csrf-token", &csrf)
+        .body(Body::from(
+          json!({ "usernameOrEmail": "bob", "role": "org_member" }).to_string(),
+        ))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn remove_org_member_succeeds_for_org_admin() {
+  let env = TestEnvironment::start("team_endpoints_remove_member").await.unwrap();
+  let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let admin = admin_id(&state.pool).await;
+  let (org_id, _space) = insert_org(&state.pool, &admin, "acme").await;
+  add_org_member(&state.pool, &org_id, &admin, "org_admin").await;
+  let bob = insert_user(&state.pool, "bob").await;
+  add_org_member(&state.pool, &org_id, &bob, "org_member").await;
+  let (cookie, csrf) = login_admin(&state).await;
+
+  let response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("DELETE")
+        .uri(format!("/api/orgs/{org_id}/members/{bob}"))
+        .header(header::COOKIE, &cookie)
+        .header("x-csrf-token", &csrf)
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+  let count = sqlx::query_scalar::<_, i64>(
+    "SELECT COUNT(*) FROM organization_members WHERE org_id = $1 AND user_id = $2",
+  )
+  .bind(&org_id)
+  .bind(&bob)
+  .fetch_one(&state.pool)
+  .await
+  .unwrap();
+  assert_eq!(count, 0);
+}
