@@ -161,3 +161,155 @@ async fn created_project_belongs_to_owner_personal_space() {
   .unwrap();
   assert_eq!(member_role, "owner");
 }
+
+use knowledge_server::tenancy::access::{AccessRole, project_access_role};
+
+/// Insert a bare user row and return its id.
+async fn insert_user(pool: &sqlx::PgPool, username: &str) -> String {
+  let id = Uuid::new_v4().to_string();
+  sqlx::query(
+    "INSERT INTO users (id, username, password_hash, role, created_at) \
+     VALUES ($1, $2, 'x', 'user', '2026-01-01T00:00:00Z')",
+  )
+  .bind(&id)
+  .bind(username)
+  .execute(pool)
+  .await
+  .unwrap();
+  id
+}
+
+async fn insert_org(pool: &sqlx::PgPool, created_by: &str, slug: &str) -> (String, String) {
+  let org_id = Uuid::new_v4().to_string();
+  sqlx::query(
+    "INSERT INTO organizations (id, name, slug, created_by, created_at) \
+     VALUES ($1, $2, $3, $4, '2026-01-01T00:00:00Z')",
+  )
+  .bind(&org_id)
+  .bind(slug)
+  .bind(slug)
+  .bind(created_by)
+  .execute(pool)
+  .await
+  .unwrap();
+  let space_id = Uuid::new_v4().to_string();
+  sqlx::query(
+    "INSERT INTO spaces (id, kind, owner_user_id, org_id, created_at) \
+     VALUES ($1, 'org', NULL, $2, '2026-01-01T00:00:00Z')",
+  )
+  .bind(&space_id)
+  .bind(&org_id)
+  .execute(pool)
+  .await
+  .unwrap();
+  (org_id, space_id)
+}
+
+async fn insert_project_in_space(pool: &sqlx::PgPool, space_id: &str, name: &str) -> String {
+  let id = Uuid::new_v4().to_string();
+  sqlx::query(
+    "INSERT INTO projects (id, name, root_path, space_id, created_at) \
+     VALUES ($1, $2, $3, $4, '2026-01-01T00:00:00Z')",
+  )
+  .bind(&id)
+  .bind(name)
+  .bind(format!("/tmp/{id}"))
+  .bind(space_id)
+  .execute(pool)
+  .await
+  .unwrap();
+  id
+}
+
+async fn add_org_member(pool: &sqlx::PgPool, org_id: &str, user_id: &str, role: &str) {
+  sqlx::query(
+    "INSERT INTO organization_members (id, org_id, user_id, role, created_at) \
+     VALUES ($1, $2, $3, $4, '2026-01-01T00:00:00Z')",
+  )
+  .bind(Uuid::new_v4().to_string())
+  .bind(org_id)
+  .bind(user_id)
+  .bind(role)
+  .execute(pool)
+  .await
+  .unwrap();
+}
+
+async fn grant_kb(pool: &sqlx::PgPool, project_id: &str, user_id: &str, role: &str) {
+  sqlx::query(
+    "INSERT INTO project_members (id, project_id, user_id, role, can_import, created_at) \
+     VALUES ($1, $2, $3, $4, $5, '2026-01-01T00:00:00Z')",
+  )
+  .bind(Uuid::new_v4().to_string())
+  .bind(project_id)
+  .bind(user_id)
+  .bind(role)
+  .bind(role != "viewer")
+  .execute(pool)
+  .await
+  .unwrap();
+}
+
+#[tokio::test]
+async fn access_role_matrix() {
+  let env = TestEnvironment::start("tenancy-access-matrix").await.unwrap();
+  let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let pool = &state.pool;
+
+  let owner = insert_user(pool, "owner-user").await;
+  let stranger = insert_user(pool, "stranger").await;
+  let admin = insert_user(pool, "org-admin").await;
+  let editor = insert_user(pool, "org-editor").await;
+  let viewer = insert_user(pool, "org-viewer").await;
+  let ungranted = insert_user(pool, "org-ungranted").await;
+
+  // Personal space + project owned by `owner`.
+  let owner_space =
+    knowledge_server::tenancy::spaces::ensure_personal_space(pool, &owner, "2026-01-01T00:00:00Z")
+      .await
+      .unwrap();
+  let personal_project = insert_project_in_space(pool, &owner_space, "personal-kb").await;
+
+  // Org + org project, with members and grants.
+  let (org_id, org_space) = insert_org(pool, &admin, "acme").await;
+  let org_project = insert_project_in_space(pool, &org_space, "org-kb").await;
+  add_org_member(pool, &org_id, &admin, "org_admin").await;
+  add_org_member(pool, &org_id, &editor, "org_member").await;
+  add_org_member(pool, &org_id, &viewer, "org_member").await;
+  add_org_member(pool, &org_id, &ungranted, "org_member").await;
+  grant_kb(pool, &org_project, &editor, "editor").await;
+  grant_kb(pool, &org_project, &viewer, "viewer").await;
+
+  // Personal space rules.
+  assert_eq!(
+    project_access_role(pool, &personal_project, &owner).await.unwrap(),
+    Some(AccessRole::Owner)
+  );
+  assert_eq!(
+    project_access_role(pool, &personal_project, &stranger).await.unwrap(),
+    None
+  );
+
+  // Org space rules.
+  assert_eq!(
+    project_access_role(pool, &org_project, &admin).await.unwrap(),
+    Some(AccessRole::Owner)
+  );
+  assert_eq!(
+    project_access_role(pool, &org_project, &editor).await.unwrap(),
+    Some(AccessRole::Editor)
+  );
+  assert_eq!(
+    project_access_role(pool, &org_project, &viewer).await.unwrap(),
+    Some(AccessRole::Viewer)
+  );
+  assert_eq!(
+    project_access_role(pool, &org_project, &ungranted).await.unwrap(),
+    None
+  );
+  assert_eq!(
+    project_access_role(pool, &org_project, &stranger).await.unwrap(),
+    None
+  );
+}
