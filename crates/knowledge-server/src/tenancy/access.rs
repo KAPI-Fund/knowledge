@@ -178,7 +178,7 @@ pub async fn can_manage_kb_access(
     }
 }
 
-async fn is_org_admin(pool: &PgPool, org_id: &str, user_id: &str) -> Result<bool, sqlx::Error> {
+pub async fn is_org_admin(pool: &PgPool, org_id: &str, user_id: &str) -> Result<bool, sqlx::Error> {
     let role = sqlx::query_scalar::<_, String>(
         "SELECT role FROM organization_members WHERE org_id = $1 AND user_id = $2",
     )
@@ -187,4 +187,35 @@ async fn is_org_admin(pool: &PgPool, org_id: &str, user_id: &str) -> Result<bool
     .fetch_optional(pool)
     .await?;
     Ok(role.as_deref() == Some("org_admin"))
+}
+
+/// The caller's role within an org (`org_admin` / `org_member`), or `None` if
+/// they are not a member.
+pub async fn org_member_role(
+    pool: &PgPool,
+    org_id: &str,
+    user_id: &str,
+) -> Result<Option<String>, sqlx::Error> {
+    sqlx::query_scalar::<_, String>(
+        "SELECT role FROM organization_members WHERE org_id = $1 AND user_id = $2",
+    )
+    .bind(org_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+}
+
+/// The caller's role within a team (`leader` / `member`), or `None`.
+pub async fn team_member_role(
+    pool: &PgPool,
+    team_id: &str,
+    user_id: &str,
+) -> Result<Option<String>, sqlx::Error> {
+    sqlx::query_scalar::<_, String>(
+        "SELECT role FROM team_members WHERE team_id = $1 AND user_id = $2",
+    )
+    .bind(team_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
 }
