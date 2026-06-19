@@ -304,9 +304,10 @@ async fn access_role_matrix() {
     project_access_role(pool, &org_project, &viewer).await.unwrap(),
     Some(AccessRole::Viewer)
   );
+  // Org-space KBs are public: an org member with no grant reads as viewer.
   assert_eq!(
     project_access_role(pool, &org_project, &ungranted).await.unwrap(),
-    None
+    Some(AccessRole::Viewer)
   );
   assert_eq!(
     project_access_role(pool, &org_project, &stranger).await.unwrap(),

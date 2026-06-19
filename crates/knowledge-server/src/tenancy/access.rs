@@ -71,8 +71,8 @@ pub async fn project_access_role(
                     .await?;
                     match grant.as_deref() {
                         Some("owner") | Some("editor") => Ok(Some(AccessRole::Editor)),
-                        Some("viewer") => Ok(Some(AccessRole::Viewer)),
-                        _ => Ok(None),
+                        // Public org KB: any org member reads by default.
+                        _ => Ok(Some(AccessRole::Viewer)),
                     }
                 }
             }
