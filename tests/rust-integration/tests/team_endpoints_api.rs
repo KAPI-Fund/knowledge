@@ -712,3 +712,45 @@ async fn remove_team_member_cannot_remove_leader() {
     .unwrap();
   assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
+
+#[tokio::test]
+async fn list_spaces_returns_personal_orgs_and_teams() {
+  let env = TestEnvironment::start("team_endpoints_list_spaces").await.unwrap();
+  let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let admin = admin_id(&state.pool).await;
+  let (org_id, _space) = insert_org(&state.pool, &admin, "acme").await;
+  add_org_member(&state.pool, &org_id, &admin, "org_admin").await;
+  let (team_id, _t) = insert_team(&state.pool, &org_id, "platform").await;
+  add_team_member(&state.pool, &team_id, &admin, "leader").await;
+  let (cookie, _csrf) = login_admin(&state).await;
+
+  let response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("GET")
+        .uri("/api/spaces")
+        .header(header::COOKIE, &cookie)
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::OK);
+  let body = read_json(response.into_body()).await;
+
+  assert!(body["personal"]["spaceId"].as_str().is_some());
+
+  let orgs = body["orgs"].as_array().unwrap();
+  assert_eq!(orgs.len(), 1);
+  assert_eq!(orgs[0]["id"].as_str().unwrap(), org_id);
+  assert_eq!(orgs[0]["role"].as_str().unwrap(), "org_admin");
+  assert!(orgs[0]["spaceId"].as_str().is_some());
+
+  let teams = body["teams"].as_array().unwrap();
+  assert_eq!(teams.len(), 1);
+  assert_eq!(teams[0]["id"].as_str().unwrap(), team_id);
+  assert_eq!(teams[0]["orgId"].as_str().unwrap(), org_id);
+  assert_eq!(teams[0]["role"].as_str().unwrap(), "leader");
+  assert!(teams[0]["spaceId"].as_str().is_some());
+}

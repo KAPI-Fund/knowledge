@@ -22,6 +22,7 @@ pub fn build_router(state: AppState) -> Router {
     .merge(projects::routes::router())
     .merge(settings::routes::router())
     .merge(tenancy::orgs::router())
+    .merge(tenancy::spaces_api::router())
     .merge(tenancy::teams::router())
     .merge(users::routes::router())
     .merge(web_search::routes::router())
