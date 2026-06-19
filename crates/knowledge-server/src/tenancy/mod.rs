@@ -1,4 +1,5 @@
 pub mod access;
+pub mod grants;
 pub mod orgs;
 pub mod slug;
 pub mod spaces;

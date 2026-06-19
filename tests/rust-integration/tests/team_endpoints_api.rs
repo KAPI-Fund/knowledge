@@ -980,3 +980,139 @@ async fn delete_project_forbidden_for_viewer() {
     .unwrap();
   assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
+
+#[tokio::test]
+async fn grant_kb_editor_to_org_member() {
+  let env = TestEnvironment::start("team_endpoints_grant").await.unwrap();
+  let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let admin = admin_id(&state.pool).await;
+  let (org_id, org_space) = insert_org(&state.pool, &admin, "acme").await;
+  add_org_member(&state.pool, &org_id, &admin, "org_admin").await;
+  let bob = insert_user(&state.pool, "bob").await;
+  add_org_member(&state.pool, &org_id, &bob, "org_member").await;
+  let project_id = insert_project_in_space(&state.pool, &org_space, "public-kb").await;
+  let (cookie, csrf) = login_admin(&state).await;
+
+  let response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri(format!("/api/projects/{project_id}/grants"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::COOKIE, &cookie)
+        .header("x-csrf-token", &csrf)
+        .body(Body::from(json!({ "userId": bob, "role": "editor" }).to_string()))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::OK);
+  let (role, can_import) = sqlx::query_as::<_, (String, bool)>(
+    "SELECT role, can_import FROM project_members WHERE project_id = $1 AND user_id = $2",
+  )
+  .bind(&project_id)
+  .bind(&bob)
+  .fetch_one(&state.pool)
+  .await
+  .unwrap();
+  assert_eq!(role, "editor");
+  assert!(can_import);
+}
+
+#[tokio::test]
+async fn grant_kb_rejects_non_org_member() {
+  let env = TestEnvironment::start("team_endpoints_grant_400").await.unwrap();
+  let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let admin = admin_id(&state.pool).await;
+  let (org_id, org_space) = insert_org(&state.pool, &admin, "acme").await;
+  add_org_member(&state.pool, &org_id, &admin, "org_admin").await;
+  let outsider = insert_user(&state.pool, "outsider").await; // not an org member
+  let project_id = insert_project_in_space(&state.pool, &org_space, "public-kb").await;
+  let (cookie, csrf) = login_admin(&state).await;
+
+  let response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri(format!("/api/projects/{project_id}/grants"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::COOKIE, &cookie)
+        .header("x-csrf-token", &csrf)
+        .body(Body::from(json!({ "userId": outsider, "role": "viewer" }).to_string()))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn grant_kb_forbidden_for_non_manager() {
+  let env = TestEnvironment::start("team_endpoints_grant_403").await.unwrap();
+  let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let admin = admin_id(&state.pool).await;
+  let founder = insert_user(&state.pool, "founder").await;
+  let (org_id, org_space) = insert_org(&state.pool, &founder, "acme").await;
+  add_org_member(&state.pool, &org_id, &founder, "org_admin").await;
+  add_org_member(&state.pool, &org_id, &admin, "org_member").await; // plain member
+  let bob = insert_user(&state.pool, "bob").await;
+  add_org_member(&state.pool, &org_id, &bob, "org_member").await;
+  let project_id = insert_project_in_space(&state.pool, &org_space, "public-kb").await;
+  let (cookie, csrf) = login_admin(&state).await;
+
+  let response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri(format!("/api/projects/{project_id}/grants"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::COOKIE, &cookie)
+        .header("x-csrf-token", &csrf)
+        .body(Body::from(json!({ "userId": bob, "role": "editor" }).to_string()))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn revoke_kb_grant_succeeds_for_org_admin() {
+  let env = TestEnvironment::start("team_endpoints_revoke").await.unwrap();
+  let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let admin = admin_id(&state.pool).await;
+  let (org_id, org_space) = insert_org(&state.pool, &admin, "acme").await;
+  add_org_member(&state.pool, &org_id, &admin, "org_admin").await;
+  let bob = insert_user(&state.pool, "bob").await;
+  add_org_member(&state.pool, &org_id, &bob, "org_member").await;
+  let project_id = insert_project_in_space(&state.pool, &org_space, "public-kb").await;
+  grant_kb(&state.pool, &project_id, &bob, "editor").await;
+  let (cookie, csrf) = login_admin(&state).await;
+
+  let response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("DELETE")
+        .uri(format!("/api/projects/{project_id}/grants/{bob}"))
+        .header(header::COOKIE, &cookie)
+        .header("x-csrf-token", &csrf)
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::NO_CONTENT);
+  let count = sqlx::query_scalar::<_, i64>(
+    "SELECT COUNT(*) FROM project_members WHERE project_id = $1 AND user_id = $2",
+  )
+  .bind(&project_id)
+  .bind(&bob)
+  .fetch_one(&state.pool)
+  .await
+  .unwrap();
+  assert_eq!(count, 0);
+}
