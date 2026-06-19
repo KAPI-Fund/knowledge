@@ -58,3 +58,22 @@ pub async fn create_org_space(
     .await?;
     Ok(id)
 }
+
+/// Create the `spaces(kind='team')` row for a freshly created team.
+pub async fn create_team_space(
+    pool: &PgPool,
+    team_id: &str,
+    created_at: &str,
+) -> Result<String, sqlx::Error> {
+    let id = Uuid::new_v4().to_string();
+    sqlx::query(
+        "INSERT INTO spaces (id, kind, owner_user_id, org_id, team_id, created_at) \
+         VALUES ($1, 'team', NULL, NULL, $2, $3)",
+    )
+    .bind(&id)
+    .bind(team_id)
+    .bind(created_at)
+    .execute(pool)
+    .await?;
+    Ok(id)
+}

@@ -412,3 +412,303 @@ async fn remove_org_member_succeeds_for_org_admin() {
   .unwrap();
   assert_eq!(count, 0);
 }
+
+#[tokio::test]
+async fn create_team_makes_creator_leader_and_team_space() {
+  let env = TestEnvironment::start("team_endpoints_create_team").await.unwrap();
+  let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let admin = admin_id(&state.pool).await;
+  let (org_id, _space) = insert_org(&state.pool, &admin, "acme").await;
+  add_org_member(&state.pool, &org_id, &admin, "org_member").await;
+  let (cookie, csrf) = login_admin(&state).await;
+
+  let response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri(format!("/api/orgs/{org_id}/teams"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::COOKIE, &cookie)
+        .header("x-csrf-token", &csrf)
+        .body(Body::from(json!({ "name": "Platform", "slug": "platform" }).to_string()))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::CREATED);
+  let body = read_json(response.into_body()).await;
+  let team_id = body["id"].as_str().unwrap();
+  assert_eq!(body["orgId"].as_str().unwrap(), org_id);
+
+  let role = sqlx::query_scalar::<_, String>(
+    "SELECT role FROM team_members WHERE team_id = $1 AND user_id = $2",
+  )
+  .bind(team_id)
+  .bind(&admin)
+  .fetch_one(&state.pool)
+  .await
+  .unwrap();
+  assert_eq!(role, "leader");
+
+  let space_count = sqlx::query_scalar::<_, i64>(
+    "SELECT COUNT(*) FROM spaces WHERE kind = 'team' AND team_id = $1",
+  )
+  .bind(team_id)
+  .fetch_one(&state.pool)
+  .await
+  .unwrap();
+  assert_eq!(space_count, 1);
+}
+
+#[tokio::test]
+async fn create_team_requires_org_membership() {
+  let env = TestEnvironment::start("team_endpoints_create_team_403").await.unwrap();
+  let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let founder = insert_user(&state.pool, "founder").await;
+  let (org_id, _space) = insert_org(&state.pool, &founder, "acme").await;
+  add_org_member(&state.pool, &org_id, &founder, "org_admin").await;
+  let (cookie, csrf) = login_admin(&state).await; // admin is NOT a member
+
+  let response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri(format!("/api/orgs/{org_id}/teams"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::COOKIE, &cookie)
+        .header("x-csrf-token", &csrf)
+        .body(Body::from(json!({ "name": "X", "slug": "x" }).to_string()))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn list_teams_returns_all_for_org_admin() {
+  let env = TestEnvironment::start("team_endpoints_list_teams_admin").await.unwrap();
+  let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let admin = admin_id(&state.pool).await;
+  let (org_id, _space) = insert_org(&state.pool, &admin, "acme").await;
+  add_org_member(&state.pool, &org_id, &admin, "org_admin").await;
+  insert_team(&state.pool, &org_id, "alpha").await;
+  insert_team(&state.pool, &org_id, "beta").await;
+  let (cookie, _csrf) = login_admin(&state).await;
+
+  let response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("GET")
+        .uri(format!("/api/orgs/{org_id}/teams"))
+        .header(header::COOKIE, &cookie)
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::OK);
+  let body = read_json(response.into_body()).await;
+  assert_eq!(body["teams"].as_array().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn list_teams_scopes_to_membership_for_member() {
+  let env = TestEnvironment::start("team_endpoints_list_teams_member").await.unwrap();
+  let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let admin = admin_id(&state.pool).await;
+  let founder = insert_user(&state.pool, "founder").await;
+  let (org_id, _space) = insert_org(&state.pool, &founder, "acme").await;
+  add_org_member(&state.pool, &org_id, &founder, "org_admin").await;
+  add_org_member(&state.pool, &org_id, &admin, "org_member").await;
+  let (alpha_id, _a) = insert_team(&state.pool, &org_id, "alpha").await;
+  insert_team(&state.pool, &org_id, "beta").await;
+  add_team_member(&state.pool, &alpha_id, &admin, "member").await;
+  let (cookie, _csrf) = login_admin(&state).await;
+
+  let response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("GET")
+        .uri(format!("/api/orgs/{org_id}/teams"))
+        .header(header::COOKIE, &cookie)
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::OK);
+  let body = read_json(response.into_body()).await;
+  let teams = body["teams"].as_array().unwrap();
+  assert_eq!(teams.len(), 1);
+  assert_eq!(teams[0]["slug"].as_str().unwrap(), "alpha");
+}
+
+#[tokio::test]
+async fn add_team_member_succeeds_for_leader() {
+  let env = TestEnvironment::start("team_endpoints_add_team_member").await.unwrap();
+  let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let admin = admin_id(&state.pool).await;
+  let (org_id, _space) = insert_org(&state.pool, &admin, "acme").await;
+  add_org_member(&state.pool, &org_id, &admin, "org_admin").await;
+  let (team_id, _t) = insert_team(&state.pool, &org_id, "platform").await;
+  add_team_member(&state.pool, &team_id, &admin, "leader").await;
+  let bob = insert_user(&state.pool, "bob").await;
+  add_org_member(&state.pool, &org_id, &bob, "org_member").await;
+  let (cookie, csrf) = login_admin(&state).await;
+
+  let response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri(format!("/api/orgs/{org_id}/teams/{team_id}/members"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::COOKIE, &cookie)
+        .header("x-csrf-token", &csrf)
+        .body(Body::from(json!({ "usernameOrEmail": "bob" }).to_string()))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::CREATED);
+  let role = sqlx::query_scalar::<_, String>(
+    "SELECT role FROM team_members WHERE team_id = $1 AND user_id = $2",
+  )
+  .bind(&team_id)
+  .bind(&bob)
+  .fetch_one(&state.pool)
+  .await
+  .unwrap();
+  assert_eq!(role, "member");
+}
+
+#[tokio::test]
+async fn add_team_member_rejects_non_org_member_target() {
+  let env = TestEnvironment::start("team_endpoints_add_team_member_400").await.unwrap();
+  let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let admin = admin_id(&state.pool).await;
+  let (org_id, _space) = insert_org(&state.pool, &admin, "acme").await;
+  add_org_member(&state.pool, &org_id, &admin, "org_admin").await;
+  let (team_id, _t) = insert_team(&state.pool, &org_id, "platform").await;
+  add_team_member(&state.pool, &team_id, &admin, "leader").await;
+  insert_user(&state.pool, "outsider").await; // not an org member
+  let (cookie, csrf) = login_admin(&state).await;
+
+  let response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri(format!("/api/orgs/{org_id}/teams/{team_id}/members"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::COOKIE, &cookie)
+        .header("x-csrf-token", &csrf)
+        .body(Body::from(json!({ "usernameOrEmail": "outsider" }).to_string()))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn add_team_member_requires_admin_or_leader() {
+  let env = TestEnvironment::start("team_endpoints_add_team_member_403").await.unwrap();
+  let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let admin = admin_id(&state.pool).await;
+  let founder = insert_user(&state.pool, "founder").await;
+  let (org_id, _space) = insert_org(&state.pool, &founder, "acme").await;
+  add_org_member(&state.pool, &org_id, &founder, "org_admin").await;
+  add_org_member(&state.pool, &org_id, &admin, "org_member").await; // member, not leader
+  let (team_id, _t) = insert_team(&state.pool, &org_id, "platform").await;
+  let bob = insert_user(&state.pool, "bob").await;
+  add_org_member(&state.pool, &org_id, &bob, "org_member").await;
+  let (cookie, csrf) = login_admin(&state).await;
+
+  let response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri(format!("/api/orgs/{org_id}/teams/{team_id}/members"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::COOKIE, &cookie)
+        .header("x-csrf-token", &csrf)
+        .body(Body::from(json!({ "usernameOrEmail": "bob" }).to_string()))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn remove_team_member_succeeds_for_leader() {
+  let env = TestEnvironment::start("team_endpoints_remove_team_member").await.unwrap();
+  let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let admin = admin_id(&state.pool).await;
+  let (org_id, _space) = insert_org(&state.pool, &admin, "acme").await;
+  add_org_member(&state.pool, &org_id, &admin, "org_admin").await;
+  let (team_id, _t) = insert_team(&state.pool, &org_id, "platform").await;
+  add_team_member(&state.pool, &team_id, &admin, "leader").await;
+  let bob = insert_user(&state.pool, "bob").await;
+  add_org_member(&state.pool, &org_id, &bob, "org_member").await;
+  add_team_member(&state.pool, &team_id, &bob, "member").await;
+  let (cookie, csrf) = login_admin(&state).await;
+
+  let response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("DELETE")
+        .uri(format!("/api/orgs/{org_id}/teams/{team_id}/members/{bob}"))
+        .header(header::COOKIE, &cookie)
+        .header("x-csrf-token", &csrf)
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::NO_CONTENT);
+  let count = sqlx::query_scalar::<_, i64>(
+    "SELECT COUNT(*) FROM team_members WHERE team_id = $1 AND user_id = $2",
+  )
+  .bind(&team_id)
+  .bind(&bob)
+  .fetch_one(&state.pool)
+  .await
+  .unwrap();
+  assert_eq!(count, 0);
+}
+
+#[tokio::test]
+async fn remove_team_member_cannot_remove_leader() {
+  let env = TestEnvironment::start("team_endpoints_remove_leader_400").await.unwrap();
+  let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let admin = admin_id(&state.pool).await;
+  let (org_id, _space) = insert_org(&state.pool, &admin, "acme").await;
+  add_org_member(&state.pool, &org_id, &admin, "org_admin").await;
+  let (team_id, _t) = insert_team(&state.pool, &org_id, "platform").await;
+  add_team_member(&state.pool, &team_id, &admin, "leader").await;
+  let (cookie, csrf) = login_admin(&state).await;
+
+  let response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("DELETE")
+        .uri(format!("/api/orgs/{org_id}/teams/{team_id}/members/{admin}"))
+        .header(header::COOKIE, &cookie)
+        .header("x-csrf-token", &csrf)
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
