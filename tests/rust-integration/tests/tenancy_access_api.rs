@@ -313,3 +313,93 @@ async fn access_role_matrix() {
     None
   );
 }
+
+#[tokio::test]
+async fn project_detail_requires_space_access() {
+  let env = TestEnvironment::start("tenancy-http-access").await.unwrap();
+  let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let (admin_cookie, admin_csrf) = login_admin(&state).await;
+
+  // Admin (owner via personal space) creates a project.
+  let create = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri("/api/projects")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::COOKIE, &admin_cookie)
+        .header("x-csrf-token", &admin_csrf)
+        .body(Body::from(json!({ "name": "owned-kb" }).to_string()))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(create.status(), StatusCode::CREATED);
+  let bytes = to_bytes(create.into_body(), usize::MAX).await.unwrap();
+  let project_id = serde_json::from_slice::<Value>(&bytes)
+    .unwrap()
+    .get("id")
+    .and_then(Value::as_str)
+    .unwrap()
+    .to_string();
+
+  // Owner can read it.
+  let owner_view = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .uri(format!("/api/projects/{project_id}"))
+        .header(header::COOKIE, &admin_cookie)
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(owner_view.status(), StatusCode::OK);
+
+  // A second registered user with no access is forbidden.
+  let password_hash = knowledge_server::auth::password::hash_password("member-pw").unwrap();
+  sqlx::query(
+    "INSERT INTO users (id, username, password_hash, role, created_at) \
+     VALUES ($1, 'outsider', $2, 'user', '2026-01-01T00:00:00Z')",
+  )
+  .bind(Uuid::new_v4().to_string())
+  .bind(&password_hash)
+  .execute(&state.pool)
+  .await
+  .unwrap();
+
+  let login = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri("/api/auth/login")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(
+          json!({ "username": "outsider", "password": "member-pw" }).to_string(),
+        ))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(login.status(), StatusCode::OK);
+  let outsider_cookie = login
+    .headers()
+    .get("set-cookie")
+    .unwrap()
+    .to_str()
+    .unwrap()
+    .to_string();
+
+  let forbidden = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .uri(format!("/api/projects/{project_id}"))
+        .header(header::COOKIE, &outsider_cookie)
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
+}
