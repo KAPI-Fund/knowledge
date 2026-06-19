@@ -151,17 +151,21 @@ pub async fn seed_admin_user(pool: &PgPool, config: &AppConfig) -> anyhow::Resul
     let now = OffsetDateTime::now_utc()
         .format(&Rfc3339)
         .unwrap_or_else(|_| String::from("1970-01-01T00:00:00Z"));
+
+    let admin_id = Uuid::new_v4().to_string();
     sqlx::query(
         "INSERT INTO users (id, username, password_hash, role, created_at)
      VALUES ($1, $2, $3, $4, $5)",
     )
-    .bind(Uuid::new_v4().to_string())
+    .bind(&admin_id)
     .bind("admin")
     .bind(password_hash)
-    .bind("admin")
-    .bind(now)
+    .bind("operator")
+    .bind(&now)
     .execute(pool)
     .await?;
+
+    crate::tenancy::spaces::ensure_personal_space(pool, &admin_id, &now).await?;
 
     Ok(())
 }

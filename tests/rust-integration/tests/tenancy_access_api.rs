@@ -43,3 +43,29 @@ async fn migration_creates_tenancy_tables_and_personal_space_uniqueness() {
   .await;
   assert!(duplicate.is_err(), "second personal space for a user must be rejected");
 }
+
+#[tokio::test]
+async fn seeded_admin_is_operator_with_personal_space() {
+  let env = TestEnvironment::start("tenancy-seed-admin").await.unwrap();
+  let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+
+  let role = sqlx::query_scalar::<_, String>(
+    "SELECT role FROM users WHERE username = 'admin'",
+  )
+  .fetch_one(&state.pool)
+  .await
+  .unwrap();
+  assert_eq!(role, "operator");
+
+  let admin_id = sqlx::query_scalar::<_, String>(
+    "SELECT id FROM users WHERE username = 'admin'",
+  )
+  .fetch_one(&state.pool)
+  .await
+  .unwrap();
+  let space = knowledge_server::tenancy::spaces::personal_space_id(&state.pool, &admin_id)
+    .await
+    .unwrap();
+  assert!(space.is_some(), "seeded admin must have a personal space");
+}
