@@ -153,8 +153,8 @@ async fn insert_team(pool: &sqlx::PgPool, org_id: &str, slug: &str) -> (String, 
   let team_id = Uuid::new_v4().to_string();
   sqlx::query(
     "INSERT INTO teams (id, org_id, name, slug, created_by, created_at) \
-     SELECT $1, $2, $3, $3, om.user_id, '2026-01-01T00:00:00Z' \
-     FROM organization_members om WHERE om.org_id = $2 AND om.role = 'org_admin' LIMIT 1",
+     SELECT $1, $2, $3, $3, o.created_by, '2026-01-01T00:00:00Z' \
+     FROM organizations o WHERE o.id = $2",
   )
   .bind(&team_id)
   .bind(org_id)
@@ -753,4 +753,98 @@ async fn list_spaces_returns_personal_orgs_and_teams() {
   assert_eq!(teams[0]["orgId"].as_str().unwrap(), org_id);
   assert_eq!(teams[0]["role"].as_str().unwrap(), "leader");
   assert!(teams[0]["spaceId"].as_str().is_some());
+}
+
+#[tokio::test]
+async fn create_project_in_org_space_requires_org_admin() {
+  let env = TestEnvironment::start("team_endpoints_create_proj_org").await.unwrap();
+  let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let admin = admin_id(&state.pool).await;
+  let (org_id, org_space) = insert_org(&state.pool, &admin, "acme").await;
+  add_org_member(&state.pool, &org_id, &admin, "org_admin").await;
+  let (cookie, csrf) = login_admin(&state).await;
+
+  let response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri("/api/projects")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::COOKIE, &cookie)
+        .header("x-csrf-token", &csrf)
+        .body(Body::from(
+          json!({ "name": "Public KB", "spaceId": org_space }).to_string(),
+        ))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::CREATED);
+  let body = read_json(response.into_body()).await;
+  let project_id = body["id"].as_str().unwrap();
+  let space_id = sqlx::query_scalar::<_, String>("SELECT space_id FROM projects WHERE id = $1")
+    .bind(project_id)
+    .fetch_one(&state.pool)
+    .await
+    .unwrap();
+  assert_eq!(space_id, org_space);
+}
+
+#[tokio::test]
+async fn create_project_in_org_space_forbidden_for_member() {
+  let env = TestEnvironment::start("team_endpoints_create_proj_org_403").await.unwrap();
+  let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let admin = admin_id(&state.pool).await;
+  let founder = insert_user(&state.pool, "founder").await;
+  let (org_id, org_space) = insert_org(&state.pool, &founder, "acme").await;
+  add_org_member(&state.pool, &org_id, &founder, "org_admin").await;
+  add_org_member(&state.pool, &org_id, &admin, "org_member").await;
+  let (cookie, csrf) = login_admin(&state).await;
+
+  let response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri("/api/projects")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::COOKIE, &cookie)
+        .header("x-csrf-token", &csrf)
+        .body(Body::from(json!({ "name": "X", "spaceId": org_space }).to_string()))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn create_project_in_team_space_allows_member() {
+  let env = TestEnvironment::start("team_endpoints_create_proj_team").await.unwrap();
+  let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let admin = admin_id(&state.pool).await;
+  let (org_id, _space) = insert_org(&state.pool, &admin, "acme").await;
+  add_org_member(&state.pool, &org_id, &admin, "org_member").await;
+  let (team_id, team_space) = insert_team(&state.pool, &org_id, "platform").await;
+  add_team_member(&state.pool, &team_id, &admin, "member").await;
+  let (cookie, csrf) = login_admin(&state).await;
+
+  let response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri("/api/projects")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::COOKIE, &cookie)
+        .header("x-csrf-token", &csrf)
+        .body(Body::from(
+          json!({ "name": "Team KB", "spaceId": team_space }).to_string(),
+        ))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::CREATED);
 }

@@ -156,6 +156,8 @@ pub fn router() -> Router<AppState> {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CreateProjectRequest {
     pub name: String,
+    #[serde(default)]
+    pub space_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

@@ -25,19 +25,18 @@ pub async fn create_project(
     state: &AppState,
     user_id: &str,
 ) -> Result<ProjectDto, ApiError> {
-    let id = Uuid::new_v4().to_string();
-    let root_path = PathBuf::from(&state.project_root).join(&id);
-    let root =
-        initialize_project(&root_path).map_err(|error| ApiError::bad_request(error.to_string()))?;
-    let root_path = normalize_project_path_string(root.as_path());
     let created_at = OffsetDateTime::now_utc()
         .format(&Rfc3339)
         .map_err(|_| ApiError::internal("failed to format created_at"))?;
 
     let space_id =
-        crate::tenancy::spaces::ensure_personal_space(&state.pool, user_id, &created_at)
-            .await
-            .map_err(ApiError::from)?;
+        resolve_target_space(state, user_id, input.space_id.as_deref(), &created_at).await?;
+
+    let id = Uuid::new_v4().to_string();
+    let root_path = PathBuf::from(&state.project_root).join(&id);
+    let root =
+        initialize_project(&root_path).map_err(|error| ApiError::bad_request(error.to_string()))?;
+    let root_path = normalize_project_path_string(root.as_path());
 
     sqlx::query(
         "INSERT INTO projects (id, name, root_path, space_id, created_at) VALUES ($1, $2, $3, $4, $5)",
@@ -52,17 +51,17 @@ pub async fn create_project(
     .map_err(ApiError::from)?;
 
     sqlx::query(
-    "INSERT INTO project_members (id, project_id, user_id, role, can_import, created_at) VALUES ($1, $2, $3, $4, $5, $6)",
-  )
-  .bind(Uuid::new_v4().to_string())
-  .bind(&id)
-  .bind(user_id)
-  .bind("owner")
-  .bind(true)
-  .bind(&created_at)
-  .execute(&state.pool)
-  .await
-  .map_err(ApiError::from)?;
+        "INSERT INTO project_members (id, project_id, user_id, role, can_import, created_at) VALUES ($1, $2, $3, $4, $5, $6)",
+    )
+    .bind(Uuid::new_v4().to_string())
+    .bind(&id)
+    .bind(user_id)
+    .bind("owner")
+    .bind(true)
+    .bind(&created_at)
+    .execute(&state.pool)
+    .await
+    .map_err(ApiError::from)?;
 
     append_audit_log(
         state,
@@ -88,6 +87,58 @@ pub async fn create_project(
         root_path,
         created_at,
     })
+}
+
+/// Resolve the target space for a new project and authorize the caller to create
+/// in it. `None` → the caller's personal space (auto-created if missing).
+async fn resolve_target_space(
+    state: &AppState,
+    user_id: &str,
+    space_id: Option<&str>,
+    created_at: &str,
+) -> Result<String, ApiError> {
+    let Some(space_id) = space_id else {
+        return crate::tenancy::spaces::ensure_personal_space(&state.pool, user_id, created_at)
+            .await
+            .map_err(ApiError::from);
+    };
+    let row = sqlx::query_as::<_, (String, Option<String>, Option<String>, Option<String>)>(
+        "SELECT kind, owner_user_id, org_id, team_id FROM spaces WHERE id = $1",
+    )
+    .bind(space_id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(ApiError::from)?
+    .ok_or_else(|| ApiError::not_found("space not found"))?;
+    let (kind, owner_user_id, org_id, team_id) = row;
+    match kind.as_str() {
+        "personal" => {
+            if owner_user_id.as_deref() != Some(user_id) {
+                return Err(ApiError::forbidden("not your personal space"));
+            }
+        }
+        "org" => {
+            let org_id = org_id.ok_or_else(|| ApiError::internal("org space missing org_id"))?;
+            if !crate::tenancy::access::is_org_admin(&state.pool, &org_id, user_id)
+                .await
+                .map_err(ApiError::from)?
+            {
+                return Err(ApiError::forbidden("only org admins may create public KBs"));
+            }
+        }
+        "team" => {
+            let team_id = team_id.ok_or_else(|| ApiError::internal("team space missing team_id"))?;
+            if crate::tenancy::access::team_member_role(&state.pool, &team_id, user_id)
+                .await
+                .map_err(ApiError::from)?
+                .is_none()
+            {
+                return Err(ApiError::forbidden("not a member of this team"));
+            }
+        }
+        _ => return Err(ApiError::bad_request("unknown space kind")),
+    }
+    Ok(space_id.to_string())
 }
 
 pub async fn project_root_for_id(
