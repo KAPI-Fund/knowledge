@@ -160,10 +160,10 @@ pub async fn can_manage_kb_access(
             .bind(&team_id)
             .fetch_optional(pool)
             .await?;
-            if let Some(owning_org) = owning_org {
-                if is_org_admin(pool, &owning_org, user_id).await? {
-                    return Ok(true);
-                }
+            if let Some(owning_org) = owning_org
+                && is_org_admin(pool, &owning_org, user_id).await?
+            {
+                return Ok(true);
             }
             let team_role = sqlx::query_scalar::<_, String>(
                 "SELECT role FROM team_members WHERE team_id = $1 AND user_id = $2",
