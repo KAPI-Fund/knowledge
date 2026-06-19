@@ -403,3 +403,66 @@ async fn project_detail_requires_space_access() {
     .unwrap();
   assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
 }
+
+#[tokio::test]
+async fn team_migration_creates_tables_and_constraints() {
+  let env = TestEnvironment::start("team-migration").await.unwrap();
+  let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let pool = &state.pool;
+
+  assert!(table_exists(pool, "teams").await.unwrap());
+  assert!(table_exists(pool, "team_members").await.unwrap());
+
+  // A team space (kind='team', team_id set) is accepted.
+  let admin_id = sqlx::query_scalar::<_, String>("SELECT id FROM users WHERE username = 'admin'")
+    .fetch_one(pool)
+    .await
+    .unwrap();
+  let (org_id, _org_space) = insert_org(pool, &admin_id, "team-mig-org").await;
+  let team_id = Uuid::new_v4().to_string();
+  sqlx::query(
+    "INSERT INTO teams (id, org_id, name, slug, created_by, created_at) \
+     VALUES ($1, $2, 'Team A', 'team-a', $3, '2026-01-01T00:00:00Z')",
+  )
+  .bind(&team_id)
+  .bind(&org_id)
+  .bind(&admin_id)
+  .execute(pool)
+  .await
+  .unwrap();
+
+  let team_space = Uuid::new_v4().to_string();
+  sqlx::query(
+    "INSERT INTO spaces (id, kind, owner_user_id, org_id, team_id, created_at) \
+     VALUES ($1, 'team', NULL, NULL, $2, '2026-01-01T00:00:00Z')",
+  )
+  .bind(&team_space)
+  .bind(&team_id)
+  .execute(pool)
+  .await
+  .unwrap();
+
+  // The partial unique index forbids a second space for the same team.
+  let duplicate = sqlx::query(
+    "INSERT INTO spaces (id, kind, owner_user_id, org_id, team_id, created_at) \
+     VALUES ($1, 'team', NULL, NULL, $2, '2026-01-01T00:00:00Z')",
+  )
+  .bind(Uuid::new_v4().to_string())
+  .bind(&team_id)
+  .execute(pool)
+  .await;
+  assert!(duplicate.is_err(), "second space for a team must be rejected");
+
+  // The owner-check rejects a malformed team space (team_id + org_id both set).
+  let malformed = sqlx::query(
+    "INSERT INTO spaces (id, kind, owner_user_id, org_id, team_id, created_at) \
+     VALUES ($1, 'team', NULL, $2, $3, '2026-01-01T00:00:00Z')",
+  )
+  .bind(Uuid::new_v4().to_string())
+  .bind(&org_id)
+  .bind(&team_id)
+  .execute(pool)
+  .await;
+  assert!(malformed.is_err(), "team space with org_id set must be rejected");
+}
