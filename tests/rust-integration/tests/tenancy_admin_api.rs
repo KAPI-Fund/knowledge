@@ -382,3 +382,63 @@ async fn patch_org_member_role_missing_membership_404() {
 
   assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn list_team_members_returns_members() {
+  let env = TestEnvironment::start("list_team_members").await.unwrap();
+  let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let (cookie, _csrf) = login_admin(&state).await;
+  let admin = admin_id(&state.pool).await;
+  let (org_id, _ospace) = insert_org(&state.pool, &admin, "acme").await;
+  add_org_member(&state.pool, &org_id, &admin, "org_admin").await;
+  let (team_id, _tspace) = insert_team(&state.pool, &org_id, "platform").await;
+  let lead = insert_user(&state.pool, "lead").await;
+  add_team_member(&state.pool, &team_id, &lead, "leader").await;
+
+  let response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("GET")
+        .uri(format!("/api/orgs/{org_id}/teams/{team_id}/members"))
+        .header(header::COOKIE, &cookie)
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+  assert_eq!(response.status(), StatusCode::OK);
+  let body = read_json(response.into_body()).await;
+  let members = body["members"].as_array().unwrap();
+  assert_eq!(members.len(), 1);
+  assert_eq!(members[0]["username"].as_str().unwrap(), "lead");
+  assert_eq!(members[0]["role"].as_str().unwrap(), "leader");
+}
+
+#[tokio::test]
+async fn list_team_members_forbidden_for_outsider() {
+  let env = TestEnvironment::start("list_team_members_403").await.unwrap();
+  let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let (cookie, _csrf) = login_admin(&state).await;
+  let owner = insert_user(&state.pool, "owner").await;
+  let (org_id, _ospace) = insert_org(&state.pool, &owner, "globex").await;
+  add_org_member(&state.pool, &org_id, &owner, "org_admin").await;
+  let (team_id, _tspace) = insert_team(&state.pool, &org_id, "platform").await;
+  // Logged-in admin is neither org admin nor a team member here.
+
+  let response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("GET")
+        .uri(format!("/api/orgs/{org_id}/teams/{team_id}/members"))
+        .header(header::COOKIE, &cookie)
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+  assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}

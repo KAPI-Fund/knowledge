@@ -5,7 +5,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::{delete, get, post};
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{Value, json};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use uuid::Uuid;
@@ -25,7 +25,7 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/api/orgs/{org_id}/teams/{team_id}/members",
-            post(add_team_member_handler),
+            post(add_team_member_handler).get(list_team_members_handler),
         )
         .route(
             "/api/orgs/{org_id}/teams/{team_id}/members/{user_id}",
@@ -242,6 +242,52 @@ async fn add_team_member_handler(
         StatusCode::CREATED,
         Json(json!({ "teamId": team_id, "userId": target, "role": "member" })),
     ))
+}
+
+async fn list_team_members_handler(
+    State(state): State<AppState>,
+    Path((org_id, team_id)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    let principal = authorized_principal(&state, &headers, None).await?;
+    let is_admin = is_org_admin(&state.pool, &org_id, &principal.user_id)
+        .await
+        .map_err(ApiError::from)?;
+    let is_team_member = team_member_role(&state.pool, &team_id, &principal.user_id)
+        .await
+        .map_err(ApiError::from)?
+        .is_some();
+    if !is_admin && !is_team_member {
+        return Err(ApiError::forbidden("not permitted to view team members"));
+    }
+    let belongs =
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM teams WHERE id = $1 AND org_id = $2")
+            .bind(&team_id)
+            .bind(&org_id)
+            .fetch_one(&state.pool)
+            .await
+            .map_err(ApiError::from)?;
+    if belongs == 0 {
+        return Err(ApiError::not_found("team not found"));
+    }
+    let rows = sqlx::query_as::<_, (String, String, String)>(
+        "SELECT tm.user_id, u.username, tm.role \
+         FROM team_members tm \
+         JOIN users u ON u.id = tm.user_id \
+         WHERE tm.team_id = $1 \
+         ORDER BY tm.created_at ASC",
+    )
+    .bind(&team_id)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(ApiError::from)?;
+    let members: Vec<Value> = rows
+        .into_iter()
+        .map(|(user_id, username, role)| {
+            json!({ "userId": user_id, "username": username, "role": role })
+        })
+        .collect();
+    Ok(Json(json!({ "members": members })))
 }
 
 async fn remove_team_member_handler(
