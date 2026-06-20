@@ -11,3 +11,5 @@ pdfium/
 .env.*
 *.log
 .claude/settings.local.json
+.claude/worktrees/
+upstream_llm_wiki/
