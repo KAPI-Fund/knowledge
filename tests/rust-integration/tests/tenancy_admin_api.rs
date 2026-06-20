@@ -255,6 +255,40 @@ async fn list_org_members_forbidden_for_non_member() {
 }
 
 #[tokio::test]
+async fn project_members_payload_includes_username() {
+  let env = TestEnvironment::start("project_members_username")
+    .await
+    .unwrap();
+  let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let (cookie, _csrf) = login_admin(&state).await;
+  let admin = admin_id(&state.pool).await;
+  let (org_id, ospace) = insert_org(&state.pool, &admin, "acme").await;
+  add_org_member(&state.pool, &org_id, &admin, "org_admin").await;
+  let project_id = insert_project_in_space(&state.pool, &ospace, "handbook").await;
+  grant_kb(&state.pool, &project_id, &admin, "owner").await;
+
+  let response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("GET")
+        .uri(format!("/api/projects/{project_id}/members"))
+        .header(header::COOKIE, &cookie)
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+  assert_eq!(response.status(), StatusCode::OK);
+  let body = read_json(response.into_body()).await;
+  let members = body["members"].as_array().unwrap();
+  assert!(!members.is_empty());
+  assert_eq!(members[0]["username"].as_str().unwrap(), "admin");
+  assert!(members[0]["canImport"].as_bool().is_some());
+}
+
+#[tokio::test]
 async fn patch_org_member_role_updates_role() {
   let env = TestEnvironment::start("patch_org_role").await.unwrap();
   let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());

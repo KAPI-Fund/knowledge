@@ -509,8 +509,11 @@ async fn list_project_members(
 ) -> Result<impl IntoResponse, ApiError> {
     let _session = authorized_principal(&state, &headers, Some(&project_id)).await?;
 
-    let rows = sqlx::query_as::<_, (String, String, bool)>(
-    "SELECT user_id, role, can_import FROM project_members WHERE project_id = $1 ORDER BY created_at ASC",
+    let rows = sqlx::query_as::<_, (String, String, String, bool)>(
+    "SELECT pm.user_id, u.username, pm.role, pm.can_import \
+     FROM project_members pm \
+     JOIN users u ON u.id = pm.user_id \
+     WHERE pm.project_id = $1 ORDER BY pm.created_at ASC",
   )
   .bind(&project_id)
   .fetch_all(&state.pool)
@@ -519,9 +522,10 @@ async fn list_project_members(
 
     let members = rows
         .into_iter()
-        .map(|(user_id, role, can_import)| {
+        .map(|(user_id, username, role, can_import)| {
             json!({
               "userId": user_id,
+              "username": username,
               "role": role,
               "canImport": can_import
             })
