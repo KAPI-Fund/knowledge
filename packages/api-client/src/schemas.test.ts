@@ -5,6 +5,9 @@ import {
   parseProjectList,
   parseTeamList,
   parseGrant,
+  parseOrgMemberList,
+  parseTeamMemberList,
+  parseProjectMemberList,
 } from "./schemas";
 
 describe("parseCurrentUser", () => {
@@ -98,5 +101,59 @@ describe("parseGrant", () => {
   it("rejects an invalid role", () => {
     expect(() => parseGrant({ projectId: "p1", userId: "u1", role: "owner", canImport: true }))
       .toThrow();
+  });
+});
+
+describe("parseOrgMemberList", () => {
+  it("parses org members with username and role", () => {
+    const result = parseOrgMemberList({
+      members: [
+        { userId: "u1", username: "alice", role: "org_admin" },
+        { userId: "u2", username: "bob", role: "org_member" },
+      ],
+    });
+    expect(result.members).toHaveLength(2);
+    expect(result.members[0]).toEqual({
+      userId: "u1",
+      username: "alice",
+      role: "org_admin",
+    });
+  });
+
+  it("rejects an unknown role", () => {
+    expect(() =>
+      parseOrgMemberList({
+        members: [{ userId: "u1", username: "alice", role: "wizard" }],
+      }),
+    ).toThrow();
+  });
+});
+
+describe("parseTeamMemberList", () => {
+  it("parses team members with leader/member roles", () => {
+    const result = parseTeamMemberList({
+      members: [
+        { userId: "u1", username: "alice", role: "leader" },
+        { userId: "u2", username: "bob", role: "member" },
+      ],
+    });
+    expect(result.members[1]).toEqual({
+      userId: "u2",
+      username: "bob",
+      role: "member",
+    });
+  });
+});
+
+describe("parseProjectMemberList", () => {
+  it("parses project members with canImport", () => {
+    const result = parseProjectMemberList({
+      members: [
+        { userId: "u1", username: "alice", role: "owner", canImport: true },
+        { userId: "u2", username: "bob", role: "viewer", canImport: false },
+      ],
+    });
+    expect(result.members[0].canImport).toBe(true);
+    expect(result.members[1].role).toBe("viewer");
   });
 });

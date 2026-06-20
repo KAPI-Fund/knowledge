@@ -81,3 +81,46 @@ export const grantSchema = z.object({
 export function parseGrant(input: unknown) {
   return grantSchema.parse(input);
 }
+
+export const orgMemberListSchema = z.object({
+  members: z.array(
+    z.object({
+      userId: z.string(),
+      username: z.string(),
+      role: z.enum(["org_admin", "org_member"]),
+    }),
+  ),
+});
+
+export function parseOrgMemberList(input: unknown) {
+  return orgMemberListSchema.parse(input);
+}
+
+export const teamMemberListSchema = z.object({
+  members: z.array(
+    z.object({
+      userId: z.string(),
+      username: z.string(),
+      role: z.enum(["leader", "member"]),
+    }),
+  ),
+});
+
+export function parseTeamMemberList(input: unknown) {
+  return teamMemberListSchema.parse(input);
+}
+
+export const projectMemberListSchema = z.object({
+  members: z.array(
+    z.object({
+      userId: z.string(),
+      username: z.string(),
+      role: z.enum(["owner", "editor", "viewer"]),
+      canImport: z.boolean(),
+    }),
+  ),
+});
+
+export function parseProjectMemberList(input: unknown) {
+  return projectMemberListSchema.parse(input);
+}
