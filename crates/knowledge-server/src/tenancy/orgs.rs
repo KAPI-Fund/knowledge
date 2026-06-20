@@ -26,7 +26,7 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/api/orgs/{org_id}/members/{user_id}",
-            delete(remove_org_member_handler),
+            delete(remove_org_member_handler).patch(set_org_member_role_handler),
         )
 }
 
@@ -197,6 +197,48 @@ async fn list_org_members_handler(
         })
         .collect();
     Ok(Json(json!({ "members": members })))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct SetOrgMemberRoleRequest {
+    role: String,
+}
+
+async fn set_org_member_role_handler(
+    State(state): State<AppState>,
+    Path((org_id, user_id)): Path<(String, String)>,
+    headers: HeaderMap,
+    Json(payload): Json<SetOrgMemberRoleRequest>,
+) -> Result<Json<Value>, ApiError> {
+    let principal = authorized_principal(&state, &headers, None).await?;
+    validate_csrf(&headers, &principal)?;
+    if payload.role != "org_admin" && payload.role != "org_member" {
+        return Err(ApiError::bad_request("invalid role"));
+    }
+    if !is_org_admin(&state.pool, &org_id, &principal.user_id)
+        .await
+        .map_err(ApiError::from)?
+    {
+        return Err(ApiError::forbidden("not an organization admin"));
+    }
+    let result = sqlx::query(
+        "UPDATE organization_members SET role = $1 WHERE org_id = $2 AND user_id = $3",
+    )
+    .bind(&payload.role)
+    .bind(&org_id)
+    .bind(&user_id)
+    .execute(&state.pool)
+    .await
+    .map_err(ApiError::from)?;
+    if result.rows_affected() == 0 {
+        return Err(ApiError::not_found("membership not found"));
+    }
+    Ok(Json(json!({
+        "orgId": org_id,
+        "userId": user_id,
+        "role": payload.role,
+    })))
 }
 
 async fn remove_org_member_handler(

@@ -253,3 +253,132 @@ async fn list_org_members_forbidden_for_non_member() {
 
   assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
+
+#[tokio::test]
+async fn patch_org_member_role_updates_role() {
+  let env = TestEnvironment::start("patch_org_role").await.unwrap();
+  let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let (cookie, csrf) = login_admin(&state).await;
+  let admin = admin_id(&state.pool).await;
+  let (org_id, _space) = insert_org(&state.pool, &admin, "acme").await;
+  add_org_member(&state.pool, &org_id, &admin, "org_admin").await;
+  let bob = insert_user(&state.pool, "bob").await;
+  add_org_member(&state.pool, &org_id, &bob, "org_member").await;
+
+  let response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("PATCH")
+        .uri(format!("/api/orgs/{org_id}/members/{bob}"))
+        .header(header::COOKIE, &cookie)
+        .header("x-csrf-token", &csrf)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(json!({ "role": "org_admin" }).to_string()))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+  assert_eq!(response.status(), StatusCode::OK);
+  let body = read_json(response.into_body()).await;
+  assert_eq!(body["role"].as_str().unwrap(), "org_admin");
+  let stored = sqlx::query_scalar::<_, String>(
+    "SELECT role FROM organization_members WHERE org_id = $1 AND user_id = $2",
+  )
+  .bind(&org_id)
+  .bind(&bob)
+  .fetch_one(&state.pool)
+  .await
+  .unwrap();
+  assert_eq!(stored, "org_admin");
+}
+
+#[tokio::test]
+async fn patch_org_member_role_rejects_bad_role() {
+  let env = TestEnvironment::start("patch_org_role_400").await.unwrap();
+  let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let (cookie, csrf) = login_admin(&state).await;
+  let admin = admin_id(&state.pool).await;
+  let (org_id, _space) = insert_org(&state.pool, &admin, "acme").await;
+  add_org_member(&state.pool, &org_id, &admin, "org_admin").await;
+  let bob = insert_user(&state.pool, "bob").await;
+  add_org_member(&state.pool, &org_id, &bob, "org_member").await;
+
+  let response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("PATCH")
+        .uri(format!("/api/orgs/{org_id}/members/{bob}"))
+        .header(header::COOKIE, &cookie)
+        .header("x-csrf-token", &csrf)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(json!({ "role": "wizard" }).to_string()))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+  assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn patch_org_member_role_forbidden_for_member() {
+  let env = TestEnvironment::start("patch_org_role_403").await.unwrap();
+  let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let (cookie, csrf) = login_admin(&state).await;
+  let admin = admin_id(&state.pool).await;
+  let owner = insert_user(&state.pool, "owner").await;
+  let (org_id, _space) = insert_org(&state.pool, &owner, "globex").await;
+  add_org_member(&state.pool, &org_id, &owner, "org_admin").await;
+  // Logged-in admin is only an ordinary member here.
+  add_org_member(&state.pool, &org_id, &admin, "org_member").await;
+  let bob = insert_user(&state.pool, "bob").await;
+  add_org_member(&state.pool, &org_id, &bob, "org_member").await;
+
+  let response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("PATCH")
+        .uri(format!("/api/orgs/{org_id}/members/{bob}"))
+        .header(header::COOKIE, &cookie)
+        .header("x-csrf-token", &csrf)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(json!({ "role": "org_admin" }).to_string()))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+  assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn patch_org_member_role_missing_membership_404() {
+  let env = TestEnvironment::start("patch_org_role_404").await.unwrap();
+  let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let (cookie, csrf) = login_admin(&state).await;
+  let admin = admin_id(&state.pool).await;
+  let (org_id, _space) = insert_org(&state.pool, &admin, "acme").await;
+  add_org_member(&state.pool, &org_id, &admin, "org_admin").await;
+  let ghost = Uuid::new_v4().to_string();
+
+  let response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("PATCH")
+        .uri(format!("/api/orgs/{org_id}/members/{ghost}"))
+        .header(header::COOKIE, &cookie)
+        .header("x-csrf-token", &csrf)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(json!({ "role": "org_admin" }).to_string()))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+  assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
