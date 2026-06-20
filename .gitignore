@@ -13,3 +13,4 @@ pdfium/
 .claude/settings.local.json
 .claude/worktrees/
 upstream_llm_wiki/
+.superpowers/
