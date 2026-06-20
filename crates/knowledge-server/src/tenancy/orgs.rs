@@ -5,7 +5,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::{delete, post};
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{Value, json};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use uuid::Uuid;
@@ -13,14 +13,17 @@ use uuid::Uuid;
 use crate::app::state::AppState;
 use crate::http::error::ApiError;
 use crate::projects::routes::{authorized_principal, validate_csrf};
-use crate::tenancy::access::is_org_admin;
+use crate::tenancy::access::{is_org_admin, org_member_role};
 use crate::tenancy::slug::validate_slug;
 use crate::tenancy::spaces::create_org_space;
 
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/orgs", post(create_org_handler))
-        .route("/api/orgs/{org_id}/members", post(add_org_member_handler))
+        .route(
+            "/api/orgs/{org_id}/members",
+            post(add_org_member_handler).get(list_org_members_handler),
+        )
         .route(
             "/api/orgs/{org_id}/members/{user_id}",
             delete(remove_org_member_handler),
@@ -161,6 +164,39 @@ async fn add_org_member_handler(
         StatusCode::CREATED,
         Json(json!({ "orgId": org_id, "userId": target, "role": payload.role })),
     ))
+}
+
+async fn list_org_members_handler(
+    State(state): State<AppState>,
+    Path(org_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    let principal = authorized_principal(&state, &headers, None).await?;
+    if org_member_role(&state.pool, &org_id, &principal.user_id)
+        .await
+        .map_err(ApiError::from)?
+        .is_none()
+    {
+        return Err(ApiError::forbidden("not an organization member"));
+    }
+    let rows = sqlx::query_as::<_, (String, String, String)>(
+        "SELECT om.user_id, u.username, om.role \
+         FROM organization_members om \
+         JOIN users u ON u.id = om.user_id \
+         WHERE om.org_id = $1 \
+         ORDER BY om.created_at ASC",
+    )
+    .bind(&org_id)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(ApiError::from)?;
+    let members: Vec<Value> = rows
+        .into_iter()
+        .map(|(user_id, username, role)| {
+            json!({ "userId": user_id, "username": username, "role": role })
+        })
+        .collect();
+    Ok(Json(json!({ "members": members })))
 }
 
 async fn remove_org_member_handler(
