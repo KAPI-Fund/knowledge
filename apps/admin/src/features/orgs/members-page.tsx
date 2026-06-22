@@ -38,6 +38,27 @@ export function OrgMembersPage() {
     }
   };
 
+  const changeRole = async (
+    userId: string,
+    nextRole: "org_admin" | "org_member",
+  ) => {
+    setErrorMessage(null);
+    try {
+      await setRole.mutateAsync({ userId, role: nextRole });
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Failed to update role");
+    }
+  };
+
+  const remove = async (userId: string) => {
+    setErrorMessage(null);
+    try {
+      await removeMember.mutateAsync({ userId });
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Failed to remove member");
+    }
+  };
+
   return (
     <div className="flex flex-col gap-4">
       <h1 className="text-lg font-semibold">{org.name} members</h1>
@@ -60,10 +81,10 @@ export function OrgMembersPage() {
                     aria-label={`Role for ${member.username}`}
                     value={member.role}
                     onChange={(event) =>
-                      setRole.mutateAsync({
-                        userId: member.userId,
-                        role: event.target.value as "org_admin" | "org_member",
-                      })
+                      changeRole(
+                        member.userId,
+                        event.target.value as "org_admin" | "org_member",
+                      )
                     }
                   >
                     <option value="org_admin">org_admin</option>
@@ -79,7 +100,7 @@ export function OrgMembersPage() {
                     type="button"
                     variant="outline"
                     aria-label={`Remove ${member.username}`}
-                    onClick={() => removeMember.mutateAsync({ userId: member.userId })}
+                    onClick={() => remove(member.userId)}
                   >
                     Remove
                   </Button>

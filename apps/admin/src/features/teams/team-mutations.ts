@@ -40,6 +40,7 @@ export function useCreateTeamKbMutation(teamSpaceId: string) {
       await queryClient.invalidateQueries({
         queryKey: ["team-projects", teamSpaceId],
       });
+      await queryClient.invalidateQueries({ queryKey: ["org-projects"] });
     },
   });
 }

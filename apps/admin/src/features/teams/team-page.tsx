@@ -46,6 +46,15 @@ export function TeamPage() {
     }
   };
 
+  const remove = async (userId: string) => {
+    setErrorMessage(null);
+    try {
+      await removeMember.mutateAsync({ userId });
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Failed to remove member");
+    }
+  };
+
   const addKb = async () => {
     setErrorMessage(null);
     try {
@@ -85,7 +94,7 @@ export function TeamPage() {
                         type="button"
                         variant="outline"
                         aria-label={`Remove ${member.username}`}
-                        onClick={() => removeMember.mutateAsync({ userId: member.userId })}
+                        onClick={() => remove(member.userId)}
                       >
                         Remove
                       </Button>

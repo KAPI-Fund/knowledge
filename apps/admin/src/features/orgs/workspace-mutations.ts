@@ -10,6 +10,7 @@ export function useCreateSpaceProjectMutation(orgSpaceId: string) {
       await queryClient.invalidateQueries({
         queryKey: ["org-projects", orgSpaceId],
       });
+      await queryClient.invalidateQueries({ queryKey: ["team-projects"] });
     },
   });
 }
