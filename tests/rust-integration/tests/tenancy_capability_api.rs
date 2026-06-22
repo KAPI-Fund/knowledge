@@ -224,3 +224,63 @@ async fn viewer_can_create_query_task() {
     .unwrap();
   assert_eq!(response.status(), StatusCode::ACCEPTED);
 }
+
+#[tokio::test]
+async fn viewer_cannot_edit_wiki() {
+  let env = TestEnvironment::start("cap-edit-wiki").await.unwrap();
+  let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let (project_id, (vcookie, vcsrf), _editor) =
+    org_kb_with_viewer_and_editor(&state).await;
+
+  // PUT /files/content — editing wiki is Editor+; viewer must be blocked at the
+  // gate, BEFORE any filesystem access.
+  let save = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("PUT")
+        .uri(format!("/api/projects/{project_id}/files/content"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::COOKIE, &vcookie)
+        .header("x-csrf-token", &vcsrf)
+        .body(Body::from(
+          json!({ "path": "wiki/x.md", "content": "hi" }).to_string(),
+        ))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(save.status(), StatusCode::FORBIDDEN);
+
+  // POST /wiki-pages:delete — also Editor+.
+  let delete = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri(format!("/api/projects/{project_id}/wiki-pages:delete"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::COOKIE, &vcookie)
+        .header("x-csrf-token", &vcsrf)
+        .body(Body::from(json!({ "paths": ["wiki/x.md"] }).to_string()))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(delete.status(), StatusCode::FORBIDDEN);
+
+  // POST /ingest — Editor+.
+  let ingest = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri(format!("/api/projects/{project_id}/ingest"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::COOKIE, &vcookie)
+        .header("x-csrf-token", &vcsrf)
+        .body(Body::from(json!({}).to_string()))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(ingest.status(), StatusCode::FORBIDDEN);
+}

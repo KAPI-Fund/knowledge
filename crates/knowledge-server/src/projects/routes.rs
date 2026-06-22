@@ -229,6 +229,7 @@ pub struct SaveQueryTaskRequest {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IngestRequest {
+    #[serde(default)]
     pub relative_path: String,
 }
 
@@ -563,7 +564,13 @@ async fn update_source_watch_handler(
     Path(project_id): Path<String>,
     Json(payload): Json<UpdateSourceWatchRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let session = authorized_principal(&state, &headers, Some(&project_id)).await?;
+    let session = authorized_principal_with_role(
+        &state,
+        &headers,
+        &project_id,
+        crate::tenancy::access::AccessRole::Editor,
+    )
+    .await?;
     validate_csrf(&headers, &session)?;
 
     let existing = get_source_watch_settings(&state, &project_id).await?;
@@ -616,7 +623,13 @@ async fn scan_source_watch_handler(
     headers: HeaderMap,
     Path(project_id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let session = authorized_principal(&state, &headers, Some(&project_id)).await?;
+    let session = authorized_principal_with_role(
+        &state,
+        &headers,
+        &project_id,
+        crate::tenancy::access::AccessRole::Editor,
+    )
+    .await?;
     validate_csrf(&headers, &session)?;
     let result = scan_project_source_watch(&state, &project_id).await?;
 
@@ -644,7 +657,13 @@ async fn import_source_handler(
     Path(project_id): Path<String>,
     Json(payload): Json<ImportSourceRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let session = authorized_principal(&state, &headers, Some(&project_id)).await?;
+    let session = authorized_principal_with_role(
+        &state,
+        &headers,
+        &project_id,
+        crate::tenancy::access::AccessRole::Editor,
+    )
+    .await?;
     validate_csrf(&headers, &session)?;
     let task = create_queued_task(
         &state,
@@ -690,7 +709,13 @@ async fn rescan_sources_handler(
     headers: HeaderMap,
     Path(project_id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let session = authorized_principal(&state, &headers, Some(&project_id)).await?;
+    let session = authorized_principal_with_role(
+        &state,
+        &headers,
+        &project_id,
+        crate::tenancy::access::AccessRole::Editor,
+    )
+    .await?;
     validate_csrf(&headers, &session)?;
     let task = create_queued_task(
         &state,
@@ -733,7 +758,13 @@ async fn delete_source_handler(
     headers: HeaderMap,
     Path((project_id, relative_path)): Path<(String, String)>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let session = authorized_principal(&state, &headers, Some(&project_id)).await?;
+    let session = authorized_principal_with_role(
+        &state,
+        &headers,
+        &project_id,
+        crate::tenancy::access::AccessRole::Editor,
+    )
+    .await?;
     validate_csrf(&headers, &session)?;
     let task = create_queued_task(
         &state,
@@ -815,7 +846,13 @@ async fn save_file_content_handler(
     Path(project_id): Path<String>,
     Json(payload): Json<SaveFileContentRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let session = authorized_principal(&state, &headers, Some(&project_id)).await?;
+    let session = authorized_principal_with_role(
+        &state,
+        &headers,
+        &project_id,
+        crate::tenancy::access::AccessRole::Editor,
+    )
+    .await?;
     validate_csrf(&headers, &session)?;
     let root = project_root_for_id(&state, &project_id).await?;
     let saved =
@@ -849,7 +886,13 @@ async fn delete_wiki_pages_handler(
     Path(project_id): Path<String>,
     Json(payload): Json<DeleteWikiPagesRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let session = authorized_principal(&state, &headers, Some(&project_id)).await?;
+    let session = authorized_principal_with_role(
+        &state,
+        &headers,
+        &project_id,
+        crate::tenancy::access::AccessRole::Editor,
+    )
+    .await?;
     validate_csrf(&headers, &session)?;
     if payload.paths.is_empty() {
         return Err(ApiError::bad_request("paths must not be empty"));
@@ -968,7 +1011,13 @@ async fn retry_task_handler(
     headers: HeaderMap,
     Path((project_id, task_id)): Path<(String, String)>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let session = authorized_principal(&state, &headers, Some(&project_id)).await?;
+    let session = authorized_principal_with_role(
+        &state,
+        &headers,
+        &project_id,
+        crate::tenancy::access::AccessRole::Editor,
+    )
+    .await?;
     validate_csrf(&headers, &session)?;
     let updated = update_task_status(&state, &project_id, &task_id, "queued").await?;
     Ok(Json(json!(updated)))
@@ -979,7 +1028,13 @@ async fn cancel_task_handler(
     headers: HeaderMap,
     Path((project_id, task_id)): Path<(String, String)>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let session = authorized_principal(&state, &headers, Some(&project_id)).await?;
+    let session = authorized_principal_with_role(
+        &state,
+        &headers,
+        &project_id,
+        crate::tenancy::access::AccessRole::Editor,
+    )
+    .await?;
     validate_csrf(&headers, &session)?;
     let current = get_task(&state, &project_id, &task_id).await?;
     if current.status == "completed" {
@@ -1056,7 +1111,13 @@ async fn save_query_task_handler(
     Path((project_id, task_id)): Path<(String, String)>,
     Json(payload): Json<SaveQueryTaskRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let session = authorized_principal(&state, &headers, Some(&project_id)).await?;
+    let session = authorized_principal_with_role(
+        &state,
+        &headers,
+        &project_id,
+        crate::tenancy::access::AccessRole::Editor,
+    )
+    .await?;
     validate_csrf(&headers, &session)?;
 
     let source_task = get_task(&state, &project_id, &task_id).await?;
@@ -1147,7 +1208,13 @@ async fn create_lint_task_handler(
     Path(project_id): Path<String>,
     Json(payload): Json<CreateLintTaskRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let session = authorized_principal(&state, &headers, Some(&project_id)).await?;
+    let session = authorized_principal_with_role(
+        &state,
+        &headers,
+        &project_id,
+        crate::tenancy::access::AccessRole::Editor,
+    )
+    .await?;
     validate_csrf(&headers, &session)?;
 
     let mode = payload.mode.trim();
@@ -1203,7 +1270,13 @@ async fn ingest_handler(
     Path(project_id): Path<String>,
     Json(payload): Json<IngestRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let session = authorized_principal(&state, &headers, Some(&project_id)).await?;
+    let session = authorized_principal_with_role(
+        &state,
+        &headers,
+        &project_id,
+        crate::tenancy::access::AccessRole::Editor,
+    )
+    .await?;
     validate_csrf(&headers, &session)?;
     let task = create_queued_task(
         &state,
@@ -1353,7 +1426,13 @@ async fn update_review_handler(
     Path((project_id, review_id)): Path<(String, String)>,
     Json(payload): Json<UpdateReviewRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let session = authorized_principal(&state, &headers, Some(&project_id)).await?;
+    let session = authorized_principal_with_role(
+        &state,
+        &headers,
+        &project_id,
+        crate::tenancy::access::AccessRole::Editor,
+    )
+    .await?;
     validate_csrf(&headers, &session)?;
     let task = create_queued_task(
         &state,
@@ -1425,7 +1504,13 @@ async fn detect_dedup_handler(
     headers: HeaderMap,
     Path(project_id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let session = authorized_principal(&state, &headers, Some(&project_id)).await?;
+    let session = authorized_principal_with_role(
+        &state,
+        &headers,
+        &project_id,
+        crate::tenancy::access::AccessRole::Editor,
+    )
+    .await?;
     validate_csrf(&headers, &session)?;
     let task = create_queued_task(
         &state,
@@ -1469,7 +1554,13 @@ async fn merge_dedup_group_handler(
     Path((project_id, group_id)): Path<(String, String)>,
     Json(payload): Json<MergeDedupGroupRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let session = authorized_principal(&state, &headers, Some(&project_id)).await?;
+    let session = authorized_principal_with_role(
+        &state,
+        &headers,
+        &project_id,
+        crate::tenancy::access::AccessRole::Editor,
+    )
+    .await?;
     validate_csrf(&headers, &session)?;
     let root = project_root_for_id(&state, &project_id).await?;
     let store = load_dedup_store(&root).map_err(|error| ApiError::internal(error.to_string()))?;
@@ -1525,7 +1616,13 @@ async fn dismiss_dedup_group_handler(
     headers: HeaderMap,
     Path((project_id, group_id)): Path<(String, String)>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let session = authorized_principal(&state, &headers, Some(&project_id)).await?;
+    let session = authorized_principal_with_role(
+        &state,
+        &headers,
+        &project_id,
+        crate::tenancy::access::AccessRole::Editor,
+    )
+    .await?;
     validate_csrf(&headers, &session)?;
     let root = project_root_for_id(&state, &project_id).await?;
     let mut store = load_dedup_store(&root).map_err(|error| ApiError::internal(error.to_string()))?;
