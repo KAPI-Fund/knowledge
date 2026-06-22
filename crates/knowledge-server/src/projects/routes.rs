@@ -229,7 +229,6 @@ pub struct SaveQueryTaskRequest {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IngestRequest {
-    #[serde(default)]
     pub relative_path: String,
 }
 

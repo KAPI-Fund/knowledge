@@ -277,7 +277,7 @@ async fn viewer_cannot_edit_wiki() {
         .header(header::CONTENT_TYPE, "application/json")
         .header(header::COOKIE, &vcookie)
         .header("x-csrf-token", &vcsrf)
-        .body(Body::from(json!({}).to_string()))
+        .body(Body::from(json!({ "relativePath": "" }).to_string()))
         .unwrap(),
     )
     .await
