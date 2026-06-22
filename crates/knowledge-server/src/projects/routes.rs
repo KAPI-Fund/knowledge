@@ -1303,7 +1303,13 @@ async fn sweep_reviews_handler(
     headers: HeaderMap,
     Path(project_id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let session = authorized_principal(&state, &headers, Some(&project_id)).await?;
+    let session = authorized_principal_with_role(
+        &state,
+        &headers,
+        &project_id,
+        crate::tenancy::access::AccessRole::Editor,
+    )
+    .await?;
     validate_csrf(&headers, &session)?;
     let task = create_queued_task(
         &state,
@@ -1665,4 +1671,35 @@ pub(crate) async fn authorized_principal(
         }
     }
     Ok(principal)
+}
+
+/// Like [`authorized_principal`] for a concrete project, but additionally
+/// requires the caller's effective role to be at least `required`.
+///
+/// Read/query handlers keep using `authorized_principal` (viewer-accessible);
+/// mutating handlers (import/edit-wiki/ingest/review/dedup/task-control) use
+/// this so that a `Viewer` — including a public-org-KB reader — gets 403.
+pub(crate) async fn authorized_principal_with_role(
+    state: &AppState,
+    headers: &HeaderMap,
+    project_id: &str,
+    required: crate::tenancy::access::AccessRole,
+) -> Result<crate::auth::principal::Principal, ApiError> {
+    let principal = crate::auth::principal::resolve_principal(state, headers).await?;
+    if !principal.permits_project(project_id) {
+        return Err(ApiError::forbidden(
+            "api token is not scoped to this project",
+        ));
+    }
+    let role =
+        crate::tenancy::access::project_access_role(&state.pool, project_id, &principal.user_id)
+            .await
+            .map_err(ApiError::from)?;
+    match role {
+        Some(role) if role.satisfies(required) => Ok(principal),
+        Some(_) => Err(ApiError::forbidden(
+            "insufficient permissions for this project",
+        )),
+        None => Err(ApiError::forbidden("not a project member")),
+    }
 }
