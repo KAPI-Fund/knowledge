@@ -386,9 +386,26 @@ async fn project_scoped_token_cannot_grant_on_other_project() {
   let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
   let state = bootstrap_state(&config).await.unwrap();
   let (cookie, csrf) = login_admin(&state).await;
-  let project_a = create_personal_project(&state, &cookie, &csrf, "grant-a").await;
+
+  // Project A is an ORG KB where admin is org_admin, so admin CAN manage access
+  // on it. That isolates the token-scope check as the only possible 403 source:
+  // without the Some(&project_id) fix the handler would reach the org-membership
+  // check and return 400, not 403.
+  let admin_id = sqlx::query_scalar::<_, String>("SELECT id FROM users WHERE username = 'admin'")
+    .fetch_one(&state.pool)
+    .await
+    .unwrap();
+  let (org_id, org_space) = insert_org(&state.pool, &admin_id, "scope-grant-org").await;
+  add_org_member(&state.pool, &org_id, &admin_id, "org_admin").await;
+  let project_a = insert_project_in_space(&state.pool, &org_space, "scope-grant-kb").await;
+
+  // Project B is a separate personal project; mint a token scoped to B only.
   let project_b = create_personal_project(&state, &cookie, &csrf, "grant-b").await;
   let token_b = mint_scoped_token(&state, &cookie, &csrf, &project_b).await;
+
+  // A user who is not a member of the org: if the scope check were skipped the
+  // handler would reach org_member_role and return 400 for this user.
+  let outsider = insert_login_user(&state.pool, "grant-outsider", "pw-outsider").await;
 
   let response = build_app(state.clone())
     .oneshot(
@@ -398,11 +415,61 @@ async fn project_scoped_token_cannot_grant_on_other_project() {
         .header(header::CONTENT_TYPE, "application/json")
         .header("authorization", format!("Bearer {token_b}"))
         .body(Body::from(
-          json!({ "userId": "whoever", "role": "viewer" }).to_string(),
+          json!({ "userId": outsider, "role": "viewer" }).to_string(),
         ))
         .unwrap(),
     )
     .await
     .unwrap();
   assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn project_scoped_token_cannot_delete_grant_on_other_project() {
+  let env = TestEnvironment::start("scope-delgrant").await.unwrap();
+  let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let (cookie, csrf) = login_admin(&state).await;
+
+  // Org KB A where admin is org_admin (admin CAN manage access on A).
+  let admin_id = sqlx::query_scalar::<_, String>("SELECT id FROM users WHERE username = 'admin'")
+    .fetch_one(&state.pool)
+    .await
+    .unwrap();
+  let (org_id, org_space) = insert_org(&state.pool, &admin_id, "scope-delgrant-org").await;
+  add_org_member(&state.pool, &org_id, &admin_id, "org_admin").await;
+  let project_a = insert_project_in_space(&state.pool, &org_space, "scope-delgrant-kb").await;
+
+  // An existing grant on A that a mis-scoped token must not be able to revoke.
+  let member = insert_login_user(&state.pool, "delgrant-member", "pw-member").await;
+  add_org_member(&state.pool, &org_id, &member, "org_member").await;
+  grant_kb(&state.pool, &project_a, &member, "viewer").await;
+
+  // Token scoped to a different (personal) project B.
+  let project_b = create_personal_project(&state, &cookie, &csrf, "delgrant-b").await;
+  let token_b = mint_scoped_token(&state, &cookie, &csrf, &project_b).await;
+
+  let response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("DELETE")
+        .uri(format!("/api/projects/{project_a}/grants/{member}"))
+        .header("authorization", format!("Bearer {token_b}"))
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+  // The grant must still exist.
+  let still_there = sqlx::query_scalar::<_, i64>(
+    "SELECT COUNT(*) FROM project_members WHERE project_id = $1 AND user_id = $2",
+  )
+  .bind(&project_a)
+  .bind(&member)
+  .fetch_one(&state.pool)
+  .await
+  .unwrap();
+  assert_eq!(still_there, 1);
 }
