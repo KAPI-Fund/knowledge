@@ -467,7 +467,7 @@ async fn delete_project_handler(
     headers: HeaderMap,
     Path(project_id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let session = authorized_principal(&state, &headers, None).await?;
+    let session = authorized_principal(&state, &headers, Some(&project_id)).await?;
     validate_csrf(&headers, &session)?;
 
     let exists = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM projects WHERE id = $1")

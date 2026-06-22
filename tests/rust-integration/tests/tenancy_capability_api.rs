@@ -284,3 +284,125 @@ async fn viewer_cannot_edit_wiki() {
     .unwrap();
   assert_eq!(ingest.status(), StatusCode::FORBIDDEN);
 }
+
+/// Helper: log in the seeded admin (operator, owns a personal space).
+async fn login_admin(state: &knowledge_server::app::state::AppState) -> (String, String) {
+  login(state, "admin", "secret-password").await
+}
+
+/// Helper: admin creates a personal-space project via HTTP, returns its id.
+async fn create_personal_project(
+  state: &knowledge_server::app::state::AppState,
+  cookie: &str,
+  csrf: &str,
+  name: &str,
+) -> String {
+  let response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri("/api/projects")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::COOKIE, cookie)
+        .header("x-csrf-token", csrf)
+        .body(Body::from(json!({ "name": name }).to_string()))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::CREATED);
+  read_json(response.into_body()).await["id"]
+    .as_str()
+    .unwrap()
+    .to_string()
+}
+
+/// Helper: mint a project-scoped API token for `project_id`, returns the secret.
+async fn mint_scoped_token(
+  state: &knowledge_server::app::state::AppState,
+  cookie: &str,
+  csrf: &str,
+  project_id: &str,
+) -> String {
+  let response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri("/api/users/me/api-tokens")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::COOKIE, cookie)
+        .header("x-csrf-token", csrf)
+        .body(Body::from(
+          json!({ "name": "scoped", "projectId": project_id }).to_string(),
+        ))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::CREATED);
+  read_json(response.into_body()).await["token"]
+    .as_str()
+    .unwrap()
+    .to_string()
+}
+
+#[tokio::test]
+async fn project_scoped_token_cannot_delete_other_project() {
+  let env = TestEnvironment::start("scope-delete").await.unwrap();
+  let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let (cookie, csrf) = login_admin(&state).await;
+  let project_a = create_personal_project(&state, &cookie, &csrf, "scope-a").await;
+  let project_b = create_personal_project(&state, &cookie, &csrf, "scope-b").await;
+  let token_b = mint_scoped_token(&state, &cookie, &csrf, &project_b).await;
+
+  // A token scoped to B must not be able to delete A, even though the token's
+  // owner (admin) owns A.
+  let response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("DELETE")
+        .uri(format!("/api/projects/{project_a}"))
+        .header("authorization", format!("Bearer {token_b}"))
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+  // And project A still exists.
+  let exists = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM projects WHERE id = $1")
+    .bind(&project_a)
+    .fetch_one(&state.pool)
+    .await
+    .unwrap();
+  assert_eq!(exists, 1);
+}
+
+#[tokio::test]
+async fn project_scoped_token_cannot_grant_on_other_project() {
+  let env = TestEnvironment::start("scope-grant").await.unwrap();
+  let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let (cookie, csrf) = login_admin(&state).await;
+  let project_a = create_personal_project(&state, &cookie, &csrf, "grant-a").await;
+  let project_b = create_personal_project(&state, &cookie, &csrf, "grant-b").await;
+  let token_b = mint_scoped_token(&state, &cookie, &csrf, &project_b).await;
+
+  let response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri(format!("/api/projects/{project_a}/grants"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .header("authorization", format!("Bearer {token_b}"))
+        .body(Body::from(
+          json!({ "userId": "whoever", "role": "viewer" }).to_string(),
+        ))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
