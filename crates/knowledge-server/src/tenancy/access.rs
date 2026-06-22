@@ -12,6 +12,22 @@ pub enum AccessRole {
     Viewer,
 }
 
+impl AccessRole {
+    /// Privilege rank for capability comparisons: `Viewer` < `Editor` < `Owner`.
+    fn rank(self) -> u8 {
+        match self {
+            AccessRole::Viewer => 0,
+            AccessRole::Editor => 1,
+            AccessRole::Owner => 2,
+        }
+    }
+
+    /// True when this role is at least as privileged as `required`.
+    pub fn satisfies(self, required: AccessRole) -> bool {
+        self.rank() >= required.rank()
+    }
+}
+
 /// Resolve the requesting user's effective role on a project, or `None` if the
 /// user has no access (or the project does not exist).
 ///
@@ -218,4 +234,25 @@ pub async fn team_member_role(
     .bind(user_id)
     .fetch_optional(pool)
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AccessRole;
+
+    #[test]
+    fn satisfies_orders_viewer_editor_owner() {
+        // Owner satisfies everything.
+        assert!(AccessRole::Owner.satisfies(AccessRole::Owner));
+        assert!(AccessRole::Owner.satisfies(AccessRole::Editor));
+        assert!(AccessRole::Owner.satisfies(AccessRole::Viewer));
+        // Editor satisfies Editor and Viewer, not Owner.
+        assert!(AccessRole::Editor.satisfies(AccessRole::Editor));
+        assert!(AccessRole::Editor.satisfies(AccessRole::Viewer));
+        assert!(!AccessRole::Editor.satisfies(AccessRole::Owner));
+        // Viewer satisfies only Viewer.
+        assert!(AccessRole::Viewer.satisfies(AccessRole::Viewer));
+        assert!(!AccessRole::Viewer.satisfies(AccessRole::Editor));
+        assert!(!AccessRole::Viewer.satisfies(AccessRole::Owner));
+    }
 }
