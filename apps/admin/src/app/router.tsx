@@ -13,6 +13,8 @@ import { DedupPage } from "../features/dedup/page";
 import { DeepResearchPage } from "../features/deep-research/page";
 import { FilesPage } from "../features/files/page";
 import { LintPage } from "../features/lint/page";
+import { OrgMembersPage } from "../features/orgs/members-page";
+import { OrgWorkspacePage } from "../features/orgs/workspace-page";
 import { ProjectDetailPage } from "../features/projects/detail-page";
 import { ProjectsPage } from "../features/projects/page";
 import { QueryPage } from "../features/query/page";
@@ -22,6 +24,7 @@ import { SettingsPage } from "../features/settings/page";
 import { SourceWatchPage } from "../features/source-watch/page";
 import { SourcesPage } from "../features/sources/page";
 import { TasksPage } from "../features/tasks/page";
+import { TeamPage } from "../features/teams/team-page";
 import { UsersPage } from "../features/users/page";
 
 const GraphPage = lazy(() =>
@@ -61,6 +64,9 @@ export function AppRoutes() {
             <Route path="deep-research" element={<DeepResearchPage />} />
             <Route path="audit" element={<AuditPage />} />
           </Route>
+          <Route path="orgs/:orgId" element={<OrgWorkspacePage />} />
+          <Route path="orgs/:orgId/members" element={<OrgMembersPage />} />
+          <Route path="orgs/:orgId/teams/:teamId" element={<TeamPage />} />
           <Route path="users" element={<UsersPage />} />
           <Route path="api-tokens" element={<ApiTokensPage />} />
           <Route path="settings" element={<SettingsPage />} />
