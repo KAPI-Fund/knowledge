@@ -620,3 +620,44 @@ async fn can_manage_kb_access_matrix() {
   assert!(!can_manage_kb_access(pool, &team_project, &other_leader).await.unwrap());
   assert!(can_manage_kb_access(pool, &other_team_project, &other_leader).await.unwrap());
 }
+
+#[tokio::test]
+async fn ensure_personal_space_is_concurrency_safe() {
+  let env = TestEnvironment::start("personal-space-race").await.unwrap();
+  let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+
+  // A fresh user with no personal space yet.
+  let user_id = insert_user(&state.pool, "race-user").await;
+
+  // Fire many concurrent ensure_personal_space calls for the same user.
+  let mut handles = Vec::new();
+  for _ in 0..16 {
+    let pool = state.pool.clone();
+    let uid = user_id.clone();
+    handles.push(tokio::spawn(async move {
+      knowledge_server::tenancy::spaces::ensure_personal_space(&pool, &uid, "2026-01-01T00:00:00Z")
+        .await
+    }));
+  }
+
+  let mut ids = Vec::new();
+  for handle in handles {
+    let result = handle.await.unwrap();
+    // No call may error with a unique-violation.
+    let id = result.expect("ensure_personal_space must not error under concurrency");
+    ids.push(id);
+  }
+
+  // All callers observe exactly one shared personal space.
+  let first = &ids[0];
+  assert!(ids.iter().all(|id| id == first), "all calls must return the same space id");
+  let count = sqlx::query_scalar::<_, i64>(
+    "SELECT COUNT(*) FROM spaces WHERE kind = 'personal' AND owner_user_id = $1",
+  )
+  .bind(&user_id)
+  .fetch_one(&state.pool)
+  .await
+  .unwrap();
+  assert_eq!(count, 1);
+}

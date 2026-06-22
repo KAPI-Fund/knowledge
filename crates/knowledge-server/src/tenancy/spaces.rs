@@ -15,16 +15,25 @@ pub async fn ensure_personal_space(
     }
 
     let id = Uuid::new_v4().to_string();
-    sqlx::query(
+    let inserted = sqlx::query_scalar::<_, String>(
         "INSERT INTO spaces (id, kind, owner_user_id, org_id, created_at) \
-         VALUES ($1, 'personal', $2, NULL, $3)",
+         VALUES ($1, 'personal', $2, NULL, $3) \
+         ON CONFLICT (owner_user_id) WHERE kind = 'personal' DO NOTHING \
+         RETURNING id",
     )
     .bind(&id)
     .bind(user_id)
     .bind(created_at)
-    .execute(pool)
+    .fetch_optional(pool)
     .await?;
-    Ok(id)
+
+    match inserted {
+        Some(id) => Ok(id),
+        // Lost the race against a concurrent writer; re-read the winner's row.
+        None => Ok(personal_space_id(pool, user_id)
+            .await?
+            .expect("personal space exists after ON CONFLICT DO NOTHING")),
+    }
 }
 
 /// Look up the user's personal space id, if one exists.
