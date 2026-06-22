@@ -473,3 +473,68 @@ async fn project_scoped_token_cannot_delete_grant_on_other_project() {
   .unwrap();
   assert_eq!(still_there, 1);
 }
+
+#[tokio::test]
+async fn org_admin_can_mint_token_for_org_kb_without_grant_row() {
+  let env = TestEnvironment::start("mint-org-admin").await.unwrap();
+  let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let pool = &state.pool;
+
+  // Org admin has access via membership, but NO project_members row.
+  let admin = insert_login_user(pool, "mint-admin", "pw").await;
+  let (org_id, org_space) = insert_org(pool, &admin, "mint-org").await;
+  let project_id = insert_project_in_space(pool, &org_space, "mint-kb").await;
+  add_org_member(pool, &org_id, &admin, "org_admin").await;
+
+  let (cookie, csrf) = login(&state, "mint-admin", "pw").await;
+  let response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri("/api/users/me/api-tokens")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::COOKIE, &cookie)
+        .header("x-csrf-token", &csrf)
+        .body(Body::from(
+          json!({ "name": "kb-token", "projectId": project_id }).to_string(),
+        ))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::CREATED);
+}
+
+#[tokio::test]
+async fn stranger_cannot_mint_token_for_org_kb() {
+  let env = TestEnvironment::start("mint-stranger").await.unwrap();
+  let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let pool = &state.pool;
+
+  let admin = insert_login_user(pool, "mint-owner", "pw").await;
+  let (org_id, org_space) = insert_org(pool, &admin, "mint-org2").await;
+  let project_id = insert_project_in_space(pool, &org_space, "mint-kb2").await;
+  add_org_member(pool, &org_id, &admin, "org_admin").await;
+  // `stranger` has no membership/grant on this org KB.
+  insert_login_user(pool, "mint-stranger", "pw").await;
+
+  let (cookie, csrf) = login(&state, "mint-stranger", "pw").await;
+  let response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri("/api/users/me/api-tokens")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::COOKIE, &cookie)
+        .header("x-csrf-token", &csrf)
+        .body(Body::from(
+          json!({ "name": "kb-token", "projectId": project_id }).to_string(),
+        ))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}

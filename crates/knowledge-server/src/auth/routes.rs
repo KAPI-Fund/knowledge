@@ -193,15 +193,14 @@ async fn create_api_token_handler(
     }
   }
   if let Some(project_id) = payload.project_id.as_deref() {
-    let membership = sqlx::query_scalar::<_, i64>(
-      "SELECT COUNT(*) FROM project_members WHERE project_id = $1 AND user_id = $2",
+    let role = crate::tenancy::access::project_access_role(
+      &state.pool,
+      project_id,
+      &principal.user_id,
     )
-    .bind(project_id)
-    .bind(&principal.user_id)
-    .fetch_one(&state.pool)
     .await
     .map_err(ApiError::from)?;
-    if membership == 0 {
+    if role.is_none() {
       return Err(ApiError::forbidden("not a project member"));
     }
   }
