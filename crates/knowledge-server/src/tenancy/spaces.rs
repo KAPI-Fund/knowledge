@@ -50,11 +50,14 @@ pub async fn personal_space_id(
 }
 
 /// Create the `spaces(kind='org')` row for a freshly created org.
-pub async fn create_org_space(
-    pool: &PgPool,
+pub async fn create_org_space<'e, E>(
+    executor: E,
     org_id: &str,
     created_at: &str,
-) -> Result<String, sqlx::Error> {
+) -> Result<String, sqlx::Error>
+where
+    E: sqlx::PgExecutor<'e>,
+{
     let id = Uuid::new_v4().to_string();
     sqlx::query(
         "INSERT INTO spaces (id, kind, owner_user_id, org_id, created_at) \
@@ -63,17 +66,20 @@ pub async fn create_org_space(
     .bind(&id)
     .bind(org_id)
     .bind(created_at)
-    .execute(pool)
+    .execute(executor)
     .await?;
     Ok(id)
 }
 
 /// Create the `spaces(kind='team')` row for a freshly created team.
-pub async fn create_team_space(
-    pool: &PgPool,
+pub async fn create_team_space<'e, E>(
+    executor: E,
     team_id: &str,
     created_at: &str,
-) -> Result<String, sqlx::Error> {
+) -> Result<String, sqlx::Error>
+where
+    E: sqlx::PgExecutor<'e>,
+{
     let id = Uuid::new_v4().to_string();
     sqlx::query(
         "INSERT INTO spaces (id, kind, owner_user_id, org_id, team_id, created_at) \
@@ -82,7 +88,7 @@ pub async fn create_team_space(
     .bind(&id)
     .bind(team_id)
     .bind(created_at)
-    .execute(pool)
+    .execute(executor)
     .await?;
     Ok(id)
 }
