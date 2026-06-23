@@ -12,7 +12,8 @@ use uuid::Uuid;
 
 use crate::app::state::AppState;
 use crate::http::error::ApiError;
-use crate::projects::routes::{authorized_principal, validate_csrf};
+use crate::auth::principal::require_session;
+use crate::projects::routes::validate_csrf;
 use crate::tenancy::access::{is_org_admin, org_member_role, team_member_role};
 use crate::tenancy::slug::validate_slug;
 use crate::tenancy::spaces::create_team_space;
@@ -46,7 +47,7 @@ async fn create_team_handler(
     Path(org_id): Path<String>,
     Json(payload): Json<CreateTeamRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let principal = authorized_principal(&state, &headers, None).await?;
+    let principal = require_session(&state, &headers).await?;
     validate_csrf(&headers, &principal)?;
     if org_member_role(&state.pool, &org_id, &principal.user_id)
         .await
@@ -57,21 +58,12 @@ async fn create_team_handler(
     }
     validate_slug(&payload.slug)?;
 
-    let taken =
-        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM teams WHERE org_id = $1 AND slug = $2")
-            .bind(&org_id)
-            .bind(&payload.slug)
-            .fetch_one(&state.pool)
-            .await
-            .map_err(ApiError::from)?;
-    if taken > 0 {
-        return Err(ApiError::bad_request("slug already taken in this org"));
-    }
-
     let created_at = OffsetDateTime::now_utc()
         .format(&Rfc3339)
         .map_err(|_| ApiError::internal("failed to format created_at"))?;
     let team_id = Uuid::new_v4().to_string();
+
+    let mut tx = state.pool.begin().await.map_err(ApiError::from)?;
 
     sqlx::query(
         "INSERT INTO teams (id, org_id, name, slug, created_by, created_at) \
@@ -83,9 +75,9 @@ async fn create_team_handler(
     .bind(&payload.slug)
     .bind(&principal.user_id)
     .bind(&created_at)
-    .execute(&state.pool)
+    .execute(&mut *tx)
     .await
-    .map_err(ApiError::from)?;
+    .map_err(|e| ApiError::from_db_unique(e, "slug already taken in this org"))?;
 
     sqlx::query(
         "INSERT INTO team_members (id, team_id, user_id, role, created_at) \
@@ -95,13 +87,15 @@ async fn create_team_handler(
     .bind(&team_id)
     .bind(&principal.user_id)
     .bind(&created_at)
-    .execute(&state.pool)
+    .execute(&mut *tx)
     .await
     .map_err(ApiError::from)?;
 
-    let space_id = create_team_space(&state.pool, &team_id, &created_at)
+    let space_id = create_team_space(&mut *tx, &team_id, &created_at)
         .await
         .map_err(ApiError::from)?;
+
+    tx.commit().await.map_err(ApiError::from)?;
 
     Ok((
         StatusCode::CREATED,
@@ -120,7 +114,7 @@ async fn list_teams_handler(
     headers: HeaderMap,
     Path(org_id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let principal = authorized_principal(&state, &headers, None).await?;
+    let principal = require_session(&state, &headers).await?;
     let Some(role) = org_member_role(&state.pool, &org_id, &principal.user_id)
         .await
         .map_err(ApiError::from)?
@@ -129,18 +123,27 @@ async fn list_teams_handler(
     };
 
     let rows = if role == "org_admin" {
-        sqlx::query_as::<_, (String, String, String)>(
-            "SELECT id, name, slug FROM teams WHERE org_id = $1 ORDER BY created_at ASC",
+        sqlx::query_as::<_, (String, String, String, String, Option<String>)>(
+            "SELECT t.id, t.name, t.slug, s.id, tm.role \
+             FROM teams t \
+             JOIN spaces s ON s.kind = 'team' AND s.team_id = t.id \
+             LEFT JOIN team_members tm ON tm.team_id = t.id AND tm.user_id = $2 \
+             WHERE t.org_id = $1 \
+             ORDER BY t.created_at ASC",
         )
         .bind(&org_id)
+        .bind(&principal.user_id)
         .fetch_all(&state.pool)
         .await
         .map_err(ApiError::from)?
     } else {
-        sqlx::query_as::<_, (String, String, String)>(
-            "SELECT t.id, t.name, t.slug FROM teams t \
+        sqlx::query_as::<_, (String, String, String, String, Option<String>)>(
+            "SELECT t.id, t.name, t.slug, s.id, tm.role \
+             FROM teams t \
              JOIN team_members tm ON tm.team_id = t.id \
-             WHERE t.org_id = $1 AND tm.user_id = $2 ORDER BY t.created_at ASC",
+             JOIN spaces s ON s.kind = 'team' AND s.team_id = t.id \
+             WHERE t.org_id = $1 AND tm.user_id = $2 \
+             ORDER BY t.created_at ASC",
         )
         .bind(&org_id)
         .bind(&principal.user_id)
@@ -151,7 +154,16 @@ async fn list_teams_handler(
 
     let teams = rows
         .into_iter()
-        .map(|(id, name, slug)| json!({ "id": id, "name": name, "slug": slug, "orgId": org_id }))
+        .map(|(id, name, slug, space_id, member_role)| {
+            json!({
+                "id": id,
+                "name": name,
+                "slug": slug,
+                "orgId": org_id,
+                "spaceId": space_id,
+                "role": member_role,
+            })
+        })
         .collect::<Vec<_>>();
     Ok(Json(json!({ "teams": teams })))
 }
@@ -168,7 +180,7 @@ async fn add_team_member_handler(
     Path((org_id, team_id)): Path<(String, String)>,
     Json(payload): Json<AddTeamMemberRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let principal = authorized_principal(&state, &headers, None).await?;
+    let principal = require_session(&state, &headers).await?;
     validate_csrf(&headers, &principal)?;
 
     let is_admin = is_org_admin(&state.pool, &org_id, &principal.user_id)
@@ -249,7 +261,7 @@ async fn list_team_members_handler(
     Path((org_id, team_id)): Path<(String, String)>,
     headers: HeaderMap,
 ) -> Result<Json<Value>, ApiError> {
-    let principal = authorized_principal(&state, &headers, None).await?;
+    let principal = require_session(&state, &headers).await?;
     let is_admin = is_org_admin(&state.pool, &org_id, &principal.user_id)
         .await
         .map_err(ApiError::from)?;
@@ -295,7 +307,7 @@ async fn remove_team_member_handler(
     headers: HeaderMap,
     Path((org_id, team_id, user_id)): Path<(String, String, String)>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let principal = authorized_principal(&state, &headers, None).await?;
+    let principal = require_session(&state, &headers).await?;
     validate_csrf(&headers, &principal)?;
 
     let is_admin = is_org_admin(&state.pool, &org_id, &principal.user_id)

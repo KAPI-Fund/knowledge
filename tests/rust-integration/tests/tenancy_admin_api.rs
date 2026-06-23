@@ -554,3 +554,103 @@ async fn create_org_duplicate_slug_returns_400() {
     .unwrap();
   assert_eq!(second.status(), StatusCode::BAD_REQUEST);
 }
+
+#[tokio::test]
+async fn list_teams_includes_non_member_team_for_org_admin() {
+  let env = TestEnvironment::start("list_teams_admin_nonmember").await.unwrap();
+  let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let (cookie, _csrf) = login_admin(&state).await;
+  let admin = admin_id(&state.pool).await;
+  let (org_id, _ospace) = insert_org(&state.pool, &admin, "acme").await;
+  add_org_member(&state.pool, &org_id, &admin, "org_admin").await;
+  // Team the admin is org_admin over but NOT a member of:
+  let (team_id, tspace) = insert_team(&state.pool, &org_id, "platform").await;
+  let _ = team_id;
+
+  let response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("GET")
+        .uri(format!("/api/orgs/{org_id}/teams"))
+        .header(header::COOKIE, &cookie)
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+  assert_eq!(response.status(), StatusCode::OK);
+  let body = read_json(response.into_body()).await;
+  let teams = body["teams"].as_array().unwrap();
+  assert_eq!(teams.len(), 1);
+  assert_eq!(teams[0]["spaceId"].as_str().unwrap(), tspace);
+  assert!(teams[0]["role"].is_null());
+}
+
+#[tokio::test]
+async fn create_team_rejects_bearer_token() {
+  let env = TestEnvironment::start("create_team_bearer").await.unwrap();
+  let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let admin = admin_id(&state.pool).await;
+  let (org_id, _ospace) = insert_org(&state.pool, &admin, "acme").await;
+  add_org_member(&state.pool, &org_id, &admin, "org_admin").await;
+  let token = mint_token(&state, &admin).await;
+
+  let response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri(format!("/api/orgs/{org_id}/teams"))
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(json!({ "name": "Platform", "slug": "platform" }).to_string()))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+  assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn create_team_duplicate_slug_returns_400() {
+  let env = TestEnvironment::start("create_team_dup_slug").await.unwrap();
+  let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let (cookie, csrf) = login_admin(&state).await;
+  let admin = admin_id(&state.pool).await;
+  let (org_id, _ospace) = insert_org(&state.pool, &admin, "acme").await;
+  add_org_member(&state.pool, &org_id, &admin, "org_admin").await;
+
+  let first = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri(format!("/api/orgs/{org_id}/teams"))
+        .header(header::COOKIE, &cookie)
+        .header("x-csrf-token", &csrf)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(json!({ "name": "Platform", "slug": "dup" }).to_string()))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(first.status(), StatusCode::CREATED);
+
+  let second = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri(format!("/api/orgs/{org_id}/teams"))
+        .header(header::COOKIE, &cookie)
+        .header("x-csrf-token", &csrf)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(json!({ "name": "Platform Two", "slug": "dup" }).to_string()))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(second.status(), StatusCode::BAD_REQUEST);
+}
