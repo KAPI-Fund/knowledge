@@ -150,11 +150,13 @@ can_manage_kb_access(pool, project_id, user_id) -> bool =
 | Read wiki / search / query / chat | ✓ | ✓ | ✓ | ✓ |
 | Import sources / edit wiki / ingest | | ✓ | ✓ | ✓ |
 | Manage members & per-KB grants | | | ✓ (own team) | ✓ |
-| Create / delete KB | | | ✓ (own team) | ✓ |
+| Delete KB | | | ✓ (own team) | ✓ |
 | Create **public** org KB | | | | ✓ (org_admin) |
 
 Plus: **any org member** may create a team and becomes its leader (independent of
-any KB role).
+any KB role). **Any team member** (leader or member) may create a KB in their own
+team's space; creating a **public** org KB requires `org_admin`. This matches the
+`POST /api/projects` gate ("team space → leader/member of that team").
 
 ## Endpoints (plan 2)
 
