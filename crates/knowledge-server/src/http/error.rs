@@ -58,6 +58,18 @@ impl ApiError {
       message: message.into(),
     }
   }
+
+  /// Map a SQLx error to 400 when it is a Postgres unique-constraint violation
+  /// (SQLSTATE 23505); otherwise treat it as an internal error. Lets handlers
+  /// rely on the DB's UNIQUE index instead of a racy COUNT precheck.
+  pub fn from_db_unique(error: sqlx::Error, conflict_message: impl Into<String>) -> Self {
+    if let sqlx::Error::Database(db_error) = &error {
+      if db_error.code().as_deref() == Some("23505") {
+        return Self::bad_request(conflict_message);
+      }
+    }
+    Self::internal(error.to_string())
+  }
 }
 
 impl From<sqlx::Error> for ApiError {
@@ -82,5 +94,16 @@ impl IntoResponse for ApiError {
     }
 
     (self.status, Json(ErrorBody { error: &self.message })).into_response()
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn from_db_unique_maps_non_database_error_to_internal() {
+    let err = ApiError::from_db_unique(sqlx::Error::RowNotFound, "slug already taken");
+    assert_eq!(err.status, StatusCode::INTERNAL_SERVER_ERROR);
   }
 }
