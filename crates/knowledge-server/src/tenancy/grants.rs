@@ -12,7 +12,8 @@ use uuid::Uuid;
 
 use crate::app::state::AppState;
 use crate::http::error::ApiError;
-use crate::projects::routes::{authorized_principal, validate_csrf};
+use crate::auth::principal::require_session;
+use crate::projects::routes::validate_csrf;
 use crate::tenancy::access::{can_manage_kb_access, org_member_role, team_member_role};
 
 pub fn router() -> Router<AppState> {
@@ -54,7 +55,7 @@ async fn upsert_grant_handler(
     Path(project_id): Path<String>,
     Json(payload): Json<UpsertGrantRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let principal = authorized_principal(&state, &headers, Some(&project_id)).await?;
+    let principal = require_session(&state, &headers).await?;
     validate_csrf(&headers, &principal)?;
 
     if payload.role != "editor" && payload.role != "viewer" {
@@ -131,7 +132,7 @@ async fn delete_grant_handler(
     headers: HeaderMap,
     Path((project_id, user_id)): Path<(String, String)>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let principal = authorized_principal(&state, &headers, Some(&project_id)).await?;
+    let principal = require_session(&state, &headers).await?;
     validate_csrf(&headers, &principal)?;
     if !can_manage_kb_access(&state.pool, &project_id, &principal.user_id)
         .await

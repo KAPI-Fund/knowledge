@@ -282,7 +282,7 @@ async fn create_project_handler(
     headers: HeaderMap,
     Json(payload): Json<CreateProjectRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let session = authorized_principal(&state, &headers, None).await?;
+    let session = crate::auth::principal::require_session(&state, &headers).await?;
     validate_csrf(&headers, &session)?;
     let project = create_project(&payload, &state, &session.user_id).await?;
     Ok((StatusCode::CREATED, Json(project)))

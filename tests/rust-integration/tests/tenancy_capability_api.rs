@@ -387,10 +387,9 @@ async fn project_scoped_token_cannot_grant_on_other_project() {
   let state = bootstrap_state(&config).await.unwrap();
   let (cookie, csrf) = login_admin(&state).await;
 
-  // Project A is an ORG KB where admin is org_admin, so admin CAN manage access
-  // on it. That isolates the token-scope check as the only possible 403 source:
-  // without the Some(&project_id) fix the handler would reach the org-membership
-  // check and return 400, not 403.
+  // Grants are a control-plane endpoint: session-cookie + CSRF only. A Bearer
+  // token — even one validly scoped to another project — is rejected at
+  // authentication (401) before any KB-access or org-membership check runs.
   let admin_id = sqlx::query_scalar::<_, String>("SELECT id FROM users WHERE username = 'admin'")
     .fetch_one(&state.pool)
     .await
@@ -403,8 +402,6 @@ async fn project_scoped_token_cannot_grant_on_other_project() {
   let project_b = create_personal_project(&state, &cookie, &csrf, "grant-b").await;
   let token_b = mint_scoped_token(&state, &cookie, &csrf, &project_b).await;
 
-  // A user who is not a member of the org: if the scope check were skipped the
-  // handler would reach org_member_role and return 400 for this user.
   let outsider = insert_login_user(&state.pool, "grant-outsider", "pw-outsider").await;
 
   let response = build_app(state.clone())
@@ -421,7 +418,7 @@ async fn project_scoped_token_cannot_grant_on_other_project() {
     )
     .await
     .unwrap();
-  assert_eq!(response.status(), StatusCode::FORBIDDEN);
+  assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]
@@ -431,7 +428,9 @@ async fn project_scoped_token_cannot_delete_grant_on_other_project() {
   let state = bootstrap_state(&config).await.unwrap();
   let (cookie, csrf) = login_admin(&state).await;
 
-  // Org KB A where admin is org_admin (admin CAN manage access on A).
+  // Grants are control-plane (session + CSRF only); a Bearer token is rejected
+  // at authentication (401) before the KB-access check, so the existing grant on
+  // A must survive the attempt.
   let admin_id = sqlx::query_scalar::<_, String>("SELECT id FROM users WHERE username = 'admin'")
     .fetch_one(&state.pool)
     .await
@@ -440,7 +439,7 @@ async fn project_scoped_token_cannot_delete_grant_on_other_project() {
   add_org_member(&state.pool, &org_id, &admin_id, "org_admin").await;
   let project_a = insert_project_in_space(&state.pool, &org_space, "scope-delgrant-kb").await;
 
-  // An existing grant on A that a mis-scoped token must not be able to revoke.
+  // An existing grant on A that a Bearer token must not be able to revoke.
   let member = insert_login_user(&state.pool, "delgrant-member", "pw-member").await;
   add_org_member(&state.pool, &org_id, &member, "org_member").await;
   grant_kb(&state.pool, &project_a, &member, "viewer").await;
@@ -460,7 +459,7 @@ async fn project_scoped_token_cannot_delete_grant_on_other_project() {
     )
     .await
     .unwrap();
-  assert_eq!(response.status(), StatusCode::FORBIDDEN);
+  assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 
   // The grant must still exist.
   let still_there = sqlx::query_scalar::<_, i64>(

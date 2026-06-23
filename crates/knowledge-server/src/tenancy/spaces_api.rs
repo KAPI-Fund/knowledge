@@ -8,7 +8,7 @@ use serde_json::json;
 
 use crate::app::state::AppState;
 use crate::http::error::ApiError;
-use crate::projects::routes::authorized_principal;
+use crate::auth::principal::require_session;
 use crate::tenancy::spaces::personal_space_id;
 
 pub fn router() -> Router<AppState> {
@@ -19,7 +19,7 @@ async fn list_spaces_handler(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, ApiError> {
-    let principal = authorized_principal(&state, &headers, None).await?;
+    let principal = require_session(&state, &headers).await?;
     let user_id = &principal.user_id;
 
     let personal = personal_space_id(&state.pool, user_id)
