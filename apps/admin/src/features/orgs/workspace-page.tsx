@@ -30,12 +30,6 @@ export function OrgWorkspacePage() {
   const publicProjects = allProjects.filter((p) => p.spaceKind === "org");
   const teamList = teams.data?.teams ?? [];
 
-  const leaderTeamIds = new Set(
-    (spaces.data?.teams ?? [])
-      .filter((t) => t.orgId === orgId && t.role === "leader")
-      .map((t) => t.id),
-  );
-
   const openManage = (projectId: string, teamId: string | null) => {
     setManageProjectId(projectId);
     setManageTeamId(teamId);
@@ -88,8 +82,8 @@ export function OrgWorkspacePage() {
 
       {teamList.map((team) => {
         const teamProjects = allProjects.filter((p) => p.teamId === team.id);
-        const canManageTeam = isAdmin || leaderTeamIds.has(team.id);
-        const teamSpaceId = (spaces.data?.teams ?? []).find((t) => t.id === team.id)?.spaceId ?? "";
+        const canManageTeam = isAdmin || team.role === "leader";
+        const teamSpaceId = team.spaceId;
         return (
           <section key={team.id}>
             <div className="flex items-center justify-between">

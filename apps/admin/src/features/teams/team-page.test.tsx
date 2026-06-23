@@ -1,17 +1,28 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter, Routes, Route } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+
+const mockState = vi.hoisted(() => ({
+  orgRole: "org_member" as "org_admin" | "org_member",
+  spacesTeams: [] as Array<Record<string, unknown>>,
+  orgTeams: [] as Array<Record<string, unknown>>,
+}));
 
 vi.mock("../spaces/use-spaces", () => ({
   useSpacesQuery: () => ({
     data: {
       personal: { spaceId: "p" },
-      orgs: [{ id: "org-1", slug: "acme", name: "Acme", spaceId: "s1", role: "org_member" }],
-      teams: [
-        { id: "team-1", orgId: "org-1", slug: "platform", name: "Platform", spaceId: "ts1", role: "leader" },
-      ],
+      orgs: [{ id: "org-1", slug: "acme", name: "Acme", spaceId: "s1", role: mockState.orgRole }],
+      teams: mockState.spacesTeams,
     },
+    isLoading: false,
+  }),
+}));
+
+vi.mock("../orgs/workspace-queries", () => ({
+  useOrgTeamsQuery: () => ({
+    data: { teams: mockState.orgTeams },
     isLoading: false,
   }),
 }));
@@ -55,6 +66,16 @@ function renderPage() {
   );
 }
 
+beforeEach(() => {
+  mockState.orgRole = "org_member";
+  mockState.spacesTeams = [
+    { id: "team-1", orgId: "org-1", slug: "platform", name: "Platform", spaceId: "ts1", role: "leader" },
+  ];
+  mockState.orgTeams = [
+    { id: "team-1", name: "Platform", slug: "platform", orgId: "org-1", spaceId: "ts1", role: "leader" },
+  ];
+});
+
 describe("TeamPage", () => {
   it("renders members and team KBs", () => {
     renderPage();
@@ -68,5 +89,18 @@ describe("TeamPage", () => {
     expect(screen.getByRole("button", { name: /Add member/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Remove dev/i })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Remove lead/i })).toBeNull();
+  });
+
+  it("org_admin who is not a team member can still manage the team", () => {
+    // /api/spaces omits teams the caller does not belong to:
+    mockState.orgRole = "org_admin";
+    mockState.spacesTeams = [];
+    // useOrgTeamsQuery still surfaces the team (with role null for a non-member admin):
+    mockState.orgTeams = [
+      { id: "team-1", name: "Platform", slug: "platform", orgId: "org-1", spaceId: "ts1", role: null },
+    ];
+    renderPage();
+    expect(screen.getByText("Team · Platform")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Add member/i })).toBeInTheDocument();
   });
 });

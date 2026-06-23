@@ -63,6 +63,8 @@ export const teamListSchema = z.object({
       name: z.string(),
       slug: z.string(),
       orgId: z.string(),
+      spaceId: z.string(),
+      role: z.enum(["leader", "member"]).nullable(),
     }),
   ),
 });

@@ -4,6 +4,7 @@ import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { useSpacesQuery } from "../spaces/use-spaces";
 import { useTeamMembersQuery, useTeamProjectsQuery } from "./team-queries";
+import { useOrgTeamsQuery } from "../orgs/workspace-queries";
 import {
   useAddTeamMemberMutation,
   useRemoveTeamMemberMutation,
@@ -15,7 +16,8 @@ export function TeamPage() {
   const { orgId = "", teamId = "" } = useParams();
   const spaces = useSpacesQuery();
   const org = spaces.data?.orgs.find((entry) => entry.id === orgId);
-  const team = spaces.data?.teams.find((entry) => entry.id === teamId);
+  const teamsQuery = useOrgTeamsQuery(orgId);
+  const team = teamsQuery.data?.teams.find((entry) => entry.id === teamId);
   const teamSpaceId = team?.spaceId ?? "";
 
   const isAdmin = org?.role === "org_admin";
@@ -33,7 +35,7 @@ export function TeamPage() {
   const [manageProjectId, setManageProjectId] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  if (spaces.isLoading) return <p>Loading…</p>;
+  if (spaces.isLoading || teamsQuery.isLoading) return <p>Loading…</p>;
   if (!team) return <p>Access denied or team not found.</p>;
 
   const add = async () => {

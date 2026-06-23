@@ -27,7 +27,11 @@ vi.mock("./workspace-queries", () => ({
     isLoading: false,
   }),
   useOrgTeamsQuery: () => ({
-    data: { teams: [{ id: "team-1", name: "Platform", slug: "platform", orgId: "org-1" }] },
+    data: {
+      teams: [
+        { id: "team-1", name: "Platform", slug: "platform", orgId: "org-1", spaceId: "ts1", role: "leader" },
+      ],
+    },
     isLoading: false,
   }),
 }));
