@@ -99,6 +99,27 @@ pub async fn resolve_principal(
   })
 }
 
+/// Resolve a Principal from the session cookie ONLY (never Bearer). Control-plane
+/// endpoints use this so ambient-credential CSRF protection always applies; API
+/// tokens must not reach org/team/grant management.
+pub async fn require_session(
+  state: &AppState,
+  headers: &HeaderMap,
+) -> Result<Principal, ApiError> {
+  let session_id =
+    extract_session_cookie(headers).ok_or_else(|| ApiError::unauthorized("missing session"))?;
+  let session = find_session(state, &session_id)
+    .await?
+    .ok_or_else(|| ApiError::unauthorized("missing session"))?;
+  Ok(Principal {
+    user_id: session.user_id,
+    csrf_token: Some(session.csrf_token),
+    scope: AuthScope::Session,
+    token_id: None,
+    project_id: None,
+  })
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
