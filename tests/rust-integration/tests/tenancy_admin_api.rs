@@ -70,6 +70,22 @@ async fn admin_id(pool: &sqlx::PgPool) -> String {
     .unwrap()
 }
 
+/// Mint an unscoped API token (Bearer) for a user. Returns the plaintext token.
+#[allow(dead_code)]
+async fn mint_token(state: &knowledge_server::app::state::AppState, user_id: &str) -> String {
+  knowledge_server::auth::api_token::create_api_token(
+    state,
+    knowledge_server::auth::api_token::CreateApiTokenInput {
+      user_id,
+      project_id: None,
+      name: "test-token",
+    },
+  )
+  .await
+  .unwrap()
+  .1
+}
+
 // --- direct-insert helpers (copied verbatim from tenancy_access_api.rs) ---
 // Some are unused until later tasks; unused-fn warnings are harmless here.
 
@@ -475,4 +491,66 @@ async fn list_team_members_forbidden_for_outsider() {
     .unwrap();
 
   assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn create_org_rejects_bearer_token() {
+  let env = TestEnvironment::start("create_org_bearer").await.unwrap();
+  let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let admin = admin_id(&state.pool).await;
+  let token = mint_token(&state, &admin).await;
+
+  let response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri("/api/orgs")
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(json!({ "name": "Acme", "slug": "acme" }).to_string()))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+  assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn create_org_duplicate_slug_returns_400() {
+  let env = TestEnvironment::start("create_org_dup_slug").await.unwrap();
+  let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let (cookie, csrf) = login_admin(&state).await;
+
+  let first = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri("/api/orgs")
+        .header(header::COOKIE, &cookie)
+        .header("x-csrf-token", &csrf)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(json!({ "name": "Acme", "slug": "dup" }).to_string()))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(first.status(), StatusCode::CREATED);
+
+  let second = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri("/api/orgs")
+        .header(header::COOKIE, &cookie)
+        .header("x-csrf-token", &csrf)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(json!({ "name": "Acme Two", "slug": "dup" }).to_string()))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(second.status(), StatusCode::BAD_REQUEST);
 }

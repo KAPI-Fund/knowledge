@@ -12,7 +12,8 @@ use uuid::Uuid;
 
 use crate::app::state::AppState;
 use crate::http::error::ApiError;
-use crate::projects::routes::{authorized_principal, validate_csrf};
+use crate::auth::principal::require_session;
+use crate::projects::routes::validate_csrf;
 use crate::tenancy::access::{is_org_admin, org_member_role};
 use crate::tenancy::slug::validate_slug;
 use crate::tenancy::spaces::create_org_space;
@@ -42,23 +43,16 @@ async fn create_org_handler(
     headers: HeaderMap,
     Json(payload): Json<CreateOrgRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let principal = authorized_principal(&state, &headers, None).await?;
+    let principal = require_session(&state, &headers).await?;
     validate_csrf(&headers, &principal)?;
     validate_slug(&payload.slug)?;
-
-    let taken = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM organizations WHERE slug = $1")
-        .bind(&payload.slug)
-        .fetch_one(&state.pool)
-        .await
-        .map_err(ApiError::from)?;
-    if taken > 0 {
-        return Err(ApiError::bad_request("slug already taken"));
-    }
 
     let created_at = OffsetDateTime::now_utc()
         .format(&Rfc3339)
         .map_err(|_| ApiError::internal("failed to format created_at"))?;
     let org_id = Uuid::new_v4().to_string();
+
+    let mut tx = state.pool.begin().await.map_err(ApiError::from)?;
 
     sqlx::query(
         "INSERT INTO organizations (id, name, slug, created_by, created_at) \
@@ -69,9 +63,9 @@ async fn create_org_handler(
     .bind(&payload.slug)
     .bind(&principal.user_id)
     .bind(&created_at)
-    .execute(&state.pool)
+    .execute(&mut *tx)
     .await
-    .map_err(ApiError::from)?;
+    .map_err(|e| ApiError::from_db_unique(e, "slug already taken"))?;
 
     sqlx::query(
         "INSERT INTO organization_members (id, org_id, user_id, role, created_at) \
@@ -81,13 +75,15 @@ async fn create_org_handler(
     .bind(&org_id)
     .bind(&principal.user_id)
     .bind(&created_at)
-    .execute(&state.pool)
+    .execute(&mut *tx)
     .await
     .map_err(ApiError::from)?;
 
-    let space_id = create_org_space(&state.pool, &org_id, &created_at)
+    let space_id = create_org_space(&mut *tx, &org_id, &created_at)
         .await
         .map_err(ApiError::from)?;
+
+    tx.commit().await.map_err(ApiError::from)?;
 
     Ok((
         StatusCode::CREATED,
@@ -113,7 +109,7 @@ async fn add_org_member_handler(
     Path(org_id): Path<String>,
     Json(payload): Json<AddOrgMemberRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let principal = authorized_principal(&state, &headers, None).await?;
+    let principal = require_session(&state, &headers).await?;
     validate_csrf(&headers, &principal)?;
     if !is_org_admin(&state.pool, &org_id, &principal.user_id)
         .await
@@ -171,7 +167,7 @@ async fn list_org_members_handler(
     Path(org_id): Path<String>,
     headers: HeaderMap,
 ) -> Result<Json<Value>, ApiError> {
-    let principal = authorized_principal(&state, &headers, None).await?;
+    let principal = require_session(&state, &headers).await?;
     if org_member_role(&state.pool, &org_id, &principal.user_id)
         .await
         .map_err(ApiError::from)?
@@ -211,7 +207,7 @@ async fn set_org_member_role_handler(
     headers: HeaderMap,
     Json(payload): Json<SetOrgMemberRoleRequest>,
 ) -> Result<Json<Value>, ApiError> {
-    let principal = authorized_principal(&state, &headers, None).await?;
+    let principal = require_session(&state, &headers).await?;
     validate_csrf(&headers, &principal)?;
     if payload.role != "org_admin" && payload.role != "org_member" {
         return Err(ApiError::bad_request("invalid role"));
@@ -246,7 +242,7 @@ async fn remove_org_member_handler(
     headers: HeaderMap,
     Path((org_id, user_id)): Path<(String, String)>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let principal = authorized_principal(&state, &headers, None).await?;
+    let principal = require_session(&state, &headers).await?;
     validate_csrf(&headers, &principal)?;
     if !is_org_admin(&state.pool, &org_id, &principal.user_id)
         .await
