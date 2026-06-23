@@ -22,7 +22,7 @@ export function fetchSpaces() {
 
 export async function fetchOrgProjects(spaceId: string) {
   const response = await apiFetch(
-    `/api/projects?space_id=${encodeURIComponent(spaceId)}`,
+    `/api/projects?spaceId=${encodeURIComponent(spaceId)}`,
     { method: "GET" },
     projectListSchema,
   );
