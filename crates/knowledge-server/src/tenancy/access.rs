@@ -116,7 +116,13 @@ pub async fn project_access_role(
             .bind(user_id)
             .fetch_optional(pool)
             .await?;
-            if team_role.as_deref() == Some("leader") {
+            // Only current team members (or the org_admin handled above) reach a
+            // private team KB. A removed member keeps no access even if a stale
+            // per-KB grant row survives the removal.
+            let Some(team_role) = team_role else {
+                return Ok(None);
+            };
+            if team_role == "leader" {
                 return Ok(Some(AccessRole::Editor));
             }
             let grant = sqlx::query_scalar::<_, String>(

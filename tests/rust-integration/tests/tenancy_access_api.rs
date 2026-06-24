@@ -578,6 +578,49 @@ async fn team_access_role_matrix() {
 }
 
 #[tokio::test]
+async fn team_access_revoked_when_member_removed_with_stale_grant() {
+  let env = TestEnvironment::start("team-access-revoke").await.unwrap();
+  let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let pool = &state.pool;
+
+  let admin = insert_user(pool, "rev-admin").await;
+  let member = insert_user(pool, "rev-member").await;
+
+  let (org_id, _org_space) = insert_org(pool, &admin, "rev-org").await;
+  add_org_member(pool, &org_id, &admin, "org_admin").await;
+  add_org_member(pool, &org_id, &member, "org_member").await;
+
+  let (team_id, team_space) = insert_team(pool, &org_id, "rev-team").await;
+  let team_project = insert_project_in_space(pool, &team_space, "rev-team-kb").await;
+
+  // The member is on the team and holds an editor grant on the team KB.
+  add_team_member(pool, &team_id, &member, "member").await;
+  grant_kb(pool, &team_project, &member, "editor").await;
+  assert_eq!(
+    project_access_role(pool, &team_project, &member).await.unwrap(),
+    Some(AccessRole::Editor),
+    "a granted team member should have editor access"
+  );
+
+  // Remove the member from the team exactly as remove_team_member_handler does:
+  // it deletes team_members but leaves the project_members grant in place.
+  sqlx::query("DELETE FROM team_members WHERE team_id = $1 AND user_id = $2")
+    .bind(&team_id)
+    .bind(&member)
+    .execute(pool)
+    .await
+    .unwrap();
+
+  // The stale grant must not keep granting access to a private team KB.
+  assert_eq!(
+    project_access_role(pool, &team_project, &member).await.unwrap(),
+    None,
+    "a removed team member must lose access despite a stale grant"
+  );
+}
+
+#[tokio::test]
 async fn can_manage_kb_access_matrix() {
   let env = TestEnvironment::start("team-manage-cap").await.unwrap();
   let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
