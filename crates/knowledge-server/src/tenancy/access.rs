@@ -266,6 +266,15 @@ pub async fn team_in_org(
     Ok(count > 0)
 }
 
+/// Whether a project with this id exists.
+pub async fn project_exists(pool: &PgPool, project_id: &str) -> Result<bool, sqlx::Error> {
+    let count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM projects WHERE id = $1")
+        .bind(project_id)
+        .fetch_one(pool)
+        .await?;
+    Ok(count > 0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::AccessRole;

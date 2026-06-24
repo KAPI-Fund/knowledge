@@ -1763,6 +1763,12 @@ pub(crate) async fn authorized_principal(
         .map_err(ApiError::from)?;
 
         if role.is_none() {
+            if !crate::tenancy::access::project_exists(&state.pool, project_id)
+                .await
+                .map_err(ApiError::from)?
+            {
+                return Err(ApiError::not_found("project not found"));
+            }
             return Err(ApiError::forbidden("not a project member"));
         }
     }
@@ -1796,6 +1802,14 @@ pub(crate) async fn authorized_principal_with_role(
         Some(_) => Err(ApiError::forbidden(
             "insufficient permissions for this project",
         )),
-        None => Err(ApiError::forbidden("not a project member")),
+        None => {
+            if !crate::tenancy::access::project_exists(&state.pool, project_id)
+                .await
+                .map_err(ApiError::from)?
+            {
+                return Err(ApiError::not_found("project not found"));
+            }
+            Err(ApiError::forbidden("not a project member"))
+        }
     }
 }

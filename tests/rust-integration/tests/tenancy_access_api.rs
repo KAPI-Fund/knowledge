@@ -446,6 +446,29 @@ async fn project_detail_requires_space_access() {
 }
 
 #[tokio::test]
+async fn project_detail_unknown_project_returns_404() {
+  let env = TestEnvironment::start("project-unknown-404").await.unwrap();
+  let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let (admin_cookie, _admin_csrf) = login_admin(&state).await;
+
+  // A request for a project that does not exist must be 404, not a 403 that
+  // leaks "not a project member" for a resource that was never there.
+  let ghost = Uuid::new_v4().to_string();
+  let response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .uri(format!("/api/projects/{ghost}"))
+        .header(header::COOKIE, &admin_cookie)
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn team_migration_creates_tables_and_constraints() {
   let env = TestEnvironment::start("team-migration").await.unwrap();
   let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
