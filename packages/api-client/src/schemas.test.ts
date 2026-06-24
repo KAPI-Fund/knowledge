@@ -80,9 +80,22 @@ describe("parseProjectList", () => {
 describe("parseTeamList", () => {
   it("parses teams", () => {
     const result = parseTeamList({
-      teams: [{ id: "t1", name: "Platform", slug: "plat", orgId: "o1" }],
+      teams: [
+        { id: "t1", name: "Platform", slug: "plat", orgId: "o1", spaceId: "s1", role: "leader" },
+      ],
     });
     expect(result.teams[0].slug).toBe("plat");
+    expect(result.teams[0].spaceId).toBe("s1");
+    expect(result.teams[0].role).toBe("leader");
+  });
+
+  it("accepts a null role for an org admin who is not a team member", () => {
+    const result = parseTeamList({
+      teams: [
+        { id: "t1", name: "Platform", slug: "plat", orgId: "o1", spaceId: "s1", role: null },
+      ],
+    });
+    expect(result.teams[0].role).toBeNull();
   });
 });
 
