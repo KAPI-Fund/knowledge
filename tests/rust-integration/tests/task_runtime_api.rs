@@ -23,14 +23,13 @@ async fn created_tasks_start_with_runtime_fields() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/projects/{project_id}/query-tasks"))
+                .uri(format!("/api/projects/{project_id}/lint-tasks"))
                 .header(header::CONTENT_TYPE, "application/json")
                 .header(header::COOKIE, &cookie)
                 .header("x-csrf-token", &csrf)
                 .body(Body::from(
                     json!({
-                      "query": "attention",
-                      "topK": 3
+                      "mode": "structural"
                     })
                     .to_string(),
                 ))
@@ -65,13 +64,12 @@ async fn scheduler_can_acquire_and_complete_a_queued_task() {
         &state,
         CreateTaskInput {
             project_id,
-            task_type: "query.answer".to_string(),
-            title: "Query: attention".to_string(),
+            task_type: "project.run_lint".to_string(),
+            title: "Run structural lint".to_string(),
             relative_path: None,
             detail: json!({}),
             payload: json!({
-              "query": "attention",
-              "topK": 3
+              "mode": "structural"
             }),
             created_by: admin_user_id,
             max_attempts: 3,
@@ -111,11 +109,11 @@ async fn startup_requeues_running_and_retry_waiting_tasks() {
         &state,
         CreateTaskInput {
             project_id: project_id.clone(),
-            task_type: "query.answer".to_string(),
-            title: "Query: running".to_string(),
+            task_type: "project.run_lint".to_string(),
+            title: "Run structural lint".to_string(),
             relative_path: None,
             detail: json!({}),
-            payload: json!({ "query": "running", "topK": 3 }),
+            payload: json!({ "mode": "structural" }),
             created_by: admin_user_id.clone(),
             max_attempts: 3,
         },
@@ -126,11 +124,11 @@ async fn startup_requeues_running_and_retry_waiting_tasks() {
         &state,
         CreateTaskInput {
             project_id,
-            task_type: "query.answer".to_string(),
-            title: "Query: waiting".to_string(),
+            task_type: "project.run_lint".to_string(),
+            title: "Run structural lint".to_string(),
             relative_path: None,
             detail: json!({}),
-            payload: json!({ "query": "waiting", "topK": 3 }),
+            payload: json!({ "mode": "structural" }),
             created_by: admin_user_id,
             max_attempts: 3,
         },
@@ -168,14 +166,13 @@ async fn queued_task_creation_emits_worker_wakeup_signal() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/projects/{project_id}/query-tasks"))
+                .uri(format!("/api/projects/{project_id}/lint-tasks"))
                 .header(header::CONTENT_TYPE, "application/json")
                 .header(header::COOKIE, &cookie)
                 .header("x-csrf-token", &csrf)
                 .body(Body::from(
                     json!({
-                      "query": "attention",
-                      "topK": 3
+                      "mode": "structural"
                     })
                     .to_string(),
                 ))
@@ -206,13 +203,12 @@ async fn retry_waiting_tasks_are_not_reacquired_before_next_retry_at_and_reenter
         &state,
         CreateTaskInput {
             project_id,
-            task_type: "query.answer".to_string(),
-            title: "Query: attention".to_string(),
+            task_type: "project.run_lint".to_string(),
+            title: "Run structural lint".to_string(),
             relative_path: None,
             detail: json!({}),
             payload: json!({
-              "query": "attention",
-              "topK": 3
+              "mode": "structural"
             }),
             created_by: admin_user_id,
             max_attempts: 3,
@@ -312,7 +308,7 @@ async fn get_task_detail(
     let response = build_app(state)
         .oneshot(
             Request::builder()
-                .uri(format!("/api/projects/{project_id}/query-tasks/{task_id}"))
+                .uri(format!("/api/projects/{project_id}/tasks/{task_id}"))
                 .header(header::COOKIE, cookie)
                 .body(Body::empty())
                 .unwrap(),

@@ -201,28 +201,27 @@ async fn viewer_cannot_sweep_reviews_editor_can() {
 }
 
 #[tokio::test]
-async fn viewer_can_create_query_task() {
-  let env = TestEnvironment::start("cap-query").await.unwrap();
+async fn viewer_can_list_tasks() {
+  let env = TestEnvironment::start("cap-list-tasks").await.unwrap();
   let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
   let state = bootstrap_state(&config).await.unwrap();
-  let (project_id, (vcookie, vcsrf), _editor) =
+  let (project_id, (vcookie, _vcsrf), _editor) =
     org_kb_with_viewer_and_editor(&state).await;
 
-  // Querying is viewer-allowed per the capability matrix; it must NOT be gated.
+  // Reading task history is viewer-allowed per the capability matrix; it must
+  // NOT be gated.
   let response = build_app(state.clone())
     .oneshot(
       Request::builder()
-        .method("POST")
-        .uri(format!("/api/projects/{project_id}/query-tasks"))
-        .header(header::CONTENT_TYPE, "application/json")
+        .method("GET")
+        .uri(format!("/api/projects/{project_id}/tasks"))
         .header(header::COOKIE, &vcookie)
-        .header("x-csrf-token", &vcsrf)
-        .body(Body::from(json!({ "query": "hello", "topK": 3 }).to_string()))
+        .body(Body::empty())
         .unwrap(),
     )
     .await
     .unwrap();
-  assert_eq!(response.status(), StatusCode::ACCEPTED);
+  assert_eq!(response.status(), StatusCode::OK);
 }
 
 #[tokio::test]

@@ -19,7 +19,6 @@ use crate::projects::source_watch::{
 use crate::projects::tasks::{
     CreateTaskRecord, create_queued_task, get_task, list_tasks, update_task_status,
 };
-use crate::query::{ExecuteProjectQueryInput, execute_project_query};
 use crate::retrieval::service::search_project_hybrid;
 use crate::retrieval::store::delete_pages;
 use knowledge_core::graph::{build_graph_view, neighbors_for_node};
@@ -104,23 +103,10 @@ pub fn router() -> Router<AppState> {
             post(cancel_task_handler),
         )
         .route(
-            "/api/projects/{project_id}/query-tasks",
-            post(create_query_task_handler),
-        )
-        .route(
-            "/api/projects/{project_id}/query-tasks/{task_id}",
-            get(query_task_detail_handler),
-        )
-        .route(
-            "/api/projects/{project_id}/query-tasks/{task_id}/save",
-            post(save_query_task_handler),
-        )
-        .route(
             "/api/projects/{project_id}/lint-tasks",
             post(create_lint_task_handler),
         )
         .route("/api/projects/{project_id}/ingest", post(ingest_handler))
-        .route("/api/projects/{project_id}/query", post(query_handler))
         .route(
             "/api/projects/{project_id}/reviews",
             get(list_reviews_handler),
@@ -210,20 +196,8 @@ struct DeleteWikiPagesRequest {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CreateQueryTaskRequest {
-    pub query: String,
-    pub top_k: i64,
-}
-
-#[derive(Debug, Clone, Deserialize)]
 pub struct CreateLintTaskRequest {
     pub mode: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct SaveQueryTaskRequest {
-    pub title: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1043,164 +1017,6 @@ async fn cancel_task_handler(
     Ok(Json(json!(updated)))
 }
 
-async fn create_query_task_handler(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path(project_id): Path<String>,
-    Json(payload): Json<CreateQueryTaskRequest>,
-) -> Result<impl IntoResponse, ApiError> {
-    let session = authorized_principal(&state, &headers, Some(&project_id)).await?;
-    validate_csrf(&headers, &session)?;
-
-    let (provider_mode, language, default_query_limit) =
-        sqlx::query_as::<_, (String, String, i64)>(
-            "SELECT provider_mode, language, default_query_limit FROM system_settings WHERE id = 1",
-        )
-        .fetch_one(&state.pool)
-        .await
-        .map_err(ApiError::from)?;
-
-    let top_k = if payload.top_k > 0 {
-        payload.top_k
-    } else {
-        default_query_limit
-    };
-
-    let task = create_queued_task(
-        &state,
-        CreateTaskRecord {
-            project_id: project_id.clone(),
-            task_type: "query.answer".to_string(),
-            title: format!("Query: {}", payload.query),
-            relative_path: None,
-            detail: json!({}),
-            created_by: session.user_id.clone(),
-        },
-        json!({
-          "query": payload.query,
-          "topK": top_k,
-          "providerMode": provider_mode,
-          "language": language,
-          "requestedBy": session.user_id
-        }),
-    )
-    .await?;
-
-    Ok((
-        StatusCode::ACCEPTED,
-        Json(json!({
-          "taskId": task.id,
-          "status": task.status
-        })),
-    ))
-}
-
-async fn query_task_detail_handler(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path((project_id, task_id)): Path<(String, String)>,
-) -> Result<impl IntoResponse, ApiError> {
-    let _session = authorized_principal(&state, &headers, Some(&project_id)).await?;
-    Ok(Json(json!(get_task(&state, &project_id, &task_id).await?)))
-}
-
-async fn save_query_task_handler(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path((project_id, task_id)): Path<(String, String)>,
-    Json(payload): Json<SaveQueryTaskRequest>,
-) -> Result<impl IntoResponse, ApiError> {
-    let session = authorized_principal_with_role(
-        &state,
-        &headers,
-        &project_id,
-        crate::tenancy::access::AccessRole::Editor,
-    )
-    .await?;
-    validate_csrf(&headers, &session)?;
-
-    let source_task = get_task(&state, &project_id, &task_id).await?;
-    if source_task.task_type != "query.answer" || source_task.status != "succeeded" {
-        return Err(ApiError::bad_request(
-            "only successful query answer tasks can be saved",
-        ));
-    }
-
-    let result = source_task
-        .result
-        .as_ref()
-        .ok_or_else(|| ApiError::bad_request("query task result is missing"))?;
-    let title = payload.title.trim();
-    if title.is_empty() {
-        return Err(ApiError::bad_request("title is required"));
-    }
-    let slug = slugify_title(title);
-    if slug.is_empty() {
-        return Err(ApiError::bad_request("title does not produce a valid slug"));
-    }
-    let answer = result
-        .get("answer")
-        .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| ApiError::bad_request("query answer is missing"))?;
-    let context_summary = result
-        .get("contextSummary")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default();
-    let citations = result
-        .get("citations")
-        .and_then(serde_json::Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-
-    let task = create_queued_task(
-        &state,
-        CreateTaskRecord {
-            project_id: project_id.clone(),
-            task_type: "query.save_answer".to_string(),
-            title: format!("Save query: {title}"),
-            relative_path: Some(format!("wiki/queries/{slug}.md")),
-            detail: json!({
-              "sourceTaskId": task_id
-            }),
-            created_by: session.user_id.clone(),
-        },
-        json!({
-          "sourceTaskId": task_id,
-          "title": title,
-          "slug": slug,
-          "answer": answer,
-          "citations": citations,
-          "contextSummary": context_summary
-        }),
-    )
-    .await?;
-
-    append_audit_log(
-        &state,
-        CreateAuditLog {
-            project_id: Some(project_id),
-            actor_id: session.user_id,
-            action: "query.save.enqueued".to_string(),
-            target_type: "query".to_string(),
-            target_id: task_id,
-            task_id: Some(task.id.clone()),
-            summary: format!("Queued save-to-wiki for {title}"),
-            metadata: json!({
-              "slug": slug
-            }),
-        },
-    )
-    .await?;
-
-    Ok((
-        StatusCode::ACCEPTED,
-        Json(json!({
-          "taskId": task.id,
-          "status": task.status
-        })),
-    ))
-}
-
 async fn create_lint_task_handler(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1313,27 +1129,6 @@ async fn ingest_handler(
           "status": task.status
         })),
     ))
-}
-
-async fn query_handler(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path(project_id): Path<String>,
-    Json(payload): Json<SearchRequest>,
-) -> Result<impl IntoResponse, ApiError> {
-    let _session = authorized_principal(&state, &headers, Some(&project_id)).await?;
-    let result = execute_project_query(
-        &state,
-        &project_id,
-        ExecuteProjectQueryInput {
-            query: payload.query,
-            top_k: payload.top_k,
-            language: None,
-        },
-    )
-    .await
-    .map_err(|error| error.into_api_error())?;
-    Ok(Json(result))
 }
 
 async fn list_reviews_handler(
@@ -1671,23 +1466,6 @@ pub(crate) fn validate_csrf(
     Ok(())
 }
 
-fn slugify_title(input: &str) -> String {
-    let mut slug = String::new();
-    let mut last_was_dash = false;
-
-    for ch in input.chars() {
-        if ch.is_ascii_alphanumeric() {
-            slug.push(ch.to_ascii_lowercase());
-            last_was_dash = false;
-        } else if !last_was_dash && !slug.is_empty() {
-            slug.push('-');
-            last_was_dash = true;
-        }
-    }
-
-    slug.trim_matches('-').to_string()
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReviewStatusFilter {
     Unresolved,
@@ -1778,7 +1556,7 @@ pub(crate) async fn authorized_principal(
 /// Like [`authorized_principal`] for a concrete project, but additionally
 /// requires the caller's effective role to be at least `required`.
 ///
-/// Read/query handlers keep using `authorized_principal` (viewer-accessible);
+/// Read handlers keep using `authorized_principal` (viewer-accessible);
 /// mutating handlers (import/edit-wiki/ingest/review/dedup/task-control) use
 /// this so that a `Viewer` — including a public-org-KB reader — gets 403.
 pub(crate) async fn authorized_principal_with_role(

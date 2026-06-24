@@ -58,108 +58,6 @@ async fn real_provider_contract_exposes_models_and_chat_completion() -> Result<(
 }
 
 #[tokio::test]
-async fn real_provider_query_and_save_round_trip() -> Result<()> {
-    if !smoke_enabled() {
-        eprintln!(
-            "Skipping live provider smoke. Set KNOWLEDGE_RUN_REAL_PROVIDER_SMOKE=1 to run it."
-        );
-        return Ok(());
-    }
-
-    let provider = provider_config()?;
-    let env = TestEnvironment::start("real-provider-query-save").await?;
-    let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
-    let state = bootstrap_state_without_scheduler(&config).await?;
-    let (cookie, csrf) = login_and_csrf(state.clone()).await?;
-    let project_temp = tempdir()?;
-    let project_root = project_temp.path().join("real-provider-query-save-project");
-    let project_id = create_project(state.clone(), &cookie, &csrf, project_root.clone()).await?;
-
-    seed_query_source(&project_root)?;
-    configure_provider(&state, &provider, None).await?;
-
-    let task_id =
-        create_query_task(&state, &cookie, &csrf, &project_id, "What is attention?").await?;
-    let task = wait_for_task_terminal(&state, &task_id).await?;
-    assert_eq!(task.status, "succeeded");
-
-    let result = task.result.as_ref().context("missing query result")?;
-    assert_eq!(
-        result
-            .get("citations")
-            .and_then(Value::as_array)
-            .map(Vec::len),
-        Some(1)
-    );
-    assert_eq!(
-        result
-            .get("citations")
-            .and_then(Value::as_array)
-            .and_then(|items| items.first())
-            .and_then(|item| item.get("path"))
-            .and_then(Value::as_str),
-        Some("wiki/concepts/attention.md")
-    );
-    assert!(
-        !result
-            .get("answer")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .trim()
-            .is_empty()
-    );
-
-    let save_response = build_app(state.clone())
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri(format!(
-                    "/api/projects/{project_id}/query-tasks/{task_id}/save"
-                ))
-                .header(header::COOKIE, &cookie)
-                .header("x-csrf-token", &csrf)
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(
-                    json!({ "title": "Attention Notes" }).to_string(),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(save_response.status(), StatusCode::ACCEPTED);
-    let save_payload = read_json(save_response.into_body()).await;
-    let save_task_id = save_payload
-        .get("taskId")
-        .and_then(Value::as_str)
-        .context("missing save task id")?;
-
-    let save_task = wait_for_task_terminal(&state, save_task_id).await?;
-    assert_eq!(save_task.status, "succeeded");
-    assert_eq!(
-        save_task
-            .result
-            .as_ref()
-            .and_then(|result| result.get("relativePath"))
-            .and_then(Value::as_str),
-        Some("wiki/queries/attention-notes.md"),
-    );
-
-    let page = fs::read_to_string(project_root.join("wiki/queries/attention-notes.md"))?;
-    assert!(page.contains("type: query"));
-    assert!(page.contains("Attention Notes"));
-    assert!(page.contains("## Sources"));
-
-    let index = fs::read_to_string(project_root.join("wiki/index.md"))?;
-    assert!(index.contains("[[queries/attention-notes]]"));
-
-    let log = fs::read_to_string(project_root.join("wiki/log.md"))?;
-    assert!(log.contains("query | Attention Notes"));
-
-    Ok(())
-}
-
-#[tokio::test]
 async fn real_provider_ingest_search_and_semantic_lint_smoke() -> Result<()> {
     if !smoke_enabled() {
         eprintln!(
@@ -365,42 +263,6 @@ async fn configure_provider(
     Ok(())
 }
 
-async fn create_query_task(
-    state: &knowledge_server::app::state::AppState,
-    cookie: &str,
-    csrf: &str,
-    project_id: &str,
-    query: &str,
-) -> Result<String> {
-    let response = build_app(state.clone())
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri(format!("/api/projects/{project_id}/query-tasks"))
-                .header(header::COOKIE, cookie)
-                .header("x-csrf-token", csrf)
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(
-                    json!({
-                      "query": query,
-                      "topK": 3
-                    })
-                    .to_string(),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::ACCEPTED);
-    let payload = read_json(response.into_body()).await;
-    Ok(payload
-        .get("taskId")
-        .and_then(Value::as_str)
-        .context("missing query task id")?
-        .to_string())
-}
-
 async fn login_and_csrf(state: knowledge_server::app::state::AppState) -> Result<(String, String)> {
     let response = build_app(state)
         .oneshot(
@@ -535,26 +397,6 @@ fn models_url(base_url: &str) -> String {
     } else {
         format!("{trimmed}/v1/models")
     }
-}
-
-fn seed_query_source(project_root: &std::path::Path) -> Result<()> {
-    fs::write(
-        project_root.join("wiki/concepts/attention.md"),
-        [
-            "---",
-            "type: concept",
-            "title: Attention",
-            "sources: [\"attention.md\"]",
-            "---",
-            "",
-            "# Attention",
-            "",
-            "Attention lets models focus on relevant tokens.",
-        ]
-        .join("\n"),
-    )?;
-
-    Ok(())
 }
 
 fn seed_search_page(project_root: &std::path::Path) -> Result<()> {

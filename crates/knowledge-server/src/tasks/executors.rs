@@ -13,7 +13,6 @@ use crate::http::error::ApiError;
 use crate::providers::{OpenAiCompatibleProvider, ProviderError, ProviderTextRequest};
 use crate::projects::audit::{append_audit_log, CreateAuditLog};
 use crate::projects::service::project_root_for_id;
-use crate::query::{execute_project_query, ExecuteProjectQueryInput, QueryExecutionError};
 use crate::web_search::config::load_web_search_config;
 use crate::retrieval::dedup::{
   select_dedup_candidate_pages, DEDUP_MAX_CANDIDATE_PAGES, DEDUP_SIMILARITY_THRESHOLD,
@@ -40,11 +39,9 @@ use knowledge_core::project::page_merge::{
   build_page_merge_prompts, finalize_page_merge, prepare_page_merge, PageMergePlan,
 };
 use knowledge_core::project::wiki_pages::{delete_wiki_pages_with_refs, save_wiki_page};
-use knowledge_core::project::enrich::{apply_enrich_links, build_enrich_prompt, parse_enrich_response};
 use knowledge_core::project::lint::{
   build_semantic_lint_prompt, parse_semantic_lint_response, run_structural_lint,
 };
-use knowledge_core::project::queries::{save_query_page, SaveQueryPageInput, SavedQueryCitation};
 use knowledge_core::project::research::{
   render_research_page, RenderResearchPageInput, RenderResearchReference,
 };
@@ -66,8 +63,6 @@ pub async fn run_task_executor(state: &AppState, task: &TaskRecord) -> Result<()
   let task = store::mark_task_running_attempt(state, &task.id).await?;
 
   let result: Result<Value, TaskExecutionError> = match task.task_type.as_str() {
-    "query.answer" => execute_query(state, &task).await,
-    "query.save_answer" => run_save_query_answer_executor(state, &task).await.map_err(Into::into),
     "project.import_source" => run_import_source_executor(state, &task).await.map_err(Into::into),
     "project.rescan_sources" => run_rescan_sources_executor(state, &task).await.map_err(Into::into),
     "project.delete_source" => run_delete_source_executor(state, &task).await.map_err(Into::into),
@@ -107,43 +102,6 @@ pub async fn run_task_executor(state: &AppState, task: &TaskRecord) -> Result<()
       Err(error.into_api_error())
     }
   }
-}
-
-pub async fn run_query_executor(state: &AppState, task: &TaskRecord) -> Result<(), ApiError> {
-  match execute_query(state, task).await {
-    Ok(result) => {
-      store::complete_task(state, &task.id, result).await?;
-      Ok(())
-    }
-    Err(error) => {
-      let error_payload = error.payload(false);
-      store::fail_task(state, &task.id, error_payload).await?;
-      Err(error.into_api_error())
-    }
-  }
-}
-
-async fn execute_query(state: &AppState, task: &TaskRecord) -> Result<Value, TaskExecutionError> {
-  let query = read_string(&task.payload, "query")?;
-  let top_k = read_i64(&task.payload, "topK").unwrap_or(3).max(1) as usize;
-  let language = task
-    .payload
-    .get("language")
-    .and_then(Value::as_str)
-    .filter(|value| !value.trim().is_empty())
-    .unwrap_or("en")
-    .to_string();
-  execute_project_query(
-    state,
-    &task.project_id,
-    ExecuteProjectQueryInput {
-      query,
-      top_k: Some(top_k),
-      language: Some(language),
-    },
-  )
-  .await
-  .map_err(TaskExecutionError::from)
 }
 
 #[derive(Debug)]
@@ -204,20 +162,6 @@ impl From<ApiError> for TaskExecutionError {
   }
 }
 
-impl From<QueryExecutionError> for TaskExecutionError {
-  fn from(error: QueryExecutionError) -> Self {
-    let code = error.code().to_string();
-    let retryable = error.retryable();
-    let provider_status = error.provider_status();
-    Self {
-      api_error: error.into_api_error(),
-      code,
-      retryable,
-      provider_status,
-    }
-  }
-}
-
 async fn run_import_source_executor(state: &AppState, task: &TaskRecord) -> Result<Value, ApiError> {
   let root = project_root_for_id(state, &task.project_id).await?;
   let file_name = read_string(&task.payload, "fileName")?;
@@ -228,78 +172,6 @@ async fn run_import_source_executor(state: &AppState, task: &TaskRecord) -> Resu
   Ok(json!({
     "relativePath": source.relative_path,
     "size": source.size
-  }))
-}
-
-async fn run_save_query_answer_executor(
-  state: &AppState,
-  task: &TaskRecord,
-) -> Result<Value, ApiError> {
-  let root = project_root_for_id(state, &task.project_id).await?;
-  let source_task_id = read_string(&task.payload, "sourceTaskId")?;
-  let title = read_string(&task.payload, "title")?;
-  let slug = read_string(&task.payload, "slug")?;
-  let answer = read_string(&task.payload, "answer")?;
-  let context_summary = read_optional_string(&task.payload, "contextSummary").unwrap_or_default();
-  let citations = read_saved_query_citations(&task.payload)?;
-  let result = save_query_page(
-    &root,
-    SaveQueryPageInput {
-      title: title.clone(),
-      slug,
-      answer,
-      citations,
-      context_summary,
-    },
-  )
-  .map_err(|error| ApiError::bad_request(error.to_string()))?;
-
-  if let Some(provider) = load_ingest_provider(state).await? {
-    let page_path = root
-      .safe_join(&result.relative_path)
-      .map_err(|error| ApiError::bad_request(error.to_string()))?;
-    let page_content = std::fs::read_to_string(&page_path)
-      .map_err(|error| ApiError::bad_request(error.to_string()))?;
-    let index_content = std::fs::read_to_string(root.as_path().join("wiki/index.md"))
-      .unwrap_or_default();
-    let prompt = build_enrich_prompt(&index_content, &page_content);
-    let response = provider
-      .complete_text(ProviderTextRequest {
-        system_prompt: prompt.system_prompt,
-        user_prompt: prompt.user_prompt,
-      })
-      .await
-      .map_err(TaskExecutionError::from_provider_error)
-      .map_err(TaskExecutionError::into_api_error)?;
-    let enriched = apply_enrich_links(&page_content, &parse_enrich_response(&response.text));
-    if enriched != page_content {
-      std::fs::write(&page_path, enriched)
-        .map_err(|error| ApiError::bad_request(error.to_string()))?;
-    }
-  }
-
-  let _ = append_audit_log(
-    state,
-    CreateAuditLog {
-      project_id: Some(task.project_id.clone()),
-      actor_id: task.created_by.clone(),
-      action: "query.page.saved".to_string(),
-      target_type: "query".to_string(),
-      target_id: result.relative_path.clone(),
-      task_id: Some(task.id.clone()),
-      summary: format!("Saved query page {title}"),
-      metadata: json!({
-        "relativePath": result.relative_path,
-        "sourceTaskId": source_task_id
-      }),
-    },
-  )
-  .await?;
-
-  Ok(json!({
-    "relativePath": result.relative_path,
-    "sourceTaskId": source_task_id,
-    "title": title
   }))
 }
 
@@ -1059,45 +931,6 @@ fn read_string(payload: &Value, key: &str) -> Result<String, ApiError> {
     .and_then(Value::as_str)
     .map(str::to_string)
     .ok_or_else(|| ApiError::bad_request(format!("missing {key} payload")))
-}
-
-fn read_i64(payload: &Value, key: &str) -> Result<i64, ApiError> {
-  payload
-    .get(key)
-    .and_then(Value::as_i64)
-    .ok_or_else(|| ApiError::bad_request(format!("missing {key} payload")))
-}
-
-fn read_optional_string(payload: &Value, key: &str) -> Option<String> {
-  payload
-    .get(key)
-    .and_then(Value::as_str)
-    .map(str::to_string)
-}
-
-fn read_saved_query_citations(payload: &Value) -> Result<Vec<SavedQueryCitation>, ApiError> {
-  let Some(items) = payload.get("citations").and_then(Value::as_array) else {
-    return Ok(Vec::new());
-  };
-
-  items
-    .iter()
-    .map(|item| {
-      let path = item
-        .get("path")
-        .and_then(Value::as_str)
-        .ok_or_else(|| ApiError::bad_request("missing citation path"))?;
-      let title = item
-        .get("title")
-        .and_then(Value::as_str)
-        .ok_or_else(|| ApiError::bad_request("missing citation title"))?;
-
-      Ok(SavedQueryCitation {
-        path: path.to_string(),
-        title: title.to_string(),
-      })
-    })
-    .collect()
 }
 
 async fn should_run_review_sweep(
