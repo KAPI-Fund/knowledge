@@ -49,10 +49,6 @@ vi.mock("../features/search/page", () => ({
   SearchPage: () => <h1>Search Page</h1>,
 }));
 
-vi.mock("../features/query/page", () => ({
-  QueryPage: () => <h1>Query Page</h1>,
-}));
-
 vi.mock("../features/lint/page", () => ({
   LintPage: () => <h1>Lint Page</h1>,
 }));

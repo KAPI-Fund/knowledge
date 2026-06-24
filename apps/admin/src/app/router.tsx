@@ -17,7 +17,6 @@ import { OrgMembersPage } from "../features/orgs/members-page";
 import { OrgWorkspacePage } from "../features/orgs/workspace-page";
 import { ProjectDetailPage } from "../features/projects/detail-page";
 import { ProjectsPage } from "../features/projects/page";
-import { QueryPage } from "../features/query/page";
 import { ReviewsPage } from "../features/reviews/page";
 import { SearchPage } from "../features/search/page";
 import { SettingsPage } from "../features/settings/page";
@@ -45,7 +44,6 @@ export function AppRoutes() {
             <Route path="sources" element={<SourcesPage />} />
             <Route path="source-watch" element={<SourceWatchPage />} />
             <Route path="search" element={<SearchPage />} />
-            <Route path="query" element={<QueryPage />} />
             <Route path="chat" element={<ChatPage />} />
             <Route path="lint" element={<LintPage />} />
             <Route

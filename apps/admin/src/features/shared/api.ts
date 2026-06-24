@@ -736,28 +736,6 @@ export async function getSystemSettings() {
   return apiFetch("/api/system/settings", { method: "GET" }, settingsSchema);
 }
 
-export async function createQueryTask(input: {
-  projectId: string;
-  query: string;
-  topK: number;
-}) {
-  return apiFetch(
-    `/api/projects/${input.projectId}/query-tasks`,
-    {
-      method: "POST",
-      headers: csrfHeader(),
-      body: JSON.stringify({
-        query: input.query,
-        topK: input.topK,
-      }),
-    },
-    z.object({
-      taskId: z.string(),
-      status: z.string(),
-    }),
-  );
-}
-
 export async function createLintTask(input: {
   projectId: string;
   mode: string;
@@ -769,35 +747,6 @@ export async function createLintTask(input: {
       headers: csrfHeader(),
       body: JSON.stringify({
         mode: input.mode,
-      }),
-    },
-    z.object({
-      taskId: z.string(),
-      status: z.string(),
-    }),
-  );
-}
-
-export async function getQueryTaskDetail(input: { projectId: string; taskId: string }) {
-  return apiFetch(
-    `/api/projects/${input.projectId}/query-tasks/${input.taskId}`,
-    { method: "GET" },
-    taskSchema,
-  );
-}
-
-export async function saveQueryTaskResult(input: {
-  projectId: string;
-  taskId: string;
-  title: string;
-}) {
-  return apiFetch(
-    `/api/projects/${input.projectId}/query-tasks/${input.taskId}/save`,
-    {
-      method: "POST",
-      headers: csrfHeader(),
-      body: JSON.stringify({
-        title: input.title,
       }),
     },
     z.object({
