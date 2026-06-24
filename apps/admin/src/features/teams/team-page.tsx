@@ -70,7 +70,7 @@ export function TeamPage() {
   return (
     <div className="flex flex-col gap-6">
       <header className="flex items-center justify-between">
-        <h1 className="text-lg font-semibold">Team · {team.name}</h1>
+        <h1 className="text-lg font-semibold">Team - {team.name}</h1>
         <Link to={`/orgs/${orgId}`}>Back to workspace</Link>
       </header>
 

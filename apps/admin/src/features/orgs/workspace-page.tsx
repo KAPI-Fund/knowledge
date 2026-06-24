@@ -87,7 +87,7 @@ export function OrgWorkspacePage() {
         return (
           <section key={team.id}>
             <div className="flex items-center justify-between">
-              <h2 className="text-sm font-medium">Team · {team.name}</h2>
+              <h2 className="text-sm font-medium">Team - {team.name}</h2>
               <div className="flex items-center gap-2">
                 {canManageTeam && teamSpaceId ? (
                   <Button

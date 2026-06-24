@@ -100,7 +100,7 @@ describe("TeamPage", () => {
       { id: "team-1", name: "Platform", slug: "platform", orgId: "org-1", spaceId: "ts1", role: null },
     ];
     renderPage();
-    expect(screen.getByText("Team · Platform")).toBeInTheDocument();
+    expect(screen.getByText("Team - Platform")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Add member/i })).toBeInTheDocument();
   });
 });
