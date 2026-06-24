@@ -22,12 +22,24 @@ changes — this is a visual + information-architecture redesign only.
 | Corners | Sharp, ~6px radius |
 | Type | Sans for UI, **monospace for IDs / paths / code / task types** |
 | Navigation | **Unified left sidebar** that swaps between global and project context |
-| Components | **shadcn/ui only** — compose primitives, never hand-roll one-off components |
+| Components | **Full migration to official Radix-based shadcn/ui** — replace the current Radix-free kit with real shadcn/ui; compose primitives, never hand-roll one-off components |
+| Tables | **`@tanstack/react-table`** — shared DataTable built on the official shadcn DataTable pattern |
 | Rollout | **Foundation-first** — build the shared layer, then migrate screens |
 
-> Implementation rule (from user): build UI by composing shadcn/ui primitives from
-> `apps/admin/src/components/ui/`. When a primitive is missing (e.g. Sidebar), add it
-> from shadcn rather than inventing one.
+> **Important context (discovered during planning):** the current `components/ui/`
+> kit is shadcn-*styled* but **Radix-free** — Button/Select/Dialog etc. are hand-built
+> with `cva` + native HTML elements + React `createPortal`, with zero `@radix-ui`
+> dependencies. The user chose to **migrate fully to official Radix-based shadcn/ui**.
+>
+> Implementation rule (from user): build UI by composing official shadcn/ui primitives
+> in `apps/admin/src/components/ui/`. Replace the existing hand-rolled primitives with
+> their official Radix shadcn equivalents; add missing ones (Sidebar, DropdownMenu,
+> Avatar) from shadcn. Never hand-roll one-off components in feature pages.
+>
+> **API ripple:** migrating native primitives to Radix changes their APIs — e.g.
+> `<Select><option>` becomes `<Select><SelectTrigger/><SelectContent><SelectItem/>`,
+> and Dialog/Tabs/Tooltip/Sheet gain Radix structure. Every consuming page must be
+> updated as part of the migration (sequenced in the plans).
 
 ## Architecture overview
 
@@ -146,35 +158,48 @@ express as hex or oklch in the CSS variables (Tailwind v4 accepts either).
 
 ---
 
-## Section C — Shared foundation components (built first)
+## Section C — shadcn migration + shared foundation (built first)
 
-Location: new `components/shared/` for cross-feature pieces.
+### C0. Official shadcn/ui setup
+- Add `components.json` configured for this repo (Tailwind v4, Vite, `@` alias, RSC off,
+  base color slate, CSS variables on).
+- Install Radix + helper deps that official shadcn primitives require (see deps below).
+- Migrate the existing Radix-free primitives in `components/ui/` to their **official
+  Radix shadcn** versions, retuned to the new tokens: `button`, `card`, `badge`,
+  `input`, `select`, `textarea`, `separator`, `tabs`, `tooltip`, `dialog`, `sheet`,
+  `scroll-area`, `skeleton`, `alert`, `table`. Update every consumer affected by the
+  API changes (notably `Select` and `Dialog`).
+- Add new official shadcn primitives: `sidebar`, `dropdown-menu`, `avatar`, `label`,
+  `form` (react-hook-form + zod), `dropdown-menu`, `command` (optional, project
+  switcher), `breadcrumb` (optional).
 
-1. **AppShell + AppSidebar** — shadcn Sidebar; route-aware context (Section A).
+### C1. Cross-feature components (new `components/shared/`)
+1. **AppShell + AppSidebar** — official shadcn **Sidebar**; route-aware context (Section A).
 2. **PageHeader** — `{ title, description?, actions?, breadcrumb? }`. Standard header on
    every content page.
-3. **DataTable** — generic table built on shadcn **Table** + `@tanstack/react-table`
-   (add dep) + shadcn **DropdownMenu** for row actions. Features: column config,
-   sortable headers, zebra rows, row hover, kebab row-action menu, pagination footer,
-   skeleton loading rows, built-in empty state. Used by all list screens.
+3. **DataTable** — generic table built on shadcn **Table** + **`@tanstack/react-table`**
+   + shadcn **DropdownMenu** for row actions. Features: column config, sortable headers,
+   zebra rows, row hover, kebab row-action menu, pagination footer, skeleton loading
+   rows, built-in empty state. Used by all list screens.
 4. **StatusPill** — extends shadcn **Badge** with the status variants above; monospace
    label. (Replaces `components/layout/status-badge.tsx`.)
 5. **FilterToolbar** — search `Input` + filter `Select`s in a consistent toolbar row.
 6. **Form primitives** — `FormSection` (titled card with description + responsive field
-   grid) and `Field` (label + control + hint/error). Layout wrappers around existing
-   shadcn `Input`/`Select`/`Textarea`; no new form library.
+   grid) and `Field` (label + control + hint/error), composed with shadcn `Form`/`Label`
+   + `Input`/`Select`/`Textarea`.
 7. **States** — `LoadingState` (skeletons), refined `EmptyState` (less verbose),
    `ErrorState` / `ForbiddenState` (refine `route-state-pane.tsx`).
-8. **Retune existing primitives** to the new tokens: `button` (blue primary, 6px),
-   `card` (hairline border, minimal shadow), `input`/`select`/`textarea` (blue focus
-   ring), `badge`, `tabs` (for in-page sub-tabs), `separator`, `tooltip`, `dialog`,
-   `sheet`, `scroll-area`, `skeleton`, `alert`.
 
 ### New dependencies
 - `@tanstack/react-table` (DataTable)
 - `react-markdown` (Chat assistant rendering)
 - `@fontsource-variable/geist-mono` (mono font)
-- shadcn additions pulling Radix: `dropdown-menu`, `avatar` (and `sidebar` infra).
+- `react-hook-form`, `@hookform/resolvers` (shadcn Form; pairs with existing `zod`)
+- `tailwindcss-animate` *or* keep existing `tw-animate-css` for shadcn animations
+- Radix packages pulled in by official shadcn primitives, e.g.
+  `@radix-ui/react-dialog`, `react-select`, `react-dropdown-menu`, `react-tabs`,
+  `react-tooltip`, `react-separator`, `react-scroll-area`, `react-avatar`,
+  `react-label`, `react-slot` (added per component as shadcn requires).
 
 ---
 
@@ -257,13 +282,17 @@ Location: new `components/shared/` for cross-feature pieces.
 ## File-structure summary
 
 ```
+apps/admin/
+  components.json                 # ADD (official shadcn config: Tailwind v4, @ alias)
+  package.json                    # ADD deps (radix, react-table, react-hook-form, ...)
 apps/admin/src/
   index.css                      # token rewrite, mono font, flat bg, 6px radius
   styles.css                     # DELETE (dead)
   lib/route-meta.ts              # projectRoutes -> grouped sections
   components/ui/
-    sidebar.tsx  dropdown-menu.tsx  avatar.tsx   # ADD (shadcn)
-    button/card/input/select/badge/...           # RETUNE to tokens
+    sidebar.tsx dropdown-menu.tsx avatar.tsx label.tsx form.tsx  # ADD (official shadcn)
+    button/card/input/select/badge/dialog/tabs/...               # MIGRATE to official Radix shadcn + retune
+                                                                  # (update all consumers of changed APIs)
   components/layout/
     app-shell.tsx                # rework (SidebarProvider shell)
     app-sidebar.tsx              # NEW (route-aware nav)
