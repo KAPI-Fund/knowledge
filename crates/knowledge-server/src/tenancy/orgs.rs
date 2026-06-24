@@ -14,7 +14,7 @@ use crate::app::state::AppState;
 use crate::http::error::ApiError;
 use crate::auth::principal::require_session;
 use crate::projects::routes::validate_csrf;
-use crate::tenancy::access::{is_org_admin, org_member_role};
+use crate::tenancy::access::{is_org_admin, org_exists, org_member_role};
 use crate::tenancy::slug::validate_slug;
 use crate::tenancy::spaces::create_org_space;
 
@@ -111,6 +111,12 @@ async fn add_org_member_handler(
 ) -> Result<impl IntoResponse, ApiError> {
     let principal = require_session(&state, &headers).await?;
     validate_csrf(&headers, &principal)?;
+    if !org_exists(&state.pool, &org_id)
+        .await
+        .map_err(ApiError::from)?
+    {
+        return Err(ApiError::not_found("org not found"));
+    }
     if !is_org_admin(&state.pool, &org_id, &principal.user_id)
         .await
         .map_err(ApiError::from)?
@@ -168,6 +174,12 @@ async fn list_org_members_handler(
     headers: HeaderMap,
 ) -> Result<Json<Value>, ApiError> {
     let principal = require_session(&state, &headers).await?;
+    if !org_exists(&state.pool, &org_id)
+        .await
+        .map_err(ApiError::from)?
+    {
+        return Err(ApiError::not_found("org not found"));
+    }
     if org_member_role(&state.pool, &org_id, &principal.user_id)
         .await
         .map_err(ApiError::from)?
@@ -209,6 +221,12 @@ async fn set_org_member_role_handler(
 ) -> Result<Json<Value>, ApiError> {
     let principal = require_session(&state, &headers).await?;
     validate_csrf(&headers, &principal)?;
+    if !org_exists(&state.pool, &org_id)
+        .await
+        .map_err(ApiError::from)?
+    {
+        return Err(ApiError::not_found("org not found"));
+    }
     if payload.role != "org_admin" && payload.role != "org_member" {
         return Err(ApiError::bad_request("invalid role"));
     }
@@ -244,6 +262,12 @@ async fn remove_org_member_handler(
 ) -> Result<impl IntoResponse, ApiError> {
     let principal = require_session(&state, &headers).await?;
     validate_csrf(&headers, &principal)?;
+    if !org_exists(&state.pool, &org_id)
+        .await
+        .map_err(ApiError::from)?
+    {
+        return Err(ApiError::not_found("org not found"));
+    }
     if !is_org_admin(&state.pool, &org_id, &principal.user_id)
         .await
         .map_err(ApiError::from)?

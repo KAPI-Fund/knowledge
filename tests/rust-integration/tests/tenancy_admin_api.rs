@@ -703,6 +703,107 @@ async fn create_project_rejects_bearer_token() {
 }
 
 #[tokio::test]
+async fn remove_team_member_rejects_cross_org_team() {
+  // An org_admin of org A must not be able to remove a member of a team that
+  // lives in org B by passing org A in the path. The team does not belong to
+  // the path org, so the handler returns 404 and the membership survives.
+  let env = TestEnvironment::start("remove_team_member_cross_org").await.unwrap();
+  let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let (cookie, csrf) = login_admin(&state).await;
+  let admin = admin_id(&state.pool).await;
+  // Org A: the logged-in admin is org_admin here.
+  let (org_a, _aspace) = insert_org(&state.pool, &admin, "acme").await;
+  add_org_member(&state.pool, &org_a, &admin, "org_admin").await;
+  // Org B: a separate org with its own team and a non-leader member.
+  let owner = insert_user(&state.pool, "owner").await;
+  let (org_b, _bspace) = insert_org(&state.pool, &owner, "globex").await;
+  add_org_member(&state.pool, &org_b, &owner, "org_admin").await;
+  let (team_b, _tspace) = insert_team(&state.pool, &org_b, "platform").await;
+  let victim = insert_user(&state.pool, "victim").await;
+  add_org_member(&state.pool, &org_b, &victim, "org_member").await;
+  add_team_member(&state.pool, &team_b, &victim, "member").await;
+
+  let response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("DELETE")
+        .uri(format!("/api/orgs/{org_a}/teams/{team_b}/members/{victim}"))
+        .header(header::COOKIE, &cookie)
+        .header("x-csrf-token", &csrf)
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+  assert_eq!(response.status(), StatusCode::NOT_FOUND);
+  let still_member = sqlx::query_scalar::<_, i64>(
+    "SELECT COUNT(*) FROM team_members WHERE team_id = $1 AND user_id = $2",
+  )
+  .bind(&team_b)
+  .bind(&victim)
+  .fetch_one(&state.pool)
+  .await
+  .unwrap();
+  assert_eq!(still_member, 1);
+}
+
+#[tokio::test]
+async fn list_org_members_unknown_org_returns_404() {
+  let env = TestEnvironment::start("list_org_members_unknown_404").await.unwrap();
+  let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let (cookie, _csrf) = login_admin(&state).await;
+  let ghost_org = Uuid::new_v4().to_string();
+
+  let response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("GET")
+        .uri(format!("/api/orgs/{ghost_org}/members"))
+        .header(header::COOKIE, &cookie)
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+  assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn list_team_members_unknown_team_returns_404() {
+  // A non-admin org member querying a nonexistent team must get 404 (unknown
+  // resource), not 403 — existence is checked before the membership gate.
+  let env = TestEnvironment::start("list_team_members_unknown_404").await.unwrap();
+  let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
+  let state = bootstrap_state(&config).await.unwrap();
+  let (cookie, _csrf) = login_admin(&state).await;
+  let admin = admin_id(&state.pool).await;
+  let owner = insert_user(&state.pool, "owner").await;
+  let (org_id, _ospace) = insert_org(&state.pool, &owner, "acme").await;
+  add_org_member(&state.pool, &org_id, &owner, "org_admin").await;
+  // Logged-in admin is an ordinary member of this org, not its admin.
+  add_org_member(&state.pool, &org_id, &admin, "org_member").await;
+  let ghost_team = Uuid::new_v4().to_string();
+
+  let response = build_app(state.clone())
+    .oneshot(
+      Request::builder()
+        .method("GET")
+        .uri(format!("/api/orgs/{org_id}/teams/{ghost_team}/members"))
+        .header(header::COOKIE, &cookie)
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+  assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn upsert_grant_rejects_bearer_token() {
   let env = TestEnvironment::start("upsert_grant_bearer").await.unwrap();
   let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());

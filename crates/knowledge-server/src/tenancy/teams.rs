@@ -14,7 +14,9 @@ use crate::app::state::AppState;
 use crate::http::error::ApiError;
 use crate::auth::principal::require_session;
 use crate::projects::routes::validate_csrf;
-use crate::tenancy::access::{is_org_admin, org_member_role, team_member_role};
+use crate::tenancy::access::{
+    is_org_admin, org_exists, org_member_role, team_in_org, team_member_role,
+};
 use crate::tenancy::slug::validate_slug;
 use crate::tenancy::spaces::create_team_space;
 
@@ -49,6 +51,12 @@ async fn create_team_handler(
 ) -> Result<impl IntoResponse, ApiError> {
     let principal = require_session(&state, &headers).await?;
     validate_csrf(&headers, &principal)?;
+    if !org_exists(&state.pool, &org_id)
+        .await
+        .map_err(ApiError::from)?
+    {
+        return Err(ApiError::not_found("org not found"));
+    }
     if org_member_role(&state.pool, &org_id, &principal.user_id)
         .await
         .map_err(ApiError::from)?
@@ -115,6 +123,12 @@ async fn list_teams_handler(
     Path(org_id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
     let principal = require_session(&state, &headers).await?;
+    if !org_exists(&state.pool, &org_id)
+        .await
+        .map_err(ApiError::from)?
+    {
+        return Err(ApiError::not_found("org not found"));
+    }
     let Some(role) = org_member_role(&state.pool, &org_id, &principal.user_id)
         .await
         .map_err(ApiError::from)?
@@ -183,6 +197,13 @@ async fn add_team_member_handler(
     let principal = require_session(&state, &headers).await?;
     validate_csrf(&headers, &principal)?;
 
+    if !team_in_org(&state.pool, &team_id, &org_id)
+        .await
+        .map_err(ApiError::from)?
+    {
+        return Err(ApiError::not_found("team not found"));
+    }
+
     let is_admin = is_org_admin(&state.pool, &org_id, &principal.user_id)
         .await
         .map_err(ApiError::from)?;
@@ -195,17 +216,6 @@ async fn add_team_member_handler(
         return Err(ApiError::forbidden(
             "only org admins or the team leader may add members",
         ));
-    }
-
-    let belongs =
-        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM teams WHERE id = $1 AND org_id = $2")
-            .bind(&team_id)
-            .bind(&org_id)
-            .fetch_one(&state.pool)
-            .await
-            .map_err(ApiError::from)?;
-    if belongs == 0 {
-        return Err(ApiError::not_found("team not found"));
     }
 
     let target = sqlx::query_scalar::<_, String>("SELECT id FROM users WHERE username = $1")
@@ -262,6 +272,12 @@ async fn list_team_members_handler(
     headers: HeaderMap,
 ) -> Result<Json<Value>, ApiError> {
     let principal = require_session(&state, &headers).await?;
+    if !team_in_org(&state.pool, &team_id, &org_id)
+        .await
+        .map_err(ApiError::from)?
+    {
+        return Err(ApiError::not_found("team not found"));
+    }
     let is_admin = is_org_admin(&state.pool, &org_id, &principal.user_id)
         .await
         .map_err(ApiError::from)?;
@@ -271,16 +287,6 @@ async fn list_team_members_handler(
         .is_some();
     if !is_admin && !is_team_member {
         return Err(ApiError::forbidden("not permitted to view team members"));
-    }
-    let belongs =
-        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM teams WHERE id = $1 AND org_id = $2")
-            .bind(&team_id)
-            .bind(&org_id)
-            .fetch_one(&state.pool)
-            .await
-            .map_err(ApiError::from)?;
-    if belongs == 0 {
-        return Err(ApiError::not_found("team not found"));
     }
     let rows = sqlx::query_as::<_, (String, String, String)>(
         "SELECT tm.user_id, u.username, tm.role \
@@ -309,6 +315,13 @@ async fn remove_team_member_handler(
 ) -> Result<impl IntoResponse, ApiError> {
     let principal = require_session(&state, &headers).await?;
     validate_csrf(&headers, &principal)?;
+
+    if !team_in_org(&state.pool, &team_id, &org_id)
+        .await
+        .map_err(ApiError::from)?
+    {
+        return Err(ApiError::not_found("team not found"));
+    }
 
     let is_admin = is_org_admin(&state.pool, &org_id, &principal.user_id)
         .await

@@ -236,6 +236,30 @@ pub async fn team_member_role(
     .await
 }
 
+/// Whether an organization with this id exists.
+pub async fn org_exists(pool: &PgPool, org_id: &str) -> Result<bool, sqlx::Error> {
+    let count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM organizations WHERE id = $1")
+        .bind(org_id)
+        .fetch_one(pool)
+        .await?;
+    Ok(count > 0)
+}
+
+/// Whether a team with this id exists and belongs to the given org.
+pub async fn team_in_org(
+    pool: &PgPool,
+    team_id: &str,
+    org_id: &str,
+) -> Result<bool, sqlx::Error> {
+    let count =
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM teams WHERE id = $1 AND org_id = $2")
+            .bind(team_id)
+            .bind(org_id)
+            .fetch_one(pool)
+            .await?;
+    Ok(count > 0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::AccessRole;
