@@ -1,17 +1,25 @@
-import { useEffect, useState } from "react";
+import type { ColumnDef } from "@tanstack/react-table";
+import { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 
 import { EmptyState } from "@/components/layout/empty-state";
-import { PageSection } from "@/components/layout/page-section";
 import { RouteStatePane } from "@/components/layout/route-state-pane";
-import { StatusBadge } from "@/components/layout/status-badge";
+import { DataTable } from "@/components/shared/data-table";
+import { PageHeader } from "@/components/shared/page-header";
+import { StatusPill } from "@/components/shared/status-pill";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { normalizeAppError } from "@/lib/app-error";
 
 import { ProjectFileLink } from "../shared/file-links";
-import { useCancelTaskMutation, useProjectTasksQuery, useRetryTaskMutation, useTaskDetailQuery } from "./queries";
+import {
+  useCancelTaskMutation,
+  useProjectTasksQuery,
+  useRetryTaskMutation,
+  useTaskDetailQuery,
+} from "./queries";
+
+type ProjectTask = NonNullable<ReturnType<typeof useProjectTasksQuery>["data"]>[number];
 
 export function TasksPage() {
   const { projectId = "" } = useParams();
@@ -19,6 +27,8 @@ export function TasksPage() {
   const retryTask = useRetryTaskMutation();
   const cancelTask = useCancelTaskMutation();
   const [selectedTaskId, setSelectedTaskId] = useState("");
+
+  const taskList = tasks.data ?? [];
 
   useEffect(() => {
     if (!selectedTaskId && tasks.data?.[0]?.id) {
@@ -29,111 +39,119 @@ export function TasksPage() {
   const detail = useTaskDetailQuery(projectId, selectedTaskId);
   const detailError = detail.error ? normalizeAppError(detail.error) : null;
 
+  const columns = useMemo<ColumnDef<ProjectTask>[]>(
+    () => [
+      {
+        accessorKey: "status",
+        header: "Status",
+        cell: ({ row }) => <StatusPill value={row.original.status} />,
+      },
+      {
+        accessorKey: "title",
+        header: "Task",
+        cell: ({ row }) => (
+          <div className="grid gap-1">
+            <button
+              className="text-left font-medium text-foreground underline-offset-4 hover:underline"
+              onClick={() => setSelectedTaskId(row.original.id)}
+              type="button"
+            >
+              {row.original.title}
+            </button>
+            <span className="font-mono text-[10.5px] text-muted-foreground">{row.original.id}</span>
+          </div>
+        ),
+      },
+      {
+        accessorKey: "taskType",
+        header: "Type",
+        cell: ({ row }) => (
+          <span className="font-mono text-[11.5px] text-muted-foreground">
+            {row.original.taskType}
+          </span>
+        ),
+      },
+      {
+        id: "path",
+        header: "Path",
+        cell: ({ row }) =>
+          row.original.relativePath ? (
+            <ProjectFileLink path={row.original.relativePath} projectId={projectId} />
+          ) : (
+            <span className="text-sm text-muted-foreground">-</span>
+          ),
+      },
+      {
+        id: "attempts",
+        header: "Attempts",
+        cell: ({ row }) => (
+          <span className="text-sm text-muted-foreground">
+            {(row.original.attemptCount ?? 0).toString()}/
+            {(row.original.maxAttempts ?? 0).toString()}
+          </span>
+        ),
+      },
+      {
+        id: "actions",
+        header: "",
+        cell: ({ row }) => (
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button onClick={() => setSelectedTaskId(row.original.id)} size="sm" variant="outline">
+              Inspect
+            </Button>
+            <Button
+              onClick={() => retryTask.mutateAsync({ projectId, taskId: row.original.id })}
+              size="sm"
+              variant="secondary"
+            >
+              Retry
+            </Button>
+            {!["completed", "succeeded", "failed", "cancelled"].includes(row.original.status) ? (
+              <Button
+                onClick={() => cancelTask.mutateAsync({ projectId, taskId: row.original.id })}
+                size="sm"
+                variant="outline"
+              >
+                Cancel
+              </Button>
+            ) : null}
+          </div>
+        ),
+      },
+    ],
+    [cancelTask, projectId, retryTask],
+  );
+
   return (
-    <PageSection
-      description="Inspect queued work, retry failed jobs, and examine task payloads."
-      title="Tasks"
-    >
+    <div className="grid gap-4">
+      <PageHeader
+        description="Inspect queued work, retry failed jobs, and examine task payloads."
+        title="Tasks"
+      />
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1.4fr)_380px]">
-        <Card>
-          <CardHeader>
-            <CardTitle>Task Queue</CardTitle>
-            <CardDescription>Project background jobs and their current statuses.</CardDescription>
-          </CardHeader>
-          <CardContent className="p-0">
-            {tasks.isLoading ? (
-              <RouteStatePane description="Loading task queue." state="loading" title="Tasks" />
-            ) : tasks.error ? (
-              <RouteStatePane
-                description={normalizeAppError(tasks.error).message}
-                state="failed"
-                title="Tasks unavailable"
-              />
-            ) : tasks.data?.length ? (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Task</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Path</TableHead>
-                    <TableHead>Attempts</TableHead>
-                    <TableHead>Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {tasks.data.map((task) => (
-                    <TableRow
-                      key={task.id}
-                      className={selectedTaskId === task.id ? "bg-muted/40" : undefined}
-                    >
-                      <TableCell className="font-medium">
-                        <button
-                          className="text-left font-medium text-foreground underline-offset-4 hover:underline"
-                          type="button"
-                          onClick={() => setSelectedTaskId(task.id)}
-                        >
-                          {task.title}
-                        </button>
-                      </TableCell>
-                      <TableCell>
-                        <StatusBadge value={task.status} />
-                      </TableCell>
-                      <TableCell>
-                        {task.relativePath ? (
-                          <ProjectFileLink projectId={projectId} path={task.relativePath} />
-                        ) : (
-                          <span className="text-sm text-muted-foreground">-</span>
-                        )}
-                      </TableCell>
-                      <TableCell className="text-sm text-muted-foreground">
-                        {(task.attemptCount ?? 0).toString()}/{(task.maxAttempts ?? 0).toString()}
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex flex-wrap gap-2">
-                          <Button
-                            onClick={() => setSelectedTaskId(task.id)}
-                            size="sm"
-                            variant="outline"
-                          >
-                            Inspect
-                          </Button>
-                          <Button
-                            onClick={() => retryTask.mutateAsync({ projectId, taskId: task.id })}
-                            size="sm"
-                            variant="secondary"
-                          >
-                            Retry
-                          </Button>
-                          {!["completed", "succeeded", "failed", "cancelled"].includes(task.status) ? (
-                            <Button
-                              onClick={() => cancelTask.mutateAsync({ projectId, taskId: task.id })}
-                              size="sm"
-                              variant="outline"
-                            >
-                              Cancel
-                            </Button>
-                          ) : null}
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            ) : (
-              <div className="p-6">
-                <EmptyState
-                  description="No tasks have been queued for this project yet."
-                  title="No tasks"
-                />
-              </div>
-            )}
-          </CardContent>
-        </Card>
+        <div className="grid gap-3">
+          {tasks.error ? (
+            <RouteStatePane
+              description={normalizeAppError(tasks.error).message}
+              state="failed"
+              title="Tasks unavailable"
+            />
+          ) : (
+            <DataTable
+              columns={columns}
+              data={taskList}
+              emptyMessage="No tasks have been queued for this project yet."
+              isLoading={tasks.isLoading}
+            />
+          )}
+        </div>
 
         <Card>
           <CardHeader>
             <CardTitle>Task Detail</CardTitle>
-            <CardDescription>Selected task payload, status, and execution metadata.</CardDescription>
+            <CardDescription>
+              Selected task payload, status, and execution metadata.
+            </CardDescription>
           </CardHeader>
           <CardContent className="grid gap-4">
             {!selectedTaskId ? (
@@ -154,13 +172,13 @@ export function TasksPage() {
             ) : detail.data ? (
               <div className="grid gap-4">
                 <div className="flex flex-wrap items-center gap-3">
-                  <StatusBadge value={detail.data.status} />
+                  <StatusPill value={detail.data.status} />
                   <span className="text-sm font-medium">{detail.data.title}</span>
                 </div>
                 <div className="grid gap-2 text-sm text-muted-foreground">
-                  <p>{detail.data.taskType}</p>
+                  <p className="font-mono text-xs">{detail.data.taskType}</p>
                   {detail.data.relativePath ? (
-                    <ProjectFileLink projectId={projectId} path={detail.data.relativePath} />
+                    <ProjectFileLink path={detail.data.relativePath} projectId={projectId} />
                   ) : null}
                 </div>
                 {detail.data.error ? (
@@ -199,14 +217,11 @@ export function TasksPage() {
                 </Card>
               </div>
             ) : (
-              <EmptyState
-                description="Task data is not available yet."
-                title="Loading task detail"
-              />
+              <EmptyState description="Task data is not available yet." title="Loading task detail" />
             )}
           </CardContent>
         </Card>
       </div>
-    </PageSection>
+    </div>
   );
 }
