@@ -2,9 +2,7 @@ import { Outlet, useParams } from "react-router-dom";
 
 import { normalizeAppError } from "@/lib/app-error";
 import { useProjectDetailQuery } from "@/features/projects/detail-queries";
-import { ProjectNav } from "@/features/projects/project-nav";
 
-import { ProjectHeader } from "./project-header";
 import { RouteStatePane } from "./route-state-pane";
 
 export function ProjectWorkspaceLayout() {
@@ -36,11 +34,7 @@ export function ProjectWorkspaceLayout() {
       );
     }
     return (
-      <RouteStatePane
-        description={normalized.message}
-        state="failed"
-        title="Project unavailable"
-      />
+      <RouteStatePane description={normalized.message} state="failed" title="Project unavailable" />
     );
   }
 
@@ -55,17 +49,5 @@ export function ProjectWorkspaceLayout() {
     );
   }
 
-  return (
-    <div className="stack">
-      <ProjectHeader
-        name={detail.name}
-        reviewCount={detail.reviewCount}
-        rootPath={detail.rootPath}
-        sourceCount={detail.sourceCount}
-        taskCount={detail.taskCount}
-      />
-      <ProjectNav projectId={detail.id} />
-      <Outlet />
-    </div>
-  );
+  return <Outlet />;
 }

@@ -6,19 +6,20 @@ import { describe, expect, it } from "vitest";
 import { AppShell } from "./app-shell";
 
 describe("AppShell", () => {
-  it("renders system navigation and top-level shell regions", () => {
+  it("renders the global sidebar navigation", () => {
     const client = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
     render(
       <QueryClientProvider client={client}>
-        <MemoryRouter>
+        <MemoryRouter initialEntries={["/"]}>
           <AppShell />
         </MemoryRouter>
       </QueryClientProvider>,
     );
 
-    expect(screen.getByRole("navigation", { name: /system/i })).toBeInTheDocument();
-    expect(screen.getByRole("banner")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Dashboard" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Projects" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Settings" })).toBeInTheDocument();
   });
 });

@@ -35,7 +35,9 @@ function activeNavClass(isActive: boolean) {
 }
 
 export function AppSidebar() {
-  const projectMatch = useMatch("/projects/:projectId/*") ?? useMatch("/projects/:projectId");
+  const nestedMatch = useMatch("/projects/:projectId/*");
+  const exactMatch = useMatch("/projects/:projectId");
+  const projectMatch = nestedMatch ?? exactMatch;
   const projectId = projectMatch?.params.projectId ?? "";
   const isProjectContext = Boolean(projectId);
 

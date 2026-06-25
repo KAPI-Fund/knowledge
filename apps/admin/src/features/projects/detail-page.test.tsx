@@ -255,10 +255,7 @@ describe("project operations routing", () => {
 
     await user.click(await screen.findByRole("link", { name: "demo-project" }));
 
-    expect(await screen.findByRole("heading", { name: "demo-project" })).toBeInTheDocument();
-    expect(screen.getByText("2 sources")).toBeInTheDocument();
-    expect(screen.getByText("3 tasks")).toBeInTheDocument();
-    expect(screen.getByText("1 reviews")).toBeInTheDocument();
+    expect(await screen.findByText("demo-project")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Overview" })).toBeInTheDocument();
     expect(screen.getByText("Recent Sources")).toBeInTheDocument();
     expect(screen.getByText("raw/sources/demo.md")).toBeInTheDocument();
@@ -268,9 +265,9 @@ describe("project operations routing", () => {
     expect(screen.getByText("Review demo.md")).toBeInTheDocument();
     expect(screen.getByText("Recent Audit")).toBeInTheDocument();
     expect(screen.getByText("Created project demo-project")).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "Tasks" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Tasks" })).toBeInTheDocument();
 
-    await user.click(screen.getByRole("tab", { name: "Tasks" }));
+    await user.click(screen.getByRole("link", { name: "Tasks" }));
     expect(await screen.findByRole("heading", { name: "Tasks" })).toBeInTheDocument();
     expect(screen.getAllByText("Imported note.md").length).toBeGreaterThan(0);
   });

@@ -131,14 +131,14 @@ describe("AppRoutes", () => {
       </QueryClientProvider>,
     );
 
-    expect(await screen.findByRole("tab", { name: /files/i })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "demo-project" })).toBeInTheDocument();
+    expect(await screen.findByRole("link", { name: /files/i })).toBeInTheDocument();
+    expect(screen.getByText("demo-project")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Files Page" })).toBeInTheDocument();
 
-    await user.click(screen.getByRole("tab", { name: "Reviews" }));
+    await user.click(screen.getByRole("link", { name: "Reviews" }));
     expect(await screen.findByRole("heading", { name: "Reviews Page" })).toBeInTheDocument();
 
-    await user.click(screen.getByRole("tab", { name: "Audit" }));
+    await user.click(screen.getByRole("link", { name: "Audit" }));
     expect(await screen.findByRole("heading", { name: "Audit Page" })).toBeInTheDocument();
   });
 });

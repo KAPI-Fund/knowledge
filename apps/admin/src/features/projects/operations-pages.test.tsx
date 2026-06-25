@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
@@ -275,44 +275,40 @@ function renderProjectRoute(initialEntry: string) {
   );
 }
 
-function workspaceProjectNav() {
-  return screen.getAllByRole("navigation", { name: "Project navigation" })[0];
-}
-
 describe("project operation pages", () => {
   it("navigates to files, sources, search, graph, reviews, audit, and settings pages", async () => {
     const user = userEvent.setup();
 
     renderProjectRoute("/projects/project-1");
 
-    expect(await screen.findByRole("heading", { name: "demo-project" })).toBeInTheDocument();
-    expect(within(workspaceProjectNav()).getByRole("tab", { name: "Files" })).toBeInTheDocument();
+    expect(await screen.findByText("demo-project")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Files" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Overview" })).toBeInTheDocument();
 
-    await user.click(within(workspaceProjectNav()).getByRole("tab", { name: "Files" }));
+    await user.click(screen.getByRole("link", { name: "Files" }));
     expect(await screen.findByRole("heading", { name: "Files" })).toBeInTheDocument();
     expect(screen.getAllByText("demo.md").length).toBeGreaterThan(0);
     await user.click(screen.getByRole("button", { name: "demo.md" }));
     expect(screen.getByText("preview:raw/sources/demo.md")).toBeInTheDocument();
 
-    await user.click(within(workspaceProjectNav()).getByRole("tab", { name: "Sources" }));
+    await user.click(screen.getByRole("link", { name: "Sources" }));
     expect(await screen.findByRole("heading", { name: "Sources" })).toBeInTheDocument();
     expect(screen.getByText("raw/sources/demo.md")).toBeInTheDocument();
 
-    await user.click(within(workspaceProjectNav()).getByRole("tab", { name: "Source Watch" }));
+    await user.click(screen.getByRole("link", { name: "Source Watch" }));
     expect(await screen.findByRole("heading", { name: "Source Watch" })).toBeInTheDocument();
     expect(screen.getByDisplayValue("E:/watched-sources")).toBeInTheDocument();
     expect(screen.getByLabelText(/automatically enqueue ingest tasks/i)).toBeInTheDocument();
 
-    await user.click(within(workspaceProjectNav()).getByRole("tab", { name: "Search" }));
+    await user.click(screen.getByRole("link", { name: "Search" }));
     expect(await screen.findByRole("heading", { name: "Search" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Run Search" })).toBeInTheDocument();
 
-    await user.click(within(workspaceProjectNav()).getByRole("tab", { name: "Graph" }));
+    await user.click(screen.getByRole("link", { name: "Graph" }));
     expect(await screen.findByRole("heading", { name: "Graph" })).toBeInTheDocument();
     expect(screen.getByText("Demo")).toBeInTheDocument();
 
-    await user.click(within(workspaceProjectNav()).getByRole("tab", { name: "Reviews" }));
+    await user.click(screen.getByRole("link", { name: "Reviews" }));
     expect(await screen.findByRole("heading", { name: "Reviews" })).toBeInTheDocument();
     expect(screen.getByText("Review demo.md")).toBeInTheDocument();
     expect(screen.getByText("missing-page")).toBeInTheDocument();
@@ -325,11 +321,12 @@ describe("project operation pages", () => {
     expect(await screen.findByRole("heading", { name: "Files" })).toBeInTheDocument();
     expect(screen.getByText("preview:wiki/evaluation.md")).toBeInTheDocument();
 
-    await user.click(within(workspaceProjectNav()).getByRole("tab", { name: "Audit" }));
+    await user.click(screen.getByRole("link", { name: "Audit" }));
     expect(await screen.findByRole("heading", { name: "Audit" })).toBeInTheDocument();
     expect(screen.getByText("Created project demo-project")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("link", { name: "Settings" }));
+    await user.click(screen.getByRole("button", { name: /account/i }));
+    await user.click(await screen.findByRole("menuitem", { name: "Settings" }));
     expect(await screen.findByRole("heading", { name: "Settings" })).toBeInTheDocument();
     expect(screen.getByDisplayValue("deterministic")).toBeInTheDocument();
   });

@@ -73,7 +73,7 @@ describe("tasks page", () => {
       </QueryClientProvider>,
     );
 
-    expect(await screen.findByRole("heading", { name: "demo-project" })).toBeInTheDocument();
+    expect(await screen.findByText("demo-project")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Tasks" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Task no longer exists" })).toBeInTheDocument();
     expect(screen.getByText(/the selected task disappeared or no longer exists/i)).toBeInTheDocument();
