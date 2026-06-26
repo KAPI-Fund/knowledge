@@ -67,23 +67,22 @@ export function DashboardPage() {
         </Card>
       </div>
 
-      {recentProjects.length ? (
-        <DataTable
-          columns={columns}
-          data={recentProjects}
-          isLoading={projects.isLoading}
-        />
-      ) : (
-        <EmptyState
-          action={
-            <Link className="inline-link" to="/projects">
-              Open Projects
-            </Link>
-          }
-          description="Create a project before importing sources or running retrieval workflows."
-          title="Workspace not configured"
-        />
-      )}
+      <div className="grid gap-3">
+        <h2 className="text-sm font-medium text-muted-foreground">Recent Projects</h2>
+        {recentProjects.length ? (
+          <DataTable columns={columns} data={recentProjects} isLoading={projects.isLoading} />
+        ) : (
+          <EmptyState
+            action={
+              <Link className="inline-link" to="/projects">
+                Open Projects
+              </Link>
+            }
+            description="Create a project before importing sources or running retrieval workflows."
+            title="Workspace not configured"
+          />
+        )}
+      </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Card>
