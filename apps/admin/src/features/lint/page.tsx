@@ -2,7 +2,8 @@ import { useState } from "react";
 import { useParams } from "react-router-dom";
 
 import { EmptyState } from "@/components/layout/empty-state";
-import { PageSection } from "@/components/layout/page-section";
+import { PageHeader } from "@/components/shared/page-header";
+import { StatusPill } from "@/components/shared/status-pill";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -49,24 +50,21 @@ export function LintPage() {
   }
 
   return (
-    <PageSection
-      description="Run llm_wiki-style structural and semantic validation against the wiki."
-      title="Lint"
-    >
-      <Card>
-        <CardHeader>
-          <CardTitle>Lint Actions</CardTitle>
-          <CardDescription>Launch structural or semantic lint tasks on demand.</CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-wrap gap-3">
-          <Button disabled={createLintTask.isPending} onClick={handleRunStructuralLint}>
-            Run Structural Lint
-          </Button>
-          <Button disabled={createLintTask.isPending} onClick={handleRunSemanticLint} variant="outline">
-            Run Semantic Lint
-          </Button>
-        </CardContent>
-      </Card>
+    <div className="grid gap-6">
+      <PageHeader
+        actions={
+          <div className="flex flex-wrap gap-2">
+            <Button disabled={createLintTask.isPending} onClick={handleRunStructuralLint}>
+              Run Structural Lint
+            </Button>
+            <Button disabled={createLintTask.isPending} onClick={handleRunSemanticLint} variant="outline">
+              Run Semantic Lint
+            </Button>
+          </div>
+        }
+        description="Run llm_wiki-style structural and semantic validation against the wiki."
+        title="Lint"
+      />
 
       {task.data ? (
         <Card>
@@ -75,7 +73,7 @@ export function LintPage() {
             <CardDescription>Current lint task status and mode.</CardDescription>
           </CardHeader>
           <CardContent className="flex flex-wrap items-center gap-3">
-            <Badge variant="secondary">{task.data.status}</Badge>
+            <StatusPill value={task.data.status} />
             {result?.mode ? <Badge variant="outline">{result.mode}</Badge> : null}
           </CardContent>
         </Card>
@@ -124,6 +122,6 @@ export function LintPage() {
           title="No issues found"
         />
       ) : null}
-    </PageSection>
+    </div>
   );
 }
