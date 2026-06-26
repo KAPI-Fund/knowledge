@@ -1,11 +1,15 @@
+import type { ColumnDef } from "@tanstack/react-table";
+import { useMemo } from "react";
 import { Link } from "react-router-dom";
 
-import { EmptyState } from "../../components/layout/empty-state";
-import { PageSection } from "../../components/layout/page-section";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
+import { EmptyState } from "@/components/layout/empty-state";
+import { DataTable } from "@/components/shared/data-table";
+import { PageHeader } from "@/components/shared/page-header";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useSystemSettingsQuery } from "../settings/queries";
 import { useProjectsQuery } from "../projects/queries";
+
+type ProjectRow = NonNullable<ReturnType<typeof useProjectsQuery>["data"]>[number];
 
 export function DashboardPage() {
   const projects = useProjectsQuery();
@@ -13,25 +17,52 @@ export function DashboardPage() {
   const projectList = projects.data ?? [];
   const recentProjects = projectList.slice(0, 5);
 
+  const columns = useMemo<ColumnDef<ProjectRow>[]>(
+    () => [
+      {
+        accessorKey: "name",
+        header: "Name",
+        cell: ({ row }) => (
+          <Link
+            className="font-medium text-foreground underline-offset-4 hover:underline"
+            to={`/projects/${row.original.id}`}
+          >
+            {row.original.name}
+          </Link>
+        ),
+      },
+      {
+        accessorKey: "rootPath",
+        header: "Root Path",
+        cell: ({ row }) => (
+          <span className="font-mono text-[11px] text-muted-foreground">{row.original.rootPath}</span>
+        ),
+      },
+    ],
+    [],
+  );
+
   return (
-    <PageSection description="Workspace overview" title="Dashboard">
+    <div className="grid gap-6">
+      <PageHeader description="Workspace overview" title="Dashboard" />
+
       <div className="grid gap-4 md:grid-cols-3">
         <Card>
           <CardHeader>
             <CardDescription>Projects</CardDescription>
-            <CardTitle>{projectList.length}</CardTitle>
+            <CardTitle className="text-2xl font-semibold">{projectList.length}</CardTitle>
           </CardHeader>
         </Card>
         <Card>
           <CardHeader>
             <CardDescription>Language</CardDescription>
-            <CardTitle>{settings.data?.language ?? "unknown"}</CardTitle>
+            <CardTitle className="text-2xl font-semibold">{settings.data?.language ?? "unknown"}</CardTitle>
           </CardHeader>
         </Card>
         <Card>
           <CardHeader>
             <CardDescription>Default Query Limit</CardDescription>
-            <CardTitle>{settings.data?.defaultQueryLimit ?? 0}</CardTitle>
+            <CardTitle className="text-2xl font-semibold">{settings.data?.defaultQueryLimit ?? 0}</CardTitle>
           </CardHeader>
         </Card>
       </div>
@@ -43,26 +74,11 @@ export function DashboardPage() {
             <CardDescription>Jump directly into active workspaces.</CardDescription>
           </CardHeader>
           <CardContent className="p-0">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Root Path</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {recentProjects.map((project) => (
-                  <TableRow key={project.id}>
-                    <TableCell className="font-medium">
-                      <Link className="inline-link" to={`/projects/${project.id}`}>
-                        {project.name}
-                      </Link>
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">{project.rootPath}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+            <DataTable
+              columns={columns}
+              data={recentProjects}
+              isLoading={projects.isLoading}
+            />
           </CardContent>
         </Card>
       ) : (
@@ -107,6 +123,6 @@ export function DashboardPage() {
           </CardContent>
         </Card>
       </div>
-    </PageSection>
+    </div>
   );
 }
