@@ -14,16 +14,8 @@ import { CreatePublicProjectDialog } from "./create-public-project-dialog";
 import { CreateTeamDialog } from "./create-team-dialog";
 import { useOrgProjectsQuery, useOrgTeamsQuery } from "./workspace-queries";
 
-type OrgProject = {
-  id: string;
-  name: string;
-  rootPath: string;
-  createdAt: string;
-  spaceKind: string;
-  teamId: string | null;
-  teamSlug: string | null;
-  role: string;
-};
+type OrgProject = NonNullable<ReturnType<typeof useOrgProjectsQuery>["data"]>[number];
+type TeamEntry = NonNullable<ReturnType<typeof useOrgTeamsQuery>["data"]>["teams"][number];
 
 export function OrgWorkspacePage() {
   const { orgId = "" } = useParams();
@@ -205,15 +197,6 @@ function PublicProjectsSection({
     </section>
   );
 }
-
-type TeamEntry = {
-  id: string;
-  name: string;
-  slug: string;
-  orgId: string;
-  spaceId: string;
-  role: string | null;
-};
 
 function TeamSection({
   team,
