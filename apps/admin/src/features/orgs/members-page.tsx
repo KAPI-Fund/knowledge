@@ -5,7 +5,6 @@ import { useParams } from "react-router-dom";
 import { DataTable } from "@/components/shared/data-table";
 import { PageHeader } from "@/components/shared/page-header";
 import { ForbiddenState, LoadingState } from "@/components/shared/states";
-import { StatusPill } from "@/components/shared/status-pill";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -58,7 +57,7 @@ function MembersTable({
               <option value="org_member">org_member</option>
             </select>
           ) : (
-            <StatusPill value={row.original.role} />
+            <span className="text-sm text-muted-foreground">{row.original.role}</span>
           ),
       },
       ...(isAdmin

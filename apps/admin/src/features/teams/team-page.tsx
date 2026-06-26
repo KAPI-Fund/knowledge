@@ -5,7 +5,6 @@ import { Link, useParams } from "react-router-dom";
 import { DataTable } from "@/components/shared/data-table";
 import { PageHeader } from "@/components/shared/page-header";
 import { ForbiddenState, LoadingState } from "@/components/shared/states";
-import { StatusPill } from "@/components/shared/status-pill";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -43,7 +42,7 @@ function TeamMembersTable({
       {
         accessorKey: "role",
         header: "Role",
-        cell: ({ row }) => <StatusPill value={row.original.role} />,
+        cell: ({ row }) => <span className="text-sm text-muted-foreground">{row.original.role}</span>,
       },
       ...(canManage
         ? [
