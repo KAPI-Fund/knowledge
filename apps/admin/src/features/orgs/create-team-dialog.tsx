@@ -2,12 +2,13 @@ import { useState } from "react";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogFooter,
-} from "../../components/ui/dialog";
-import { Button } from "../../components/ui/button";
-import { Input } from "../../components/ui/input";
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { useCreateTeamMutation } from "./workspace-mutations";
 
 export function CreateTeamDialog({
@@ -41,24 +42,40 @@ export function CreateTeamDialog({
       <DialogContent>
         <DialogHeader>
           <DialogTitle>New team</DialogTitle>
+          <DialogDescription>
+            Create a team within this organization.
+          </DialogDescription>
         </DialogHeader>
-        <div className="flex flex-col gap-3">
-          <Input
-            placeholder="Name"
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-          />
-          <Input
-            placeholder="Slug"
-            value={slug}
-            onChange={(event) => setSlug(event.target.value)}
-          />
+        <div className="grid gap-3">
+          <label className="grid gap-1.5 text-sm font-medium">
+            Name
+            <Input
+              placeholder="Engineering"
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+            />
+          </label>
+          <label className="grid gap-1.5 text-sm font-medium">
+            Slug
+            <Input
+              placeholder="engineering"
+              value={slug}
+              onChange={(event) => setSlug(event.target.value)}
+            />
+          </label>
+          {errorMessage ? (
+            <p className="text-sm text-destructive">{errorMessage}</p>
+          ) : null}
         </div>
-        {errorMessage ? (
-          <p className="text-sm text-destructive">{errorMessage}</p>
-        ) : null}
         <DialogFooter>
-          <Button type="button" onClick={submit} disabled={mutation.isPending}>
+          <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            onClick={submit}
+            disabled={!name.trim() || !slug.trim() || mutation.isPending}
+          >
             Create
           </Button>
         </DialogFooter>

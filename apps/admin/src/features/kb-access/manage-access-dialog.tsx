@@ -2,10 +2,12 @@ import { useState } from "react";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "../../components/ui/dialog";
-import { Button } from "../../components/ui/button";
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
 import {
   useProjectGranteesQuery,
   useGrantCandidatesQuery,
@@ -69,6 +71,9 @@ export function ManageAccessDialog({
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Manage access</DialogTitle>
+          <DialogDescription>
+            Add or remove member access to this project.
+          </DialogDescription>
         </DialogHeader>
 
         <ul className="flex flex-col gap-1">
@@ -128,6 +133,12 @@ export function ManageAccessDialog({
         {errorMessage ? (
           <p className="text-sm text-destructive">{errorMessage}</p>
         ) : null}
+
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+            Close
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );

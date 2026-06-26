@@ -2,12 +2,13 @@ import { useState } from "react";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogFooter,
-} from "../../components/ui/dialog";
-import { Button } from "../../components/ui/button";
-import { Input } from "../../components/ui/input";
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { useCreateSpaceProjectMutation } from "./workspace-mutations";
 
 export function CreatePublicProjectDialog({
@@ -43,17 +44,32 @@ export function CreatePublicProjectDialog({
       <DialogContent>
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
+          <DialogDescription>
+            Give the project a name to get started.
+          </DialogDescription>
         </DialogHeader>
-        <Input
-          placeholder="Name"
-          value={name}
-          onChange={(event) => setName(event.target.value)}
-        />
-        {errorMessage ? (
-          <p className="text-sm text-destructive">{errorMessage}</p>
-        ) : null}
+        <div className="grid gap-3">
+          <label className="grid gap-1.5 text-sm font-medium">
+            Name
+            <Input
+              placeholder="My Project"
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+            />
+          </label>
+          {errorMessage ? (
+            <p className="text-sm text-destructive">{errorMessage}</p>
+          ) : null}
+        </div>
         <DialogFooter>
-          <Button type="button" onClick={submit} disabled={mutation.isPending}>
+          <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            onClick={submit}
+            disabled={!name.trim() || mutation.isPending}
+          >
             Create
           </Button>
         </DialogFooter>
