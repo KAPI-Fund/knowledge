@@ -1,11 +1,29 @@
-import { useState } from "react";
+import type { ColumnDef } from "@tanstack/react-table";
+import { useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { Button } from "../../components/ui/button";
+
+import { DataTable } from "@/components/shared/data-table";
+import { PageHeader } from "@/components/shared/page-header";
+import { ForbiddenState, LoadingState } from "@/components/shared/states";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+
+import { ManageAccessDialog } from "../kb-access/manage-access-dialog";
 import { useSpacesQuery } from "../spaces/use-spaces";
-import { useOrgProjectsQuery, useOrgTeamsQuery } from "./workspace-queries";
 import { CreatePublicProjectDialog } from "./create-public-project-dialog";
 import { CreateTeamDialog } from "./create-team-dialog";
-import { ManageAccessDialog } from "../kb-access/manage-access-dialog";
+import { useOrgProjectsQuery, useOrgTeamsQuery } from "./workspace-queries";
+
+type OrgProject = {
+  id: string;
+  name: string;
+  rootPath: string;
+  createdAt: string;
+  spaceKind: string;
+  teamId: string | null;
+  teamSlug: string | null;
+  role: string;
+};
 
 export function OrgWorkspacePage() {
   const { orgId = "" } = useParams();
@@ -22,8 +40,11 @@ export function OrgWorkspacePage() {
   const [manageProjectId, setManageProjectId] = useState<string | null>(null);
   const [manageTeamId, setManageTeamId] = useState<string | null>(null);
 
-  if (spaces.isLoading) return <p>Loading…</p>;
-  if (!org) return <p>Access denied or organization not found.</p>;
+  if (spaces.isLoading) return <LoadingState rows={6} />;
+  if (!org)
+    return (
+      <ForbiddenState description="You do not have access to this organization, or it does not exist." />
+    );
 
   const isAdmin = org.role === "org_admin";
   const allProjects = projects.data ?? [];
@@ -35,92 +56,54 @@ export function OrgWorkspacePage() {
     setManageTeamId(teamId);
   };
 
-  return (
-    <div className="flex flex-col gap-6">
-      <header className="flex items-center justify-between">
-        <h1 className="text-lg font-semibold">{org.name} workspace</h1>
-        {isAdmin ? (
-          <div className="flex items-center gap-2">
-            <Button type="button" onClick={() => setPublicDialogOpen(true)}>
-              New public project
-            </Button>
-            <Link to={`/orgs/${orgId}/members`}>Members</Link>
-            <Button type="button" onClick={() => setTeamDialogOpen(true)}>
-              New team
-            </Button>
-          </div>
-        ) : (
-          <Button type="button" onClick={() => setTeamDialogOpen(true)}>
-            New team
-          </Button>
-        )}
-      </header>
+  const adminActions = (
+    <>
+      <Button type="button" onClick={() => setPublicDialogOpen(true)}>
+        New public project
+      </Button>
+      <Button asChild variant="outline">
+        <Link to={`/orgs/${orgId}/members`}>Members</Link>
+      </Button>
+      <Button type="button" onClick={() => setTeamDialogOpen(true)}>
+        New team
+      </Button>
+    </>
+  );
 
-      <section>
-        <h2 className="text-sm font-medium">Public projects</h2>
-        {publicProjects.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No public projects yet.</p>
-        ) : (
-          <ul className="flex flex-col gap-1">
-            {publicProjects.map((project) => (
-              <li key={project.id} className="flex items-center justify-between">
-                <Link to={`/projects/${project.id}`}>{project.name}</Link>
-                {isAdmin ? (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => openManage(project.id, null)}
-                  >
-                    Manage access
-                  </Button>
-                ) : null}
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+  const nonAdminActions = (
+    <Button type="button" onClick={() => setTeamDialogOpen(true)}>
+      New team
+    </Button>
+  );
+
+  return (
+    <div className="grid gap-6">
+      <PageHeader
+        title={`${org.name} workspace`}
+        actions={isAdmin ? adminActions : nonAdminActions}
+      />
+
+      <PublicProjectsSection
+        projects={publicProjects}
+        isAdmin={isAdmin}
+        onManage={(id) => openManage(id, null)}
+      />
 
       {teamList.map((team) => {
         const teamProjects = allProjects.filter((p) => p.teamId === team.id);
         const canManageTeam = isAdmin || team.role === "leader";
         const teamSpaceId = team.spaceId;
         return (
-          <section key={team.id}>
-            <div className="flex items-center justify-between">
-              <h2 className="text-sm font-medium">Team - {team.name}</h2>
-              <div className="flex items-center gap-2">
-                {canManageTeam && teamSpaceId ? (
-                  <Button
-                    type="button"
-                    onClick={() => setNewKbTeamSpaceId(teamSpaceId)}
-                  >
-                    New team KB
-                  </Button>
-                ) : null}
-                <Link to={`/orgs/${orgId}/teams/${team.id}`}>Manage</Link>
-              </div>
-            </div>
-            {teamProjects.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No team KBs yet.</p>
-            ) : (
-              <ul className="flex flex-col gap-1">
-                {teamProjects.map((project) => (
-                  <li key={project.id} className="flex items-center justify-between">
-                    <Link to={`/projects/${project.id}`}>{project.name}</Link>
-                    {canManageTeam ? (
-                      <Button
-                        type="button"
-                        variant="outline"
-                        onClick={() => openManage(project.id, team.id)}
-                      >
-                        Manage access
-                      </Button>
-                    ) : null}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </section>
+          <TeamSection
+            key={team.id}
+            team={team}
+            orgId={orgId}
+            projects={teamProjects}
+            canManageTeam={canManageTeam}
+            teamSpaceId={teamSpaceId}
+            onNewKb={() => setNewKbTeamSpaceId(teamSpaceId)}
+            onManage={(id) => openManage(id, team.id)}
+          />
         );
       })}
 
@@ -161,5 +144,156 @@ export function OrgWorkspacePage() {
         />
       ) : null}
     </div>
+  );
+}
+
+function PublicProjectsSection({
+  projects,
+  isAdmin,
+  onManage,
+}: {
+  projects: OrgProject[];
+  isAdmin: boolean;
+  onManage: (id: string) => void;
+}) {
+  const columns = useMemo<ColumnDef<OrgProject>[]>(
+    () => [
+      {
+        accessorKey: "name",
+        header: "Name",
+        cell: ({ row }) => (
+          <Link
+            className="font-medium underline-offset-4 hover:underline"
+            to={`/projects/${row.original.id}`}
+          >
+            {row.original.name}
+          </Link>
+        ),
+      },
+      ...(isAdmin
+        ? [
+            {
+              id: "actions",
+              header: "",
+              cell: ({ row }: { row: { original: OrgProject } }) => (
+                <div className="flex justify-end">
+                  <Button
+                    size="sm"
+                    type="button"
+                    variant="outline"
+                    onClick={() => onManage(row.original.id)}
+                  >
+                    Manage access
+                  </Button>
+                </div>
+              ),
+            } satisfies ColumnDef<OrgProject>,
+          ]
+        : []),
+    ],
+    [isAdmin, onManage],
+  );
+
+  return (
+    <section>
+      <h2 className="mb-3 text-sm font-medium">Public projects</h2>
+      <DataTable
+        columns={columns}
+        data={projects}
+        emptyMessage="No public projects yet."
+      />
+    </section>
+  );
+}
+
+type TeamEntry = {
+  id: string;
+  name: string;
+  slug: string;
+  orgId: string;
+  spaceId: string;
+  role: string | null;
+};
+
+function TeamSection({
+  team,
+  orgId,
+  projects,
+  canManageTeam,
+  teamSpaceId,
+  onNewKb,
+  onManage,
+}: {
+  team: TeamEntry;
+  orgId: string;
+  projects: OrgProject[];
+  canManageTeam: boolean;
+  teamSpaceId: string;
+  onNewKb: () => void;
+  onManage: (id: string) => void;
+}) {
+  const columns = useMemo<ColumnDef<OrgProject>[]>(
+    () => [
+      {
+        accessorKey: "name",
+        header: "Name",
+        cell: ({ row }) => (
+          <Link
+            className="font-medium underline-offset-4 hover:underline"
+            to={`/projects/${row.original.id}`}
+          >
+            {row.original.name}
+          </Link>
+        ),
+      },
+      ...(canManageTeam
+        ? [
+            {
+              id: "actions",
+              header: "",
+              cell: ({ row }: { row: { original: OrgProject } }) => (
+                <div className="flex justify-end">
+                  <Button
+                    size="sm"
+                    type="button"
+                    variant="outline"
+                    onClick={() => onManage(row.original.id)}
+                  >
+                    Manage access
+                  </Button>
+                </div>
+              ),
+            } satisfies ColumnDef<OrgProject>,
+          ]
+        : []),
+    ],
+    [canManageTeam, onManage],
+  );
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center justify-between gap-2">
+          <CardTitle>Team - {team.name}</CardTitle>
+          <div className="flex items-center gap-2">
+            {canManageTeam && teamSpaceId ? (
+              <Button size="sm" type="button" onClick={onNewKb}>
+                New team KB
+              </Button>
+            ) : null}
+            <Button asChild size="sm" variant="outline">
+              <Link to={`/orgs/${orgId}/teams/${team.id}`}>Manage</Link>
+            </Button>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent>
+        <DataTable
+          columns={columns}
+          data={projects}
+          emptyMessage="No team KBs yet."
+        />
+      </CardContent>
+    </Card>
   );
 }
