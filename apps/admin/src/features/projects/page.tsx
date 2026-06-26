@@ -1,9 +1,11 @@
+import type { ColumnDef } from "@tanstack/react-table";
+import { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { useState } from "react";
 
-import { PageSection } from "../../components/layout/page-section";
-import { ProjectlessState } from "../../components/layout/projectless-state";
-import { Button } from "../../components/ui/button";
+import { ProjectlessState } from "@/components/layout/projectless-state";
+import { DataTable } from "@/components/shared/data-table";
+import { PageHeader } from "@/components/shared/page-header";
+import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -11,13 +13,13 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "../../components/ui/dialog";
-import { Input } from "../../components/ui/input";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
-import { Card, CardContent } from "../../components/ui/card";
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 
 import { useCreateProjectMutation } from "./mutations";
 import { useProjectsQuery } from "./queries";
+
+type ProjectRow = NonNullable<ReturnType<typeof useProjectsQuery>["data"]>[number];
 
 export function ProjectsPage() {
   const navigate = useNavigate();
@@ -44,12 +46,10 @@ export function ProjectsPage() {
 
   async function handleCreateProject() {
     const trimmedName = name.trim();
-
     if (!trimmedName) {
       setErrorMessage("Name is required.");
       return;
     }
-
     try {
       const project = await createProject.mutateAsync({
         name: trimmedName,
@@ -62,6 +62,38 @@ export function ProjectsPage() {
     }
   }
 
+  const columns = useMemo<ColumnDef<ProjectRow>[]>(
+    () => [
+      {
+        accessorKey: "name",
+        header: "Name",
+        cell: ({ row }) => (
+          <Link
+            className="font-medium text-foreground underline-offset-4 hover:underline"
+            to={`/projects/${row.original.id}`}
+          >
+            {row.original.name}
+          </Link>
+        ),
+      },
+      {
+        accessorKey: "rootPath",
+        header: "Root Path",
+        cell: ({ row }) => (
+          <span className="font-mono text-[11px] text-muted-foreground">{row.original.rootPath}</span>
+        ),
+      },
+      {
+        accessorKey: "createdAt",
+        header: "Created",
+        cell: ({ row }) => (
+          <span className="text-sm text-muted-foreground">{row.original.createdAt}</span>
+        ),
+      },
+    ],
+    [],
+  );
+
   return (
     <Dialog
       onOpenChange={(open) => {
@@ -73,44 +105,18 @@ export function ProjectsPage() {
       }}
       open={createOpen}
     >
-      <PageSection
-        actions={
-          hasProjects ? <Button onClick={openCreateProject}>Create Project</Button> : undefined
-        }
-        description="Manage registered knowledge workspaces and jump directly into project operations."
-        title="Projects"
-      >
+      <div className="grid gap-6">
+        <PageHeader
+          actions={hasProjects ? <Button onClick={openCreateProject}>Create Project</Button> : undefined}
+          description="Manage registered knowledge workspaces and jump directly into project operations."
+          title="Projects"
+        />
         {hasProjects ? (
-          <Card>
-            <CardContent className="p-0">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Name</TableHead>
-                    <TableHead>Root Path</TableHead>
-                    <TableHead>Created</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {projectList.map((project) => (
-                    <TableRow key={project.id}>
-                      <TableCell className="font-medium">
-                        <Link className="inline-link" to={`/projects/${project.id}`}>
-                          {project.name}
-                        </Link>
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">{project.rootPath}</TableCell>
-                      <TableCell className="text-muted-foreground">{project.createdAt}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
+          <DataTable columns={columns} data={projectList} isLoading={projects.isLoading} />
         ) : (
           <ProjectlessState onCreateProject={openCreateProject} />
         )}
-      </PageSection>
+      </div>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Create Project</DialogTitle>
@@ -118,7 +124,7 @@ export function ProjectsPage() {
             Register a project workspace and let the backend create the root structure.
           </DialogDescription>
         </DialogHeader>
-        <div className="grid gap-4 px-6 pb-6">
+        <div className="grid gap-4">
           <label className="grid gap-2 text-sm font-medium">
             Name
             <Input
@@ -130,7 +136,7 @@ export function ProjectsPage() {
           {errorMessage ? <p className="text-sm text-destructive">{errorMessage}</p> : null}
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={closeCreateProject}>
+          <Button onClick={closeCreateProject} variant="outline">
             Cancel
           </Button>
           <Button onClick={handleCreateProject}>Create Project</Button>
