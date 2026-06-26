@@ -2,8 +2,8 @@ import { useEffect, useState } from "react";
 import { useSearchParams, useParams } from "react-router-dom";
 
 import { EmptyState } from "@/components/layout/empty-state";
-import { PageSection } from "@/components/layout/page-section";
 import { RouteStatePane } from "@/components/layout/route-state-pane";
+import { PageHeader } from "@/components/shared/page-header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -121,10 +121,12 @@ export function FilesPage() {
   }
 
   return (
-    <PageSection
-      description="Browse indexed project files and inspect raw content previews."
-      title="Files"
-    >
+    <div className="grid gap-6">
+      <PageHeader
+        description="Browse indexed project files and inspect raw content previews."
+        title="Files"
+      />
+
       <Card>
         <CardContent className="grid gap-4 p-6 md:grid-cols-[180px_minmax(0,1fr)_auto] md:items-end">
           <label className="grid gap-2 text-sm font-medium">
@@ -175,11 +177,11 @@ export function FilesPage() {
           >
             Create Page
           </Button>
-          {createError ? <p className="text-sm text-red-600 md:col-span-2">{createError}</p> : null}
+          {createError ? <p className="text-sm text-destructive md:col-span-2">{createError}</p> : null}
         </CardContent>
       </Card>
 
-      <div className="grid gap-6 xl:grid-cols-[320px_minmax(0,1fr)]">
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,360px)_minmax(0,1fr)]">
         <Card>
           <CardHeader>
             <CardTitle>Tree</CardTitle>
@@ -244,7 +246,7 @@ export function FilesPage() {
           </CardContent>
         </Card>
       </div>
-    </PageSection>
+    </div>
   );
 }
 
