@@ -1,16 +1,140 @@
-import { useState } from "react";
+import type { ColumnDef } from "@tanstack/react-table";
+import { useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { Button } from "../../components/ui/button";
-import { Input } from "../../components/ui/input";
+
+import { DataTable } from "@/components/shared/data-table";
+import { PageHeader } from "@/components/shared/page-header";
+import { ForbiddenState, LoadingState } from "@/components/shared/states";
+import { StatusPill } from "@/components/shared/status-pill";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+
+import { ManageAccessDialog } from "../kb-access/manage-access-dialog";
 import { useSpacesQuery } from "../spaces/use-spaces";
-import { useTeamMembersQuery, useTeamProjectsQuery } from "./team-queries";
 import { useOrgTeamsQuery } from "../orgs/workspace-queries";
+import { useTeamMembersQuery, useTeamProjectsQuery } from "./team-queries";
 import {
   useAddTeamMemberMutation,
   useRemoveTeamMemberMutation,
   useCreateTeamKbMutation,
 } from "./team-mutations";
-import { ManageAccessDialog } from "../kb-access/manage-access-dialog";
+
+type TeamMember = NonNullable<ReturnType<typeof useTeamMembersQuery>["data"]>["members"][number];
+type TeamProject = NonNullable<ReturnType<typeof useTeamProjectsQuery>["data"]>[number];
+
+function TeamMembersTable({
+  members,
+  canManage,
+  onRemove,
+}: {
+  members: TeamMember[];
+  canManage: boolean;
+  onRemove: (userId: string) => void;
+}) {
+  const columns = useMemo<ColumnDef<TeamMember>[]>(
+    () => [
+      {
+        accessorKey: "username",
+        header: "Username",
+        cell: ({ row }) => (
+          <span className="font-medium">{row.original.username}</span>
+        ),
+      },
+      {
+        accessorKey: "role",
+        header: "Role",
+        cell: ({ row }) => <StatusPill value={row.original.role} />,
+      },
+      ...(canManage
+        ? [
+            {
+              id: "actions",
+              header: "Actions",
+              cell: ({ row }: { row: { original: TeamMember } }) =>
+                row.original.role === "leader" ? null : (
+                  <div className="flex justify-end">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      aria-label={`Remove ${row.original.username}`}
+                      onClick={() => onRemove(row.original.userId)}
+                    >
+                      Remove
+                    </Button>
+                  </div>
+                ),
+            } satisfies ColumnDef<TeamMember>,
+          ]
+        : []),
+    ],
+    [canManage, onRemove],
+  );
+
+  return (
+    <DataTable
+      columns={columns}
+      data={members}
+      emptyMessage="No members yet."
+    />
+  );
+}
+
+function TeamKbsTable({
+  projects,
+  canManage,
+  onManage,
+}: {
+  projects: TeamProject[];
+  canManage: boolean;
+  onManage: (projectId: string) => void;
+}) {
+  const columns = useMemo<ColumnDef<TeamProject>[]>(
+    () => [
+      {
+        accessorKey: "name",
+        header: "Name",
+        cell: ({ row }) => (
+          <Link
+            className="font-medium underline-offset-4 hover:underline"
+            to={`/projects/${row.original.id}`}
+          >
+            {row.original.name}
+          </Link>
+        ),
+      },
+      ...(canManage
+        ? [
+            {
+              id: "actions",
+              header: "",
+              cell: ({ row }: { row: { original: TeamProject } }) => (
+                <div className="flex justify-end">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => onManage(row.original.id)}
+                  >
+                    Manage access
+                  </Button>
+                </div>
+              ),
+            } satisfies ColumnDef<TeamProject>,
+          ]
+        : []),
+    ],
+    [canManage, onManage],
+  );
+
+  return (
+    <DataTable
+      columns={columns}
+      data={projects}
+      emptyMessage="No team KBs yet."
+    />
+  );
+}
 
 export function TeamPage() {
   const { orgId = "", teamId = "" } = useParams();
@@ -35,8 +159,8 @@ export function TeamPage() {
   const [manageProjectId, setManageProjectId] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  if (spaces.isLoading || teamsQuery.isLoading) return <p>Loading…</p>;
-  if (!team) return <p>Access denied or team not found.</p>;
+  if (spaces.isLoading || teamsQuery.isLoading) return <LoadingState />;
+  if (!team) return <ForbiddenState description="You do not have access to this team, or it does not exist." />;
 
   const add = async () => {
     setErrorMessage(null);
@@ -67,46 +191,26 @@ export function TeamPage() {
     }
   };
 
-  return (
-    <div className="flex flex-col gap-6">
-      <header className="flex items-center justify-between">
-        <h1 className="text-lg font-semibold">Team - {team.name}</h1>
-        <Link to={`/orgs/${orgId}`}>Back to workspace</Link>
-      </header>
+  const backAction = (
+    <Button asChild variant="ghost">
+      <Link to={`/orgs/${orgId}`}>Back to workspace</Link>
+    </Button>
+  );
 
-      <section className="flex flex-col gap-2">
+  return (
+    <div className="grid gap-6">
+      <PageHeader
+        title={`Team - ${team.name}`}
+        actions={backAction}
+      />
+
+      <section className="grid gap-3">
         <h2 className="text-sm font-medium">Members</h2>
-        <table>
-          <thead>
-            <tr>
-              <th>Username</th>
-              <th>Role</th>
-              {canManage ? <th>Actions</th> : null}
-            </tr>
-          </thead>
-          <tbody>
-            {members.data?.members.map((member) => (
-              <tr key={member.userId}>
-                <td>{member.username}</td>
-                <td>{member.role}</td>
-                {canManage ? (
-                  <td>
-                    {member.role === "leader" ? null : (
-                      <Button
-                        type="button"
-                        variant="outline"
-                        aria-label={`Remove ${member.username}`}
-                        onClick={() => remove(member.userId)}
-                      >
-                        Remove
-                      </Button>
-                    )}
-                  </td>
-                ) : null}
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <TeamMembersTable
+          members={members.data?.members ?? []}
+          canManage={canManage}
+          onRemove={remove}
+        />
         {canManage ? (
           <div className="flex items-end gap-2">
             <Input
@@ -121,28 +225,13 @@ export function TeamPage() {
         ) : null}
       </section>
 
-      <section className="flex flex-col gap-2">
+      <section className="grid gap-3">
         <h2 className="text-sm font-medium">Team KBs</h2>
-        {(projects.data ?? []).length === 0 ? (
-          <p className="text-sm text-muted-foreground">No team KBs yet.</p>
-        ) : (
-          <ul className="flex flex-col gap-1">
-            {projects.data?.map((project) => (
-              <li key={project.id} className="flex items-center justify-between">
-                <Link to={`/projects/${project.id}`}>{project.name}</Link>
-                {canManage ? (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => setManageProjectId(project.id)}
-                  >
-                    Manage access
-                  </Button>
-                ) : null}
-              </li>
-            ))}
-          </ul>
-        )}
+        <TeamKbsTable
+          projects={projects.data ?? []}
+          canManage={canManage}
+          onManage={(id) => setManageProjectId(id)}
+        />
         {canManage ? (
           <div className="flex items-end gap-2">
             <Input

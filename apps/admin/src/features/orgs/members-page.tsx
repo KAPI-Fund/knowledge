@@ -1,7 +1,14 @@
-import { useState } from "react";
+import type { ColumnDef } from "@tanstack/react-table";
+import { useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
-import { Button } from "../../components/ui/button";
-import { Input } from "../../components/ui/input";
+
+import { DataTable } from "@/components/shared/data-table";
+import { PageHeader } from "@/components/shared/page-header";
+import { ForbiddenState, LoadingState } from "@/components/shared/states";
+import { StatusPill } from "@/components/shared/status-pill";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+
 import { useSpacesQuery } from "../spaces/use-spaces";
 import { useOrgMembersQuery } from "./members-queries";
 import {
@@ -9,6 +16,84 @@ import {
   useSetOrgMemberRoleMutation,
   useRemoveOrgMemberMutation,
 } from "./members-mutations";
+
+type OrgMember = NonNullable<ReturnType<typeof useOrgMembersQuery>["data"]>["members"][number];
+
+function MembersTable({
+  members,
+  isAdmin,
+  onChangeRole,
+  onRemove,
+}: {
+  members: OrgMember[];
+  isAdmin: boolean;
+  onChangeRole: (userId: string, role: "org_admin" | "org_member") => void;
+  onRemove: (userId: string) => void;
+}) {
+  const columns = useMemo<ColumnDef<OrgMember>[]>(
+    () => [
+      {
+        accessorKey: "username",
+        header: "Username",
+        cell: ({ row }) => (
+          <span className="font-medium">{row.original.username}</span>
+        ),
+      },
+      {
+        accessorKey: "role",
+        header: "Role",
+        cell: ({ row }) =>
+          isAdmin ? (
+            <select
+              aria-label={`Role for ${row.original.username}`}
+              value={row.original.role}
+              onChange={(event) =>
+                onChangeRole(
+                  row.original.userId,
+                  event.target.value as "org_admin" | "org_member",
+                )
+              }
+            >
+              <option value="org_admin">org_admin</option>
+              <option value="org_member">org_member</option>
+            </select>
+          ) : (
+            <StatusPill value={row.original.role} />
+          ),
+      },
+      ...(isAdmin
+        ? [
+            {
+              id: "actions",
+              header: "Actions",
+              cell: ({ row }: { row: { original: OrgMember } }) => (
+                <div className="flex justify-end">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    aria-label={`Remove ${row.original.username}`}
+                    onClick={() => onRemove(row.original.userId)}
+                  >
+                    Remove
+                  </Button>
+                </div>
+              ),
+            } satisfies ColumnDef<OrgMember>,
+          ]
+        : []),
+    ],
+    [isAdmin, onChangeRole, onRemove],
+  );
+
+  return (
+    <DataTable
+      columns={columns}
+      data={members}
+      emptyMessage="No members yet."
+    />
+  );
+}
 
 export function OrgMembersPage() {
   const { orgId = "" } = useParams();
@@ -25,8 +110,8 @@ export function OrgMembersPage() {
   const [role, setRoleValue] = useState<"org_admin" | "org_member">("org_member");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  if (spaces.isLoading) return <p>Loading…</p>;
-  if (!org) return <p>Access denied or organization not found.</p>;
+  if (spaces.isLoading) return <LoadingState rows={5} />;
+  if (!org) return <ForbiddenState description="You do not have access to this organization, or it does not exist." />;
 
   const add = async () => {
     setErrorMessage(null);
@@ -59,80 +144,42 @@ export function OrgMembersPage() {
     }
   };
 
+  const addControls = isAdmin ? (
+    <div className="flex items-end gap-2">
+      <Input
+        placeholder="Username"
+        value={username}
+        onChange={(event) => setUsername(event.target.value)}
+      />
+      <select
+        aria-label="New member role"
+        value={role}
+        onChange={(event) =>
+          setRoleValue(event.target.value as "org_admin" | "org_member")
+        }
+      >
+        <option value="org_member">org_member</option>
+        <option value="org_admin">org_admin</option>
+      </select>
+      <Button type="button" onClick={add} disabled={addMember.isPending}>
+        Add member
+      </Button>
+    </div>
+  ) : null;
+
   return (
-    <div className="flex flex-col gap-4">
-      <h1 className="text-lg font-semibold">{org.name} members</h1>
+    <div className="grid gap-6">
+      <PageHeader
+        title={`${org.name} members`}
+        actions={addControls ?? undefined}
+      />
 
-      <table>
-        <thead>
-          <tr>
-            <th>Username</th>
-            <th>Role</th>
-            {isAdmin ? <th>Actions</th> : null}
-          </tr>
-        </thead>
-        <tbody>
-          {members.data?.members.map((member) => (
-            <tr key={member.userId}>
-              <td>{member.username}</td>
-              <td>
-                {isAdmin ? (
-                  <select
-                    aria-label={`Role for ${member.username}`}
-                    value={member.role}
-                    onChange={(event) =>
-                      changeRole(
-                        member.userId,
-                        event.target.value as "org_admin" | "org_member",
-                      )
-                    }
-                  >
-                    <option value="org_admin">org_admin</option>
-                    <option value="org_member">org_member</option>
-                  </select>
-                ) : (
-                  member.role
-                )}
-              </td>
-              {isAdmin ? (
-                <td>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    aria-label={`Remove ${member.username}`}
-                    onClick={() => remove(member.userId)}
-                  >
-                    Remove
-                  </Button>
-                </td>
-              ) : null}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-
-      {isAdmin ? (
-        <div className="flex items-end gap-2">
-          <Input
-            placeholder="Username"
-            value={username}
-            onChange={(event) => setUsername(event.target.value)}
-          />
-          <select
-            aria-label="New member role"
-            value={role}
-            onChange={(event) =>
-              setRoleValue(event.target.value as "org_admin" | "org_member")
-            }
-          >
-            <option value="org_member">org_member</option>
-            <option value="org_admin">org_admin</option>
-          </select>
-          <Button type="button" onClick={add} disabled={addMember.isPending}>
-            Add member
-          </Button>
-        </div>
-      ) : null}
+      <MembersTable
+        members={members.data?.members ?? []}
+        isAdmin={isAdmin}
+        onChangeRole={changeRole}
+        onRemove={remove}
+      />
 
       {errorMessage ? (
         <p className="text-sm text-destructive">{errorMessage}</p>
