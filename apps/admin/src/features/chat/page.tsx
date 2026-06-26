@@ -2,6 +2,10 @@ import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useParams } from "react-router-dom";
 
+import { PageHeader } from "@/components/shared/page-header";
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
+
 import {
   conversationKeys,
   useConversationMessagesQuery,
@@ -94,107 +98,111 @@ export function ChatPage() {
   }
 
   return (
-    <div className="grid gap-4 md:grid-cols-[16rem_1fr]">
-      <aside className="rounded-lg border border-border p-3">
-        <button
-          className="mb-3 w-full rounded-lg border border-border px-3 py-2 text-sm font-medium hover:bg-accent"
-          onClick={() => {
-            createMutation.mutate(undefined, {
-              onSuccess: (created) => setActiveId(created.id),
-            });
-          }}
-          type="button"
-        >
-          New conversation
-        </button>
-        <ul className="space-y-1">
-          {(conversations.data ?? []).map((conversation) => (
-            <li className="flex items-center gap-1" key={conversation.id}>
-              <button
-                className={`flex-1 truncate rounded px-2 py-1 text-left text-sm ${
-                  conversation.id === activeId ? "bg-accent" : "hover:bg-accent/50"
-                }`}
-                onClick={() => setActiveId(conversation.id)}
-                type="button"
-              >
-                {conversation.title}
-              </button>
-              <button
-                aria-label={`Rename ${conversation.title}`}
-                className="rounded px-1 text-xs text-muted-foreground hover:bg-accent"
-                onClick={() => handleRename(conversation.id, conversation.title)}
-                type="button"
-              >
-                Rename
-              </button>
-              <button
-                aria-label={`Delete ${conversation.title}`}
-                className="rounded px-1 text-xs text-muted-foreground hover:bg-accent"
-                onClick={() => handleDelete(conversation.id)}
-                type="button"
-              >
-                Delete
-              </button>
-            </li>
-          ))}
-        </ul>
-      </aside>
+    <div className="grid gap-6">
+      <PageHeader
+        description="Chat with the project wiki using the configured provider; responses stream from retrieved context."
+        title="Chat"
+      />
 
-      <section className="flex min-h-[24rem] flex-col rounded-lg border border-border">
-        <div aria-live="polite" className="flex-1 space-y-3 overflow-y-auto p-4">
-          {(messages.data ?? []).map((message) => (
-            <div
-              className={`max-w-prose whitespace-pre-wrap rounded-lg px-3 py-2 text-sm ${
-                message.role === "user" ? "ml-auto bg-accent" : "bg-muted"
-              }`}
-              data-role={message.role}
-              key={message.id}
-            >
-              {message.content}
-            </div>
-          ))}
-          {pendingUserText !== null && (
-            <div
-              className="ml-auto max-w-prose whitespace-pre-wrap rounded-lg bg-accent px-3 py-2 text-sm"
-              data-role="user"
-            >
-              {pendingUserText}
-            </div>
-          )}
-          {streamingText !== null && (
-            <div
-              className="max-w-prose whitespace-pre-wrap rounded-lg bg-muted px-3 py-2 text-sm"
-              data-role="assistant"
-              data-streaming="true"
-            >
-              {streamingText}
-            </div>
-          )}
-          {error && <p className="text-sm text-red-600">{error}</p>}
-        </div>
-        <form
-          className="flex gap-2 border-t border-border p-3"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void handleSend();
-          }}
-        >
-          <textarea
-            aria-label="Chat message"
-            className="min-h-10 flex-1 resize-y rounded-lg border border-border px-3 py-2 text-sm"
-            onChange={(event) => setDraft(event.target.value)}
-            placeholder="Ask the wiki..."
-            value={draft}
-          />
-          <button
-            className="rounded-lg border border-border px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
-            disabled={isStreaming || !draft.trim()}
-            type="submit"
+      <div className="grid gap-4 md:grid-cols-[16rem_1fr]">
+        <aside className="rounded-lg border border-border bg-card p-3">
+          <Button
+            className="mb-3 w-full"
+            onClick={() => {
+              createMutation.mutate(undefined, {
+                onSuccess: (created) => setActiveId(created.id),
+              });
+            }}
+            variant="outline"
           >
-            Send
-          </button>
-        </form>
-      </section>
+            New conversation
+          </Button>
+          <ul className="space-y-1">
+            {(conversations.data ?? []).map((conversation) => (
+              <li className="flex items-center gap-1" key={conversation.id}>
+                <Button
+                  className="flex-1 justify-start truncate"
+                  onClick={() => setActiveId(conversation.id)}
+                  size="sm"
+                  variant={conversation.id === activeId ? "secondary" : "ghost"}
+                >
+                  {conversation.title}
+                </Button>
+                <Button
+                  aria-label={`Rename ${conversation.title}`}
+                  onClick={() => handleRename(conversation.id, conversation.title)}
+                  size="xs"
+                  variant="ghost"
+                >
+                  Rename
+                </Button>
+                <Button
+                  aria-label={`Delete ${conversation.title}`}
+                  onClick={() => handleDelete(conversation.id)}
+                  size="xs"
+                  variant="ghost"
+                >
+                  Delete
+                </Button>
+              </li>
+            ))}
+          </ul>
+        </aside>
+
+        <section className="flex min-h-[24rem] flex-col rounded-lg border border-border bg-card">
+          <div aria-live="polite" className="flex-1 space-y-3 overflow-y-auto p-4">
+            {(messages.data ?? []).map((message) => (
+              <div
+                className={`max-w-prose whitespace-pre-wrap rounded-md border px-3 py-2 text-sm ${
+                  message.role === "user"
+                    ? "ml-auto border-primary/30 bg-accent"
+                    : "border-border bg-muted"
+                }`}
+                data-role={message.role}
+                key={message.id}
+              >
+                {message.content}
+              </div>
+            ))}
+            {pendingUserText !== null && (
+              <div
+                className="ml-auto max-w-prose whitespace-pre-wrap rounded-md border border-primary/30 bg-accent px-3 py-2 text-sm"
+                data-role="user"
+              >
+                {pendingUserText}
+              </div>
+            )}
+            {streamingText !== null && (
+              <div
+                className="max-w-prose whitespace-pre-wrap rounded-md border border-border bg-muted px-3 py-2 text-sm"
+                data-role="assistant"
+                data-streaming="true"
+              >
+                {streamingText}
+              </div>
+            )}
+            {error && <p className="text-sm text-destructive">{error}</p>}
+          </div>
+          <form
+            className="flex gap-2 border-t border-border p-3"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void handleSend();
+            }}
+          >
+            <Textarea
+              aria-label="Chat message"
+              className="min-h-10 flex-1 resize-y"
+              onChange={(event) => setDraft(event.target.value)}
+              placeholder="Ask the wiki..."
+              value={draft}
+            />
+            <Button disabled={isStreaming || !draft.trim()} type="submit">
+              Send
+            </Button>
+          </form>
+        </section>
+      </div>
     </div>
   );
 }
