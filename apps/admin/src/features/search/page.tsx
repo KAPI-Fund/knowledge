@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useParams } from "react-router-dom";
 
 import { EmptyState } from "@/components/layout/empty-state";
-import { PageSection } from "@/components/layout/page-section";
+import { PageHeader } from "@/components/shared/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -55,10 +55,12 @@ export function SearchPage() {
   }
 
   return (
-    <PageSection
-      description="Search the indexed project corpus and inspect ranked matches."
-      title="Search"
-    >
+    <div className="grid gap-6">
+      <PageHeader
+        description="Search the indexed project corpus and inspect ranked matches."
+        title="Search"
+      />
+
       <Card>
         <CardHeader>
           <CardTitle>Search Query</CardTitle>
@@ -162,6 +164,6 @@ export function SearchPage() {
           title="Ready to search"
         />
       )}
-    </PageSection>
+    </div>
   );
 }
