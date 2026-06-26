@@ -104,7 +104,7 @@ export function ManageAccessDialog({
               value={selectedUser}
               onChange={(event) => setSelectedUser(event.target.value)}
             >
-              <option value="">Select…</option>
+              <option value="">Select...</option>
               {filteredCandidates?.map((candidate) => (
                 <option key={candidate.userId} value={candidate.userId}>
                   {candidate.username}
