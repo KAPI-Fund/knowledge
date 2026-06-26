@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 
-import { PageSection } from "@/components/layout/page-section";
 import { RouteStatePane } from "@/components/layout/route-state-pane";
+import { PageHeader } from "@/components/shared/page-header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -86,30 +86,32 @@ export function SourceWatchPage() {
   }
 
   return (
-    <PageSection
-      actions={
-        <>
-          <Button
-            disabled={scanSourceWatch.isPending}
-            onClick={handleScanNow}
-            variant="outline"
-          >
-            Scan Now
-          </Button>
-          <Button disabled={updateSettings.isPending} onClick={handleSave}>
-            Save Source Watch
-          </Button>
-        </>
-      }
-      description="Configure background syncing from a watched source directory."
-      title="Source Watch"
-    >
+    <div className="grid gap-6">
+      <PageHeader
+        actions={
+          <div className="flex flex-wrap gap-2">
+            <Button
+              disabled={scanSourceWatch.isPending}
+              onClick={handleScanNow}
+              variant="outline"
+            >
+              Scan Now
+            </Button>
+            <Button disabled={updateSettings.isPending} onClick={handleSave}>
+              Save Source Watch
+            </Button>
+          </div>
+        }
+        description="Configure background syncing from a watched source directory."
+        title="Source Watch"
+      />
+
       <Card>
         <CardHeader>
           <CardTitle>Watcher Settings</CardTitle>
           <CardDescription>Mirror upstream source folders and optionally queue ingest work.</CardDescription>
         </CardHeader>
-        <CardContent className="grid gap-4 lg:grid-cols-2">
+        <CardContent className="grid gap-4 sm:grid-cols-2">
           <label className="flex items-center gap-3 rounded-xl border border-border/70 px-4 py-3 text-sm font-medium">
             <input
               checked={enabled}
@@ -128,7 +130,7 @@ export function SourceWatchPage() {
             Automatically enqueue ingest tasks
           </label>
 
-          <label className="grid gap-2 text-sm font-medium lg:col-span-2">
+          <label className="grid gap-2 text-sm font-medium sm:col-span-2">
             Watch Path
             <Input onChange={(event) => setPath(event.target.value)} value={path} />
           </label>
@@ -186,7 +188,7 @@ export function SourceWatchPage() {
           ) : null}
         </CardContent>
       </Card>
-    </PageSection>
+    </div>
   );
 }
 
