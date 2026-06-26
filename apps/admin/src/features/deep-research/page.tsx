@@ -4,8 +4,8 @@ import { useParams } from "react-router-dom";
 import { ProjectFileLink } from "../shared/file-links";
 
 import { EmptyState } from "@/components/layout/empty-state";
-import { PageSection } from "@/components/layout/page-section";
-import { StatusBadge } from "@/components/layout/status-badge";
+import { PageHeader } from "@/components/shared/page-header";
+import { StatusPill } from "@/components/shared/status-pill";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -65,10 +65,12 @@ export function DeepResearchPage() {
   const tasks = (tasksQuery.data ?? []).filter((task) => task.taskType === "project.deep_research");
 
   return (
-    <PageSection
-      description="Run a deep research task: fan-out search queries against the configured provider, synthesize a wiki page, save it under wiki/queries/."
-      title="Deep Research"
-    >
+    <div className="grid gap-6">
+      <PageHeader
+        description="Run a deep research task: fan-out search queries against the configured provider, synthesize a wiki page, save it under wiki/queries/."
+        title="Deep Research"
+      />
+
       <Card>
         <CardHeader>
           <CardTitle>New Research</CardTitle>
@@ -130,7 +132,7 @@ export function DeepResearchPage() {
                       Updated {task.updatedAt ?? "—"} · created {task.createdAt ?? "—"}
                     </CardDescription>
                   </div>
-                  <StatusBadge value={task.status} />
+                  <StatusPill value={task.status} />
                 </div>
               </CardHeader>
               <CardContent className="grid gap-2 text-sm">
@@ -142,6 +144,6 @@ export function DeepResearchPage() {
       ) : (
         <EmptyState description="No research tasks yet for this project." title="No research" />
       )}
-    </PageSection>
+    </div>
   );
 }
