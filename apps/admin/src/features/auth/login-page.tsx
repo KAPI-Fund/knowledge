@@ -6,6 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../..
 import { Input } from "../../components/ui/input";
 
 import { useLoginMutation } from "./api";
+import { setCsrfToken } from "./csrf";
 
 export function LoginPage() {
   const login = useLoginMutation();
@@ -16,7 +17,7 @@ export function LoginPage() {
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const result = await login.mutateAsync({ username, password });
-    window.sessionStorage.setItem("knowledge.csrfToken", result.csrfToken);
+    setCsrfToken(result.csrfToken);
     navigate("/projects");
   }
 

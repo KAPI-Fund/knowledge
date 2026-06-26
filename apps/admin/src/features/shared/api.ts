@@ -1,6 +1,8 @@
 import { apiFetch } from "@knowledge/api-client";
 import { z } from "zod";
 
+import { getCsrfToken } from "../auth/csrf";
+
 const loginSchema = z.object({
   csrfToken: z.string(),
 });
@@ -275,7 +277,7 @@ const graphNeighborsSchema = z.object({
 
 function csrfHeader() {
   return {
-    "x-csrf-token": window.sessionStorage.getItem("knowledge.csrfToken") ?? "",
+    "x-csrf-token": getCsrfToken(),
   };
 }
 

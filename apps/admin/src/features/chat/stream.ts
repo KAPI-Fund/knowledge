@@ -1,3 +1,5 @@
+import { getCsrfToken } from "../auth/csrf";
+
 export interface ChatStreamEvent {
   event: string;
   data: string;
@@ -44,7 +46,7 @@ export async function streamChatMessage(
       credentials: "include",
       headers: {
         "content-type": "application/json",
-        "x-csrf-token": window.sessionStorage.getItem("knowledge.csrfToken") ?? "",
+        "x-csrf-token": getCsrfToken(),
       },
       body: JSON.stringify({ content: input.content }),
     },

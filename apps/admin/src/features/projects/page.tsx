@@ -16,6 +16,8 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 
+import { getCsrfToken } from "@/features/auth/csrf";
+
 import { useCreateProjectMutation } from "./mutations";
 import { useProjectsQuery } from "./queries";
 
@@ -53,7 +55,7 @@ export function ProjectsPage() {
     try {
       const project = await createProject.mutateAsync({
         name: trimmedName,
-        csrfToken: window.sessionStorage.getItem("knowledge.csrfToken") ?? "",
+        csrfToken: getCsrfToken(),
       });
       closeCreateProject();
       navigate(`/projects/${project.id}`);

@@ -10,9 +10,11 @@ import {
 } from "@knowledge/api-client";
 import { z } from "zod";
 
+import { getCsrfToken } from "../auth/csrf";
+
 function csrfHeader(): Record<string, string> {
   return {
-    "x-csrf-token": window.sessionStorage.getItem("knowledge.csrfToken") ?? "",
+    "x-csrf-token": getCsrfToken(),
   };
 }
 
