@@ -1,4 +1,5 @@
-import { ChevronLeft } from "lucide-react";
+import { ChevronLeft, Plus } from "lucide-react";
+import { useState } from "react";
 import { Link, NavLink, useMatch } from "react-router-dom";
 
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -23,6 +24,7 @@ import {
 } from "@/components/ui/sidebar";
 import { useSession } from "@/features/auth/use-session";
 import { useProjectDetailQuery } from "@/features/projects/detail-queries";
+import { CreateOrgDialog } from "@/features/spaces/create-org-dialog";
 import { useSpacesQuery } from "@/features/spaces/use-spaces";
 import { globalNav, projectNavGroups } from "@/lib/route-meta";
 import { cn } from "@/lib/utils";
@@ -135,6 +137,7 @@ function UserChip() {
   const orgs = spaces.data?.orgs ?? [];
   const label = user?.username ?? "Account";
   const initial = label.slice(0, 1).toUpperCase();
+  const [createOrgOpen, setCreateOrgOpen] = useState(false);
 
   return (
     <SidebarMenu>
@@ -150,16 +153,20 @@ function UserChip() {
               <span className="truncate">{label}</span>
             </SidebarMenuButton>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" side="top" className="w-48">
+          <DropdownMenuContent align="start" className="w-56" side="top">
             <DropdownMenuLabel>Spaces</DropdownMenuLabel>
             <DropdownMenuItem asChild>
               <Link to="/projects">Personal</Link>
             </DropdownMenuItem>
             {orgs.map((org) => (
-              <DropdownMenuItem key={org.id} asChild>
+              <DropdownMenuItem asChild key={org.id}>
                 <Link to={`/orgs/${org.id}`}>{org.name}</Link>
               </DropdownMenuItem>
             ))}
+            <DropdownMenuItem onSelect={() => setCreateOrgOpen(true)}>
+              <Plus className="size-4" />
+              New organization
+            </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem asChild>
               <Link to="/settings">Settings</Link>
@@ -167,6 +174,7 @@ function UserChip() {
           </DropdownMenuContent>
         </DropdownMenu>
       </SidebarMenuItem>
+      <CreateOrgDialog onOpenChange={setCreateOrgOpen} open={createOrgOpen} />
     </SidebarMenu>
   );
 }
