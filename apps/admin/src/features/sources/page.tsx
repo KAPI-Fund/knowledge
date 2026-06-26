@@ -1,17 +1,20 @@
-import { useRef, useState, type RefObject } from "react";
+import type { ColumnDef } from "@tanstack/react-table";
+import { useMemo, useRef, useState, type RefObject } from "react";
 import { useParams } from "react-router-dom";
 
 import { EmptyState } from "@/components/layout/empty-state";
-import { PageSection } from "@/components/layout/page-section";
 import { RouteStatePane } from "@/components/layout/route-state-pane";
+import { DataTable } from "@/components/shared/data-table";
+import { FilterToolbar } from "@/components/shared/filter-toolbar";
+import { PageHeader } from "@/components/shared/page-header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { normalizeAppError } from "@/lib/app-error";
 
+import { ProjectFileLink } from "../shared/file-links";
 import { fileToBase64 } from "../shared/api";
 import {
   useDeleteSourceMutation,
@@ -25,6 +28,8 @@ type UploadFile = File & {
   webkitRelativePath?: string;
 };
 
+type SourceRow = NonNullable<ReturnType<typeof useProjectSourcesQuery>["data"]>[number];
+
 export function SourcesPage() {
   const { projectId = "" } = useParams();
   const sources = useProjectSourcesQuery(projectId);
@@ -37,8 +42,65 @@ export function SourcesPage() {
   const [selectedFiles, setSelectedFiles] = useState<UploadFile[]>([]);
   const [selectedFolderFiles, setSelectedFolderFiles] = useState<UploadFile[]>([]);
   const [statusMessage, setStatusMessage] = useState("");
+  const [filter, setFilter] = useState("");
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const folderInputRef = useRef<HTMLInputElement | null>(null);
+
+  const columns = useMemo<ColumnDef<SourceRow>[]>(
+    () => [
+      {
+        accessorKey: "relativePath",
+        header: "Path",
+        cell: ({ row }) => (
+          <ProjectFileLink path={row.original.relativePath} projectId={projectId}>
+            {row.original.relativePath}
+          </ProjectFileLink>
+        ),
+      },
+      {
+        accessorKey: "size",
+        header: "Size",
+        cell: ({ row }) => (
+          <span className="block text-right font-mono text-[11px] text-muted-foreground">
+            {row.original.size}
+          </span>
+        ),
+      },
+      {
+        id: "actions",
+        header: "",
+        cell: ({ row }) => (
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button
+              onClick={() =>
+                ingestSource.mutateAsync({
+                  projectId,
+                  relativePath: row.original.relativePath,
+                })
+              }
+              size="sm"
+              variant="secondary"
+            >
+              Ingest
+            </Button>
+            <Button
+              onClick={() =>
+                deleteSource.mutateAsync({
+                  projectId,
+                  relativePath: row.original.relativePath.replace(/^raw\/sources\//, ""),
+                })
+              }
+              size="sm"
+              variant="outline"
+            >
+              Delete
+            </Button>
+          </div>
+        ),
+      },
+    ],
+    [projectId, ingestSource, deleteSource],
+  );
 
   function registerFolderInput(node: HTMLInputElement | null) {
     folderInputRef.current = node;
@@ -121,30 +183,41 @@ export function SourcesPage() {
     return <RouteStatePane description={normalized.message} state="failed" title="Sources unavailable" />;
   }
 
-  return (
-    <PageSection
-      actions={
-        <Button onClick={() => rescanSources.mutateAsync({ projectId })}>
-          Rescan Sources
-        </Button>
-      }
-      description="Import raw material, upload assets, and trigger ingest operations."
-      title="Sources"
-    >
-      <Tabs defaultValue="text-import">
-        <TabsList>
-          <TabsTrigger value="text-import">Text Import</TabsTrigger>
-          <TabsTrigger value="upload">File Upload</TabsTrigger>
-          <TabsTrigger value="folder">Folder Import</TabsTrigger>
-        </TabsList>
+  const allSources = sources.data ?? [];
+  const needle = filter.trim().toLowerCase();
+  const filteredSources = needle
+    ? allSources.filter((source) => source.relativePath.toLowerCase().includes(needle))
+    : allSources;
 
-        <TabsContent value="text-import">
-          <Card>
-            <CardHeader>
-              <CardTitle>Text Import</CardTitle>
-              <CardDescription>Create or replace a source file from inline markdown.</CardDescription>
-            </CardHeader>
-            <CardContent className="grid gap-4">
+  return (
+    <div className="grid gap-6">
+      <PageHeader
+        actions={
+          <Button
+            disabled={rescanSources.isPending}
+            onClick={() => rescanSources.mutateAsync({ projectId })}
+          >
+            Rescan Sources
+          </Button>
+        }
+        description="Import raw material, upload assets, and trigger ingest operations."
+        title="Sources"
+      />
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Import sources</CardTitle>
+          <CardDescription>Add raw material via inline text, file upload, or folder import.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Tabs defaultValue="text-import">
+            <TabsList>
+              <TabsTrigger value="text-import">Text Import</TabsTrigger>
+              <TabsTrigger value="upload">File Upload</TabsTrigger>
+              <TabsTrigger value="folder">Folder Import</TabsTrigger>
+            </TabsList>
+
+            <TabsContent className="grid gap-4 pt-4" value="text-import">
               <label className="grid gap-2 text-sm font-medium">
                 File Name
                 <Input onChange={(event) => setFileName(event.target.value)} value={fileName} />
@@ -162,17 +235,9 @@ export function SourcesPage() {
                   Import Source
                 </Button>
               </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
+            </TabsContent>
 
-        <TabsContent value="upload">
-          <Card>
-            <CardHeader>
-              <CardTitle>File Upload</CardTitle>
-              <CardDescription>Upload binary or text files directly into the source tree.</CardDescription>
-            </CardHeader>
-            <CardContent className="grid gap-4">
+            <TabsContent className="grid gap-4 pt-4" value="upload">
               <label className="grid gap-2 text-sm font-medium">
                 Files to Upload
                 <Input
@@ -205,17 +270,9 @@ export function SourcesPage() {
                   Upload Files
                 </Button>
               </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
+            </TabsContent>
 
-        <TabsContent value="folder">
-          <Card>
-            <CardHeader>
-              <CardTitle>Folder Import</CardTitle>
-              <CardDescription>Preserve nested folder structure during import.</CardDescription>
-            </CardHeader>
-            <CardContent className="grid gap-4">
+            <TabsContent className="grid gap-4 pt-4" value="folder">
               <label className="grid gap-2 text-sm font-medium">
                 Folder to Import
                 <Input
@@ -248,82 +305,36 @@ export function SourcesPage() {
                   Import Folder
                 </Button>
               </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
-      </Tabs>
+            </TabsContent>
+          </Tabs>
 
-      {statusMessage ? (
-        <Card>
-          <CardContent className="p-4">
-            <p aria-live="polite" className="text-sm">
+          {statusMessage ? (
+            <p aria-live="polite" className="mt-4 text-sm text-muted-foreground">
               {statusMessage}
             </p>
-          </CardContent>
-        </Card>
-      ) : null}
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Project Sources</CardTitle>
-          <CardDescription>Manage imported sources and enqueue ingest jobs.</CardDescription>
-        </CardHeader>
-        <CardContent className="p-0">
-          {sources.data?.length ? (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Path</TableHead>
-                  <TableHead>Size</TableHead>
-                  <TableHead>Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {sources.data.map((source) => (
-                  <TableRow key={source.relativePath}>
-                    <TableCell className="font-medium">{source.relativePath}</TableCell>
-                    <TableCell className="text-muted-foreground">{source.size}</TableCell>
-                    <TableCell className="flex flex-wrap gap-2">
-                      <Button
-                        onClick={() =>
-                          ingestSource.mutateAsync({
-                            projectId,
-                            relativePath: source.relativePath,
-                          })
-                        }
-                        size="sm"
-                        variant="secondary"
-                      >
-                        Ingest
-                      </Button>
-                      <Button
-                        onClick={() =>
-                          deleteSource.mutateAsync({
-                            projectId,
-                            relativePath: source.relativePath.replace(/^raw\/sources\//, ""),
-                          })
-                        }
-                        size="sm"
-                        variant="outline"
-                      >
-                        Delete
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          ) : (
-            <CardContent className="pt-0">
-              <EmptyState
-                description="Import text, files, or a folder to populate this project."
-                title="No sources imported"
-              />
-            </CardContent>
-          )}
+          ) : null}
         </CardContent>
       </Card>
-    </PageSection>
+
+      <div className="grid gap-3">
+        <h2 className="text-sm font-medium text-muted-foreground">Project Sources</h2>
+        {allSources.length ? (
+          <>
+            <FilterToolbar
+              onSearchChange={setFilter}
+              searchPlaceholder="Filter by path"
+              searchValue={filter}
+            />
+            <DataTable columns={columns} data={filteredSources} />
+          </>
+        ) : (
+          <EmptyState
+            description="Import text, files, or a folder to populate this project."
+            title="No sources imported"
+          />
+        )}
+      </div>
+    </div>
   );
 }
 
