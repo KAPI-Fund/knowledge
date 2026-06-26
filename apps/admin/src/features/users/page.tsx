@@ -1,49 +1,53 @@
-import { EmptyState } from "../../components/layout/empty-state";
-import { PageSection } from "../../components/layout/page-section";
-import { Card, CardContent } from "../../components/ui/card";
-import { Badge } from "../../components/ui/badge";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
+import type { ColumnDef } from "@tanstack/react-table";
+import { useMemo } from "react";
+
+import { EmptyState } from "@/components/layout/empty-state";
+import { DataTable } from "@/components/shared/data-table";
+import { PageHeader } from "@/components/shared/page-header";
 
 import { useUsersQuery } from "./queries";
+
+type UserRow = NonNullable<ReturnType<typeof useUsersQuery>["data"]>[number];
 
 export function UsersPage() {
   const users = useUsersQuery();
   const userList = users.data ?? [];
 
+  const columns = useMemo<ColumnDef<UserRow>[]>(
+    () => [
+      {
+        accessorKey: "username",
+        header: "Username",
+        cell: ({ row }) => <span className="font-medium text-foreground">{row.original.username}</span>,
+      },
+      {
+        accessorKey: "role",
+        header: "Role",
+        cell: ({ row }) => (
+          <span className="text-sm text-muted-foreground">{row.original.role}</span>
+        ),
+      },
+    ],
+    [],
+  );
+
   return (
-    <PageSection description="Read-only user directory for the current installation." title="Users">
-      <div className="stats">
-        <span>{userList.length} users</span>
-      </div>
+    <div className="grid gap-6">
+      <PageHeader
+        description="Read-only user directory for the current installation."
+        title="Users"
+      />
       {userList.length ? (
-        <Card className="panel">
-          <CardContent className="p-0">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Username</TableHead>
-                  <TableHead>Role</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {userList.map((user) => (
-                  <TableRow key={user.id}>
-                    <TableCell className="font-medium">{user.username}</TableCell>
-                    <TableCell>
-                      <Badge variant="outline">{user.role}</Badge>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
+        <div className="grid gap-3">
+          <p className="text-sm text-muted-foreground">{userList.length} users</p>
+          <DataTable columns={columns} data={userList} isLoading={users.isLoading} />
+        </div>
       ) : (
         <EmptyState
           description="No users are currently available from the backend directory."
           title="No users returned"
         />
       )}
-    </PageSection>
+    </div>
   );
 }
