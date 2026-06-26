@@ -68,19 +68,11 @@ export function DashboardPage() {
       </div>
 
       {recentProjects.length ? (
-        <Card className="panel">
-          <CardHeader>
-            <CardTitle>Recent Projects</CardTitle>
-            <CardDescription>Jump directly into active workspaces.</CardDescription>
-          </CardHeader>
-          <CardContent className="p-0">
-            <DataTable
-              columns={columns}
-              data={recentProjects}
-              isLoading={projects.isLoading}
-            />
-          </CardContent>
-        </Card>
+        <DataTable
+          columns={columns}
+          data={recentProjects}
+          isLoading={projects.isLoading}
+        />
       ) : (
         <EmptyState
           action={
