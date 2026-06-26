@@ -1,11 +1,12 @@
+import type { ColumnDef } from "@tanstack/react-table";
 import { Link, useParams } from "react-router-dom";
 
 import { EmptyState } from "@/components/layout/empty-state";
-import { PageSection } from "@/components/layout/page-section";
 import { RouteStatePane } from "@/components/layout/route-state-pane";
-import { StatusBadge } from "@/components/layout/status-badge";
+import { DataTable } from "@/components/shared/data-table";
+import { PageHeader } from "@/components/shared/page-header";
+import { StatusPill } from "@/components/shared/status-pill";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { normalizeAppError } from "@/lib/app-error";
 
 import { useProjectAuditLogsQuery } from "../audit/queries";
@@ -15,6 +16,37 @@ import { useProjectSourcesQuery } from "../sources/queries";
 import { useProjectTasksQuery } from "../tasks/queries";
 
 import { useProjectDetailQuery } from "./detail-queries";
+
+type SourceRow = NonNullable<ReturnType<typeof useProjectSourcesQuery>["data"]>[number];
+type TaskRow = NonNullable<ReturnType<typeof useProjectTasksQuery>["data"]>[number];
+
+const sourceColumns: ColumnDef<SourceRow>[] = [
+  {
+    accessorKey: "relativePath",
+    header: "Path",
+    cell: ({ row }) => (
+      <span className="font-medium text-foreground">{row.original.relativePath}</span>
+    ),
+  },
+  {
+    accessorKey: "size",
+    header: "Size",
+    cell: ({ row }) => <span className="text-sm text-muted-foreground">{row.original.size}</span>,
+  },
+];
+
+const taskColumns: ColumnDef<TaskRow>[] = [
+  {
+    accessorKey: "title",
+    header: "Task",
+    cell: ({ row }) => <span className="font-medium text-foreground">{row.original.title}</span>,
+  },
+  {
+    id: "status",
+    header: "Status",
+    cell: ({ row }) => <StatusPill value={row.original.status} />,
+  },
+];
 
 export function ProjectDetailPage() {
   const { projectId = "" } = useParams();
@@ -61,10 +93,12 @@ export function ProjectDetailPage() {
   const recentAudit = (auditLogs.data ?? []).slice(0, 5);
 
   return (
-    <PageSection
-      description="Operational overview for the current project workspace."
-      title="Overview"
-    >
+    <div className="grid gap-6">
+      <PageHeader
+        description="Operational overview for the current project workspace."
+        title="Overview"
+      />
+
       <div className="grid gap-4 md:grid-cols-3">
         <MetricCard label="Sources" value={detail.sourceCount} />
         <MetricCard label="Tasks" value={detail.taskCount} />
@@ -98,76 +132,30 @@ export function ProjectDetailPage() {
         </CardContent>
       </Card>
 
-      <div className="grid gap-4 xl:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle>Recent Sources</CardTitle>
-            <CardDescription>Latest imported raw materials in the project.</CardDescription>
-          </CardHeader>
-          <CardContent className="p-0">
-            {recentSources.length ? (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Path</TableHead>
-                    <TableHead>Size</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {recentSources.map((source) => (
-                    <TableRow key={source.relativePath}>
-                      <TableCell className="font-medium">{source.relativePath}</TableCell>
-                      <TableCell className="text-muted-foreground">{source.size}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            ) : (
-              <CardContent className="pt-0">
-                <EmptyState
-                  description="Import sources before running project workflows."
-                  title="No sources yet"
-                />
-              </CardContent>
-            )}
-          </CardContent>
-        </Card>
+      <div className="grid gap-6 xl:grid-cols-2">
+        <div className="grid gap-3">
+          <h2 className="text-sm font-medium text-muted-foreground">Recent Sources</h2>
+          {recentSources.length ? (
+            <DataTable columns={sourceColumns} data={recentSources} isLoading={sources.isLoading} />
+          ) : (
+            <EmptyState
+              description="Import sources before running project workflows."
+              title="No sources yet"
+            />
+          )}
+        </div>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Recent Tasks</CardTitle>
-            <CardDescription>Background work queued by imports and actions.</CardDescription>
-          </CardHeader>
-          <CardContent className="p-0">
-            {recentTasks.length ? (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Task</TableHead>
-                    <TableHead>Status</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {recentTasks.map((task) => (
-                    <TableRow key={task.id}>
-                      <TableCell className="font-medium">{task.title}</TableCell>
-                      <TableCell>
-                        <StatusBadge value={task.status} />
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            ) : (
-              <CardContent className="pt-0">
-                <EmptyState
-                  description="No project tasks have been queued yet."
-                  title="No tasks yet"
-                />
-              </CardContent>
-            )}
-          </CardContent>
-        </Card>
+        <div className="grid gap-3">
+          <h2 className="text-sm font-medium text-muted-foreground">Recent Tasks</h2>
+          {recentTasks.length ? (
+            <DataTable columns={taskColumns} data={recentTasks} isLoading={tasks.isLoading} />
+          ) : (
+            <EmptyState
+              description="No project tasks have been queued yet."
+              title="No tasks yet"
+            />
+          )}
+        </div>
       </div>
 
       <div className="grid gap-4 xl:grid-cols-2">
@@ -190,7 +178,7 @@ export function ProjectDetailPage() {
                         <p className="text-sm text-muted-foreground">{review.description}</p>
                       ) : null}
                     </div>
-                    <StatusBadge value={review.status} />
+                    <StatusPill value={review.status} />
                   </div>
                 </div>
               ))
@@ -248,7 +236,7 @@ export function ProjectDetailPage() {
           </Link>
         </CardContent>
       </Card>
-    </PageSection>
+    </div>
   );
 }
 
@@ -257,7 +245,7 @@ function MetricCard({ label, value }: { label: string; value: number }) {
     <Card>
       <CardHeader>
         <CardDescription>{label}</CardDescription>
-        <CardTitle>{value}</CardTitle>
+        <CardTitle className="text-2xl font-semibold">{value}</CardTitle>
       </CardHeader>
     </Card>
   );
