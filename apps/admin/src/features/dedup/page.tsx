@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useParams } from "react-router-dom";
 
 import { EmptyState } from "@/components/layout/empty-state";
-import { PageSection } from "@/components/layout/page-section";
+import { PageHeader } from "@/components/shared/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -27,18 +27,20 @@ export function DedupPage() {
   const notDuplicates = dedup.data?.notDuplicates ?? [];
 
   return (
-    <PageSection
-      actions={
-        <Button
-          disabled={detectDuplicates.isPending}
-          onClick={() => detectDuplicates.mutateAsync({ projectId })}
-        >
-          Detect Duplicates
-        </Button>
-      }
-      description="Detect duplicate wiki pages, then merge them into one canonical page or dismiss false positives."
-      title="Dedup"
-    >
+    <div className="grid gap-6">
+      <PageHeader
+        actions={
+          <Button
+            disabled={detectDuplicates.isPending}
+            onClick={() => detectDuplicates.mutateAsync({ projectId })}
+          >
+            Detect Duplicates
+          </Button>
+        }
+        description="Detect duplicate wiki pages, then merge them into one canonical page or dismiss false positives."
+        title="Dedup"
+      />
+
       {groups.length ? (
         <div className="grid gap-4">
           {groups.map((group) => {
@@ -122,6 +124,6 @@ export function DedupPage() {
           </CardContent>
         </Card>
       ) : null}
-    </PageSection>
+    </div>
   );
 }
