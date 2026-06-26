@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 
-import { PageSection } from "../../components/layout/page-section";
-import { Alert, AlertDescription, AlertTitle } from "../../components/ui/alert";
-import { Button } from "../../components/ui/button";
-import { Card, CardContent } from "../../components/ui/card";
-import { Input } from "../../components/ui/input";
+import { PageHeader } from "@/components/shared/page-header";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 
 import { useRunWebSearchMutation, useSystemSettingsQuery, useUpdateSystemSettingsMutation } from "./queries";
 
@@ -132,12 +132,18 @@ export function SettingsPage() {
   }
 
   return (
-    <PageSection
-      description="Configure the provider bridge and default system behavior for the admin workbench."
-      title="Settings"
-    >
-      <Card className="panel">
-        <CardContent className="grid gap-4 p-6">
+    <div className="grid gap-6">
+      <PageHeader
+        description="Configure the provider bridge and default system behavior for the admin workbench."
+        title="Settings"
+      />
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Provider</CardTitle>
+          <CardDescription>Connection details for the model provider bridge.</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-4">
           <label className="grid gap-2 text-sm font-medium">
             Provider Mode
             <Input
@@ -146,27 +152,6 @@ export function SettingsPage() {
                 setProviderMode(event.target.value);
               }}
               value={providerMode}
-            />
-          </label>
-          <label className="grid gap-2 text-sm font-medium">
-            Language
-            <Input
-              onChange={(event) => {
-                setIsDirty(true);
-                setLanguage(event.target.value);
-              }}
-              value={language}
-            />
-          </label>
-          <label className="grid gap-2 text-sm font-medium">
-            Default Query Limit
-            <Input
-              aria-label="Default Query Limit"
-              onChange={(event) => {
-                setIsDirty(true);
-                setDefaultQueryLimit(event.target.value);
-              }}
-              value={defaultQueryLimit}
             />
           </label>
           <label className="grid gap-2 text-sm font-medium">
@@ -249,21 +234,15 @@ export function SettingsPage() {
               value={providerTimeoutSeconds}
             />
           </label>
-          {saveMessage ? (
-            <Alert>
-              <AlertTitle>{saveMessage === "Settings saved." ? "Saved" : "Update failed"}</AlertTitle>
-              <AlertDescription>{saveMessage}</AlertDescription>
-            </Alert>
-          ) : null}
-          <div className="flex justify-end">
-            <Button onClick={handleSave}>Save Settings</Button>
-          </div>
         </CardContent>
       </Card>
 
-      <Card className="panel">
-        <CardContent className="grid gap-4 p-6">
-          <h2 className="text-lg font-semibold">Web Search</h2>
+      <Card>
+        <CardHeader>
+          <CardTitle>Search</CardTitle>
+          <CardDescription>Web search provider and connection test.</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-4">
           <label className="grid gap-2 text-sm font-medium">
             Search Provider
             <select
@@ -466,6 +445,46 @@ export function SettingsPage() {
           </div>
         </CardContent>
       </Card>
-    </PageSection>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Defaults</CardTitle>
+          <CardDescription>Language and default query behavior.</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-4">
+          <label className="grid gap-2 text-sm font-medium">
+            Language
+            <Input
+              onChange={(event) => {
+                setIsDirty(true);
+                setLanguage(event.target.value);
+              }}
+              value={language}
+            />
+          </label>
+          <label className="grid gap-2 text-sm font-medium">
+            Default Query Limit
+            <Input
+              aria-label="Default Query Limit"
+              onChange={(event) => {
+                setIsDirty(true);
+                setDefaultQueryLimit(event.target.value);
+              }}
+              value={defaultQueryLimit}
+            />
+          </label>
+        </CardContent>
+      </Card>
+
+      {saveMessage ? (
+        <Alert>
+          <AlertTitle>{saveMessage === "Settings saved." ? "Saved" : "Update failed"}</AlertTitle>
+          <AlertDescription>{saveMessage}</AlertDescription>
+        </Alert>
+      ) : null}
+      <div className="flex justify-end">
+        <Button onClick={handleSave}>Save Settings</Button>
+      </div>
+    </div>
   );
 }
