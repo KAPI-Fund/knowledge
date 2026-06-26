@@ -2,8 +2,8 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { EyeOff, Filter, Lightbulb, Palette } from "lucide-react";
 
-import { PageSection } from "@/components/layout/page-section";
 import { RouteStatePane } from "@/components/layout/route-state-pane";
+import { PageHeader } from "@/components/shared/page-header";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { normalizeAppError } from "@/lib/app-error";
@@ -132,11 +132,12 @@ function GraphView({ projectId }: { projectId: string }) {
   const graphError = graph.error ? normalizeAppError(graph.error) : null;
 
   return (
-    <PageSection
-      description="Explore the project knowledge graph: search, filter, and inspect node neighborhoods."
-      title="Graph"
-      actions={
-        <div className="flex flex-wrap items-center gap-2">
+    <div className="grid gap-6">
+      <PageHeader
+        description="Explore the project knowledge graph: search, filter, and inspect node neighborhoods."
+        title="Graph"
+        actions={
+          <div className="flex flex-wrap items-center gap-2">
           <Button
             aria-pressed={filters.hideStructural}
             onClick={() => setFilters((prev) => ({ ...prev, hideStructural: !prev.hideStructural }))}
@@ -177,14 +178,14 @@ function GraphView({ projectId }: { projectId: string }) {
             <Lightbulb className="mr-1.5 h-3.5 w-3.5" />
             Insights
           </Button>
-        </div>
-      }
-    >
+          </div>
+        }
+      />
       <div className="max-w-sm">
         <Input
           aria-label="Search graph"
           onChange={(event) => setSearch(event.target.value)}
-          placeholder="Search nodes by label, id, type, or path…"
+          placeholder="Search nodes by label, id, type, or path..."
           value={search}
         />
       </div>
@@ -301,6 +302,6 @@ function GraphView({ projectId }: { projectId: string }) {
           </div>
         </div>
       )}
-    </PageSection>
+    </div>
   );
 }
