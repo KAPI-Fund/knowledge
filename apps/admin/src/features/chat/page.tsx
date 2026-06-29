@@ -99,7 +99,34 @@ export function ChatPage() {
         onDelta: (text) => {
           setStreamingText((current) => (current ?? "") + text);
         },
-        onDone: () => {
+        onDone: (payload) => {
+          const now = new Date().toISOString();
+          // Seed the finished turn into the cache in the same commit that clears
+          // the streaming bubble. Without this, clearing the local state before
+          // the background refetch lands leaves a frame with neither the
+          // streaming bubble nor the persisted message, which flashed at the
+          // instant markdown laid out. The assistant id matches the server's, so
+          // the later refetch reconciles silently without a remount.
+          queryClient.setQueryData(
+            conversationKeys.messages(projectId, conversationId),
+            (old: typeof messages.data) => [
+              ...(old ?? []),
+              {
+                id: `local-user-${now}`,
+                role: "user",
+                content,
+                contextSummary: null,
+                createdAt: now,
+              },
+              {
+                id: payload.messageId,
+                role: "assistant",
+                content: payload.content,
+                contextSummary: payload.contextSummary,
+                createdAt: now,
+              },
+            ],
+          );
           setStreamingText(null);
           setPendingUserText(null);
           void queryClient.invalidateQueries({
@@ -191,7 +218,7 @@ export function ChatPage() {
           </ul>
         </aside>
 
-        <section className="flex min-h-0 flex-col rounded-lg border border-border bg-card">
+        <section className="flex min-h-0 min-w-0 flex-col rounded-lg border border-border bg-card">
           <div
             aria-live="polite"
             className="min-h-0 flex-1 overflow-y-auto"
