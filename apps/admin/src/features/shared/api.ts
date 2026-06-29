@@ -323,6 +323,17 @@ export async function login(input: { username: string; password: string }) {
   );
 }
 
+export async function register(input: { username: string; password: string }) {
+  return apiFetch(
+    "/api/auth/register",
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    },
+    loginSchema,
+  );
+}
+
 export async function listProjects() {
   const response = await apiFetch("/api/projects", { method: "GET" }, projectsSchema);
   return response.projects;

@@ -10,13 +10,18 @@ use crate::app::state::AppState;
 use crate::auth::api_token::{
   create_api_token, list_tokens_for_user_scoped, revoke_token_scoped, CreateApiTokenInput,
 };
-use crate::auth::password::verify_password;
+use crate::auth::password::{hash_password, verify_password};
 use crate::auth::principal::{resolve_principal, AuthScope};
 use crate::auth::session::{create_session, destroy_session, find_session};
 use crate::http::error::ApiError;
+use crate::tenancy::spaces::ensure_personal_space;
+use time::format_description::well_known::Rfc3339;
+use time::OffsetDateTime;
+use uuid::Uuid;
 
 pub fn router() -> Router<AppState> {
   Router::new()
+    .route("/api/auth/register", post(register))
     .route("/api/auth/login", post(login))
     .route("/api/auth/logout", post(logout))
     .route("/api/auth/me", get(me))
@@ -42,6 +47,71 @@ pub struct LoginResponse {
   pub csrf_token: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct RegisterRequest {
+  pub username: String,
+  pub password: String,
+}
+
+fn session_cookie(session_id: &str) -> Result<HeaderValue, ApiError> {
+  HeaderValue::from_str(&format!(
+    "knowledge_session={session_id}; HttpOnly; Path=/; SameSite=Lax"
+  ))
+  .map_err(|_| ApiError::internal("failed to build session cookie"))
+}
+
+async fn register(
+  State(state): State<AppState>,
+  Json(payload): Json<RegisterRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+  let username = payload.username.trim().to_string();
+  if username.len() < 3 || username.len() > 50 {
+    return Err(ApiError::bad_request("username must be 3-50 characters"));
+  }
+  if payload.password.len() < 8 {
+    return Err(ApiError::bad_request("password must be at least 8 characters"));
+  }
+
+  let password_hash = hash_password(&payload.password)?;
+  let user_id = Uuid::new_v4().to_string();
+  let now = OffsetDateTime::now_utc()
+    .format(&Rfc3339)
+    .unwrap_or_else(|_| String::from("1970-01-01T00:00:00Z"));
+
+  // Rely on the users.username UNIQUE index instead of a racy COUNT precheck:
+  // a duplicate raises SQLSTATE 23505, which from_db_unique maps to 400.
+  sqlx::query(
+    "INSERT INTO users (id, username, password_hash, role, created_at)
+     VALUES ($1, $2, $3, $4, $5)",
+  )
+  .bind(&user_id)
+  .bind(&username)
+  .bind(&password_hash)
+  .bind("user")
+  .bind(&now)
+  .execute(&state.pool)
+  .await
+  .map_err(|error| ApiError::from_db_unique(error, "username already taken"))?;
+
+  ensure_personal_space(&state.pool, &user_id, &now)
+    .await
+    .map_err(ApiError::from)?;
+
+  let session = create_session(&state, &user_id).await?;
+  let mut response = (
+    StatusCode::CREATED,
+    Json(LoginResponse {
+      csrf_token: session.csrf_token.clone(),
+    }),
+  )
+    .into_response();
+  response
+    .headers_mut()
+    .append(header::SET_COOKIE, session_cookie(&session.id)?);
+
+  Ok(response)
+}
+
 async fn login(
   State(state): State<AppState>,
   Json(payload): Json<LoginRequest>,
@@ -65,14 +135,9 @@ async fn login(
   })
   .into_response();
 
-  response.headers_mut().append(
-    header::SET_COOKIE,
-    HeaderValue::from_str(&format!(
-      "knowledge_session={}; HttpOnly; Path=/; SameSite=Lax",
-      session.id
-    ))
-    .map_err(|_| ApiError::internal("failed to build session cookie"))?,
-  );
+  response
+    .headers_mut()
+    .append(header::SET_COOKIE, session_cookie(&session.id)?);
 
   Ok(response)
 }

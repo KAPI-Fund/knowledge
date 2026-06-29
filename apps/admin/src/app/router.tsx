@@ -6,6 +6,7 @@ import { AuthGuard } from "../components/layout/auth-guard";
 import { ProjectWorkspaceLayout } from "../components/layout/project-workspace-layout";
 import { ApiTokensPage } from "../features/api-tokens/page";
 import { LoginPage } from "../features/auth/login-page";
+import { RegisterPage } from "../features/auth/register-page";
 import { AuditPage } from "../features/audit/page";
 import { ChatPage } from "../features/chat/page";
 import { DashboardPage } from "../features/dashboard/page";
@@ -34,6 +35,7 @@ export function AppRoutes() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/register" element={<RegisterPage />} />
       <Route element={<AuthGuard />}>
         <Route path="/" element={<AppShell />}>
           <Route index element={<DashboardPage />} />
