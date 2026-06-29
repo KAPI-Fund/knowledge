@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useParams } from "react-router-dom";
 
@@ -51,7 +51,7 @@ export function ChatPage() {
     stickToBottomRef.current = true;
   }, [activeId]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!stickToBottomRef.current) {
       return;
     }
@@ -211,12 +211,12 @@ export function ChatPage() {
             )}
             {streamingText !== null && (
               <div
-                className="max-w-prose rounded-md border border-border bg-muted px-3 py-2 text-sm"
+                className="max-w-prose rounded-md border border-border bg-muted px-3 py-2 text-sm whitespace-pre-wrap break-words"
                 data-role="assistant"
                 data-streaming="true"
               >
                 {streamingText ? (
-                  <MarkdownMessage content={streamingText} />
+                  streamingText
                 ) : (
                   <span className="inline-flex gap-1 text-muted-foreground">
                     <span className="size-1.5 animate-pulse rounded-full bg-current" />
