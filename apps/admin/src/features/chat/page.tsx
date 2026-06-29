@@ -1,3 +1,4 @@
+import { Pencil, Trash2 } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useParams } from "react-router-dom";
@@ -6,6 +7,12 @@ import { MarkdownMessage } from "@/components/shared/markdown-message";
 import { PageHeader } from "@/components/shared/page-header";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 import {
   conversationKeys,
@@ -186,36 +193,52 @@ export function ChatPage() {
           >
             New conversation
           </Button>
-          <ul className="min-h-0 flex-1 space-y-1 overflow-y-auto">
-            {(conversations.data ?? []).map((conversation) => (
-              <li className="flex items-center gap-1" key={conversation.id}>
-                <Button
-                  className="flex-1 justify-start truncate"
-                  onClick={() => setActiveId(conversation.id)}
-                  size="sm"
-                  variant={conversation.id === activeId ? "secondary" : "ghost"}
-                >
-                  {conversation.title}
-                </Button>
-                <Button
-                  aria-label={`Rename ${conversation.title}`}
-                  onClick={() => handleRename(conversation.id, conversation.title)}
-                  size="xs"
-                  variant="ghost"
-                >
-                  Rename
-                </Button>
-                <Button
-                  aria-label={`Delete ${conversation.title}`}
-                  onClick={() => handleDelete(conversation.id)}
-                  size="xs"
-                  variant="ghost"
-                >
-                  Delete
-                </Button>
-              </li>
-            ))}
-          </ul>
+          <TooltipProvider delayDuration={300}>
+            <ul className="min-h-0 flex-1 space-y-0.5 overflow-y-auto">
+              {(conversations.data ?? []).map((conversation) => (
+                <li className="group/conv relative" key={conversation.id}>
+                  <Button
+                    className="w-full justify-start truncate pr-14"
+                    onClick={() => setActiveId(conversation.id)}
+                    size="sm"
+                    variant={conversation.id === activeId ? "secondary" : "ghost"}
+                  >
+                    {conversation.title}
+                  </Button>
+                  <div className="absolute inset-y-0 right-1 flex items-center gap-0.5 opacity-0 transition-opacity group-focus-within/conv:opacity-100 group-hover/conv:opacity-100">
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          aria-label={`Rename ${conversation.title}`}
+                          className="text-muted-foreground"
+                          onClick={() => handleRename(conversation.id, conversation.title)}
+                          size="icon-xs"
+                          variant="ghost"
+                        >
+                          <Pencil />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>Rename</TooltipContent>
+                    </Tooltip>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          aria-label={`Delete ${conversation.title}`}
+                          className="text-muted-foreground hover:text-destructive"
+                          onClick={() => handleDelete(conversation.id)}
+                          size="icon-xs"
+                          variant="ghost"
+                        >
+                          <Trash2 />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>Delete</TooltipContent>
+                    </Tooltip>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </TooltipProvider>
         </aside>
 
         <section className="flex min-h-0 min-w-0 flex-col rounded-lg border border-border bg-card">
