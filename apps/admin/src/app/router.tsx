@@ -8,7 +8,6 @@ import { ApiTokensPage } from "../features/api-tokens/page";
 import { LoginPage } from "../features/auth/login-page";
 import { RegisterPage } from "../features/auth/register-page";
 import { AuditPage } from "../features/audit/page";
-import { ChatPage } from "../features/chat/page";
 import { DashboardPage } from "../features/dashboard/page";
 import { DedupPage } from "../features/dedup/page";
 import { DeepResearchPage } from "../features/deep-research/page";
@@ -31,6 +30,10 @@ const GraphPage = lazy(() =>
   import("../features/graph/page").then((module) => ({ default: module.GraphPage })),
 );
 
+const ChatPage = lazy(() =>
+  import("../features/chat/page").then((module) => ({ default: module.ChatPage })),
+);
+
 export function AppRoutes() {
   return (
     <Routes>
@@ -46,7 +49,16 @@ export function AppRoutes() {
             <Route path="sources" element={<SourcesPage />} />
             <Route path="source-watch" element={<SourceWatchPage />} />
             <Route path="search" element={<SearchPage />} />
-            <Route path="chat" element={<ChatPage />} />
+            <Route
+              path="chat"
+              element={
+                <Suspense
+                  fallback={<div className="p-6 text-sm text-muted-foreground">Loading chat…</div>}
+                >
+                  <ChatPage />
+                </Suspense>
+              }
+            />
             <Route path="lint" element={<LintPage />} />
             <Route
               path="graph"
