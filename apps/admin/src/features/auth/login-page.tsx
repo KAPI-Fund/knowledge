@@ -1,3 +1,4 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { FormEvent, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
@@ -11,14 +12,24 @@ import { setCsrfToken } from "./csrf";
 export function LoginPage() {
   const login = useLoginMutation();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [errorMessage, setErrorMessage] = useState("");
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const result = await login.mutateAsync({ username, password });
-    setCsrfToken(result.csrfToken);
-    navigate("/projects");
+    setErrorMessage("");
+    try {
+      const result = await login.mutateAsync({ username, password });
+      setCsrfToken(result.csrfToken);
+      // The pre-login /api/auth/me check cached { user: null }. Drop it so the
+      // guard refetches the now-authenticated session instead of bouncing back.
+      queryClient.removeQueries({ queryKey: ["session"] });
+      navigate("/projects");
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Sign in failed.");
+    }
   }
 
   return (
@@ -42,7 +53,10 @@ export function LoginPage() {
                 onChange={(event) => setPassword(event.target.value)}
               />
             </label>
-            <Button type="submit">Sign in</Button>
+            {errorMessage ? <p className="text-sm text-destructive">{errorMessage}</p> : null}
+            <Button disabled={login.isPending} type="submit">
+              {login.isPending ? "Signing in..." : "Sign in"}
+            </Button>
           </form>
         </CardContent>
       </Card>
