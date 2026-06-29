@@ -98,14 +98,14 @@ export function ChatPage() {
   }
 
   return (
-    <div className="grid gap-6">
+    <div className="flex min-h-0 flex-1 flex-col gap-6">
       <PageHeader
         description="Chat with the project wiki using the configured provider; responses stream from retrieved context."
         title="Chat"
       />
 
-      <div className="grid gap-4 md:grid-cols-[16rem_1fr]">
-        <aside className="rounded-lg border border-border bg-card p-3">
+      <div className="grid min-h-0 flex-1 grid-rows-[auto_1fr] gap-4 md:grid-cols-[16rem_1fr] md:grid-rows-1">
+        <aside className="flex min-h-0 flex-col rounded-lg border border-border bg-card p-3">
           <Button
             className="mb-3 w-full"
             onClick={() => {
@@ -117,7 +117,7 @@ export function ChatPage() {
           >
             New conversation
           </Button>
-          <ul className="space-y-1">
+          <ul className="min-h-0 flex-1 space-y-1 overflow-y-auto">
             {(conversations.data ?? []).map((conversation) => (
               <li className="flex items-center gap-1" key={conversation.id}>
                 <Button
@@ -149,8 +149,8 @@ export function ChatPage() {
           </ul>
         </aside>
 
-        <section className="flex min-h-[24rem] flex-col rounded-lg border border-border bg-card">
-          <div aria-live="polite" className="flex-1 space-y-3 overflow-y-auto p-4">
+        <section className="flex min-h-0 flex-col rounded-lg border border-border bg-card">
+          <div aria-live="polite" className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
             {(messages.data ?? []).map((message) => (
               <div
                 className={`max-w-prose whitespace-pre-wrap rounded-md border px-3 py-2 text-sm ${
