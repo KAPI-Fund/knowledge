@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useParams } from "react-router-dom";
 
@@ -34,6 +34,33 @@ export function ChatPage() {
 
   const isStreaming = streamingText !== null;
 
+  const scrollRef = useRef<HTMLDivElement>(null);
+  // Follow the bottom as content streams in, but stop hijacking the scroll once
+  // the reader has scrolled up to revisit earlier messages.
+  const stickToBottomRef = useRef(true);
+
+  function handleScroll() {
+    const el = scrollRef.current;
+    if (!el) {
+      return;
+    }
+    stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+  }
+
+  useEffect(() => {
+    stickToBottomRef.current = true;
+  }, [activeId]);
+
+  useEffect(() => {
+    if (!stickToBottomRef.current) {
+      return;
+    }
+    const el = scrollRef.current;
+    if (el) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [messages.data, streamingText, pendingUserText]);
+
   async function handleSend() {
     const content = draft.trim();
     if (!content || isStreaming) {
@@ -51,6 +78,7 @@ export function ChatPage() {
     setError(null);
     setPendingUserText(content);
     setStreamingText("");
+    stickToBottomRef.current = true;
 
     await streamChatMessage(
       { projectId, conversationId, content },
@@ -151,7 +179,12 @@ export function ChatPage() {
         </aside>
 
         <section className="flex min-h-0 flex-col rounded-lg border border-border bg-card">
-          <div aria-live="polite" className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
+          <div
+            aria-live="polite"
+            className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4"
+            onScroll={handleScroll}
+            ref={scrollRef}
+          >
             {(messages.data ?? []).map((message) => {
               const isUser = message.role === "user";
               return (
