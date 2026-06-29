@@ -35,9 +35,17 @@ export function ChatPage() {
   const isStreaming = streamingText !== null;
 
   const scrollRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
   // Follow the bottom as content streams in, but stop hijacking the scroll once
   // the reader has scrolled up to revisit earlier messages.
   const stickToBottomRef = useRef(true);
+
+  function pinToBottom() {
+    const el = scrollRef.current;
+    if (el && stickToBottomRef.current) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }
 
   function handleScroll() {
     const el = scrollRef.current;
@@ -51,15 +59,20 @@ export function ChatPage() {
     stickToBottomRef.current = true;
   }, [activeId]);
 
-  useLayoutEffect(() => {
-    if (!stickToBottomRef.current) {
+  useLayoutEffect(pinToBottom, [messages.data, streamingText, pendingUserText]);
+
+  // Diagrams, math, and images change the transcript height asynchronously,
+  // after the text effect above has already run. Re-pin on any height change so
+  // a late-rendering Mermaid diagram cannot leave the view scrolled mid-message.
+  useEffect(() => {
+    const content = contentRef.current;
+    if (!content || typeof ResizeObserver === "undefined") {
       return;
     }
-    const el = scrollRef.current;
-    if (el) {
-      el.scrollTop = el.scrollHeight;
-    }
-  }, [messages.data, streamingText, pendingUserText]);
+    const observer = new ResizeObserver(pinToBottom);
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, []);
 
   async function handleSend() {
     const content = draft.trim();
@@ -181,10 +194,11 @@ export function ChatPage() {
         <section className="flex min-h-0 flex-col rounded-lg border border-border bg-card">
           <div
             aria-live="polite"
-            className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4"
+            className="min-h-0 flex-1 overflow-y-auto"
             onScroll={handleScroll}
             ref={scrollRef}
           >
+            <div className="space-y-3 p-4" ref={contentRef}>
             {(messages.data ?? []).map((message) => {
               const isUser = message.role === "user";
               return (
@@ -231,6 +245,7 @@ export function ChatPage() {
               </div>
             )}
             {error && <p className="text-sm text-destructive">{error}</p>}
+            </div>
           </div>
           <form
             className="flex gap-2 border-t border-border p-3"

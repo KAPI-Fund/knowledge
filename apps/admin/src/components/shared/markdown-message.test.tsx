@@ -6,6 +6,7 @@ import { MarkdownMessage } from "./markdown-message";
 vi.mock("mermaid", () => ({
   default: {
     initialize: vi.fn(),
+    parse: vi.fn().mockResolvedValue(false),
     render: vi.fn().mockRejectedValue(new Error("no dom in jsdom")),
   },
 }));

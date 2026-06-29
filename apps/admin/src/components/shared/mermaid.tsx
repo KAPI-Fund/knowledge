@@ -19,8 +19,25 @@ export function Mermaid({ code }: { code: string }) {
       try {
         const mermaid = (await import("mermaid")).default;
         if (!mermaidReady) {
-          mermaid.initialize({ startOnLoad: false, securityLevel: "strict", theme: "default" });
+          mermaid.initialize({
+            startOnLoad: false,
+            securityLevel: "strict",
+            suppressErrorRendering: true,
+            theme: "default",
+          });
           mermaidReady = true;
+        }
+        // While the source is still streaming it is frequently incomplete and
+        // unparseable. Validate first (suppressing errors) so a half-finished
+        // diagram keeps showing its source instead of mermaid's "Syntax error"
+        // graphic, whose fluctuating height also disrupts the chat scroll.
+        const valid = await mermaid.parse(code, { suppressErrors: true });
+        if (cancelled) {
+          return;
+        }
+        if (!valid) {
+          setSvg(null);
+          return;
         }
         const result = await mermaid.render(idRef.current, code);
         if (!cancelled) {
@@ -33,9 +50,12 @@ export function Mermaid({ code }: { code: string }) {
       }
     }
 
-    void render();
+    // Debounce so rapid token updates do not trigger a render storm; only draw
+    // once the source has settled briefly.
+    const timer = setTimeout(() => void render(), 150);
     return () => {
       cancelled = true;
+      clearTimeout(timer);
     };
   }, [code]);
 
