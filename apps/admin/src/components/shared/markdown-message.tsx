@@ -1,8 +1,9 @@
 import "katex/dist/katex.min.css";
 import "highlight.js/styles/github-dark.css";
 
-import { isValidElement, type ReactNode } from "react";
+import { isValidElement, memo, type ReactNode, useMemo } from "react";
 import hljs from "highlight.js/lib/common";
+import { marked } from "marked";
 import ReactMarkdown, { type Components } from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
@@ -125,16 +126,33 @@ const components: Components = {
   },
 };
 
-export function MarkdownMessage({ content }: { content: string }): ReactNode {
+// Split markdown into its top-level blocks so each can be memoized
+// independently. While streaming, only the final (still-growing) block
+// changes, so completed blocks never re-parse or rebuild their DOM — this is
+// what keeps token-by-token rendering from flickering or fighting the scroll.
+function splitIntoBlocks(markdown: string): string[] {
+  return marked.lexer(markdown).map((token) => token.raw);
+}
+
+const MarkdownBlock = memo(function MarkdownBlock({ content }: { content: string }) {
+  return (
+    <ReactMarkdown
+      components={components}
+      rehypePlugins={[rehypeKatex]}
+      remarkPlugins={[remarkGfm, remarkMath]}
+    >
+      {content}
+    </ReactMarkdown>
+  );
+});
+
+export function MarkdownMessage({ content, id }: { content: string; id?: string }): ReactNode {
+  const blocks = useMemo(() => splitIntoBlocks(content), [content]);
   return (
     <div className="text-sm leading-relaxed break-words [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
-      <ReactMarkdown
-        components={components}
-        rehypePlugins={[rehypeKatex]}
-        remarkPlugins={[remarkGfm, remarkMath]}
-      >
-        {content}
-      </ReactMarkdown>
+      {blocks.map((block, index) => (
+        <MarkdownBlock content={block} key={id ? `${id}-block-${index}` : `block-${index}`} />
+      ))}
     </div>
   );
 }

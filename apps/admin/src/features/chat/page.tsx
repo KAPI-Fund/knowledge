@@ -197,7 +197,11 @@ export function ChatPage() {
                   data-role={message.role}
                   key={message.id}
                 >
-                  {isUser ? message.content : <MarkdownMessage content={message.content} />}
+                  {isUser ? (
+                    message.content
+                  ) : (
+                    <MarkdownMessage content={message.content} id={message.id} />
+                  )}
                 </div>
               );
             })}
@@ -211,12 +215,12 @@ export function ChatPage() {
             )}
             {streamingText !== null && (
               <div
-                className="max-w-prose rounded-md border border-border bg-muted px-3 py-2 text-sm whitespace-pre-wrap break-words"
+                className="max-w-prose rounded-md border border-border bg-muted px-3 py-2 text-sm"
                 data-role="assistant"
                 data-streaming="true"
               >
                 {streamingText ? (
-                  streamingText
+                  <MarkdownMessage content={streamingText} id="streaming" />
                 ) : (
                   <span className="inline-flex gap-1 text-muted-foreground">
                     <span className="size-1.5 animate-pulse rounded-full bg-current" />

@@ -63,4 +63,17 @@ describe("MarkdownMessage", () => {
 
     expect(screen.getByText(/graph TD/)).toBeInTheDocument();
   });
+
+  it("renders every top-level block when content spans multiple blocks", () => {
+    render(
+      <MarkdownMessage
+        content={"# Heading\n\nFirst paragraph.\n\n```ts\nconst x = 1;\n```\n\nLast paragraph."}
+        id="msg-1"
+      />,
+    );
+
+    expect(screen.getByRole("heading", { level: 1, name: "Heading" })).toBeInTheDocument();
+    expect(screen.getByText("First paragraph.")).toBeInTheDocument();
+    expect(screen.getByText("Last paragraph.")).toBeInTheDocument();
+  });
 });
