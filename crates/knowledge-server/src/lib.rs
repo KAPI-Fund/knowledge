@@ -1,6 +1,7 @@
 pub mod app;
 pub mod auth;
 pub mod cache;
+pub mod canvas;
 pub mod chat;
 pub mod config;
 pub mod db;
