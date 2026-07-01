@@ -135,18 +135,37 @@ export function CanvasPage() {
     [doc, patchNodeData],
   );
 
+  const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
+
   const addSkillNode = useCallback((payload: SkillNodePayload) => {
     const source = payload.node as { type: CanvasNode["type"]; data?: Record<string, unknown> };
-    const node: CanvasNode = {
-      id: crypto.randomUUID(),
-      type: source.type,
-      x: payload.x,
-      y: payload.y,
-      w: 280,
-      h: 160,
-      data: source.data ?? {},
-    };
-    setDoc((prev) => (prev ? { ...prev, nodes: [...prev.nodes, node] } : prev));
+    const id = crypto.randomUUID();
+    setDoc((prev) => {
+      if (!prev) {
+        return prev;
+      }
+      const position = nextNodePosition(prev);
+      const node: CanvasNode = {
+        id,
+        type: source.type,
+        x: position.x,
+        y: position.y,
+        w: 280,
+        h: 160,
+        data: source.data ?? {},
+      };
+      const sourceIds = Array.isArray(source.data?.sourceNodeIds)
+        ? (source.data?.sourceNodeIds as unknown[]).filter(
+            (s): s is string => typeof s === "string",
+          )
+        : [];
+      const newEdges = sourceIds.map((src) => ({
+        id: crypto.randomUUID(),
+        source: src,
+        target: id,
+      }));
+      return { ...prev, nodes: [...prev.nodes, node], edges: [...prev.edges, ...newEdges] };
+    });
   }, []);
 
   return (
@@ -156,7 +175,7 @@ export function CanvasPage() {
         <CanvasHeader title={title} status={status} onRetry={() => doc && void onSave(doc)} />
         {doc ? (
           <div className="min-h-0 flex-1">
-            <CanvasBoard document={doc} onChange={setDoc} onRunNode={runNode} onFetchUrl={fetchUrlNode} />
+            <CanvasBoard document={doc} onChange={setDoc} onRunNode={runNode} onFetchUrl={fetchUrlNode} onSelectionChange={setSelectedNodeIds} />
           </div>
         ) : (
           <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
@@ -164,7 +183,7 @@ export function CanvasPage() {
           </div>
         )}
       </div>
-      <ChatPanel canvasId={canvasId ?? ""} selectedNodeIds={[]} onSkillNode={addSkillNode} />
+      <ChatPanel canvasId={canvasId ?? ""} selectedNodeIds={selectedNodeIds} onSkillNode={addSkillNode} />
     </div>
   );
 }
@@ -200,4 +219,9 @@ function CanvasHeader({ title, status, onRetry }: CanvasHeaderProps) {
       ) : null}
     </header>
   );
+}
+
+function nextNodePosition(doc: CanvasDocument): { x: number; y: number } {
+  const n = doc.nodes.length;
+  return { x: 80 + (n % 6) * 48, y: 80 + (n % 6) * 48 };
 }

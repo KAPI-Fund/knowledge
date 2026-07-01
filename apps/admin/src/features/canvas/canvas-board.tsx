@@ -95,9 +95,10 @@ interface CanvasBoardProps {
   onChange: (next: CanvasDocument) => void;
   onRunNode: (nodeId: string) => void;
   onFetchUrl: (nodeId: string) => void;
+  onSelectionChange?: (nodeIds: string[]) => void;
 }
 
-export function CanvasBoard({ document, onChange, onRunNode, onFetchUrl }: CanvasBoardProps) {
+export function CanvasBoard({ document, onChange, onRunNode, onFetchUrl, onSelectionChange }: CanvasBoardProps) {
   const patchNode = useCallback(
     (nodeId: string, patch: Record<string, unknown>) => {
       onChange({
@@ -171,6 +172,13 @@ export function CanvasBoard({ document, onChange, onRunNode, onFetchUrl }: Canva
     [document, onChange, rfEdges],
   );
 
+  const handleSelectionChange = useCallback(
+    ({ nodes }: { nodes: Node[] }) => {
+      onSelectionChange?.(nodes.map((n) => n.id));
+    },
+    [onSelectionChange],
+  );
+
   return (
     <div className="h-full w-full">
       <ReactFlowProvider>
@@ -181,6 +189,7 @@ export function CanvasBoard({ document, onChange, onRunNode, onFetchUrl }: Canva
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onConnect={onConnect}
+          onSelectionChange={handleSelectionChange}
           fitView
         >
           <Background />
