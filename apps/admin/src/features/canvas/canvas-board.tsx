@@ -179,6 +179,13 @@ export function CanvasBoard({ document, onChange, onRunNode, onFetchUrl, onSelec
     [onSelectionChange],
   );
 
+  const onMoveEnd = useCallback(
+    (_event: unknown, viewport: { x: number; y: number; zoom: number }) => {
+      onChange({ ...document, viewport: { x: viewport.x, y: viewport.y, zoom: viewport.zoom } });
+    },
+    [document, onChange],
+  );
+
   return (
     <div className="h-full w-full">
       <ReactFlowProvider>
@@ -190,7 +197,8 @@ export function CanvasBoard({ document, onChange, onRunNode, onFetchUrl, onSelec
           onEdgesChange={onEdgesChange}
           onConnect={onConnect}
           onSelectionChange={handleSelectionChange}
-          fitView
+          defaultViewport={document.viewport}
+          onMoveEnd={onMoveEnd}
         >
           <Background />
           <Controls />

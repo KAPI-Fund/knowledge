@@ -24,6 +24,13 @@ export function CanvasPage() {
   const [title, setTitle] = useState("");
   const loadedId = useRef<string | undefined>(undefined);
 
+  const onSave = useCallback(
+    (value: CanvasDocument) => save.mutateAsync({ title, document: value }),
+    [save, title],
+  );
+
+  const { status, reset } = useAutosave({ value: doc ?? emptyDoc(), delayMs: 800, onSave });
+
   useEffect(() => {
     // Load the document only when the canvas identity changes so local edits
     // and autosave writes are not clobbered by react-query refetches.
@@ -31,15 +38,9 @@ export function CanvasPage() {
       loadedId.current = canvas.data.id;
       setDoc(canvas.data.document);
       setTitle(canvas.data.title);
+      reset(canvas.data.document);
     }
-  }, [canvas.data]);
-
-  const onSave = useCallback(
-    (value: CanvasDocument) => save.mutateAsync({ title, document: value }),
-    [save, title],
-  );
-
-  const { status } = useAutosave({ value: doc ?? emptyDoc(), delayMs: 800, onSave });
+  }, [canvas.data, reset]);
 
   const patchNodeData = useCallback((nodeId: string, patch: Record<string, unknown>) => {
     setDoc((prev) =>
