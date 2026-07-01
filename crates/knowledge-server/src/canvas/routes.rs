@@ -206,6 +206,10 @@ pub fn build_analyze_done_payload(
     json!({ "versionId": version_id, "content": content, "createdAt": created_at })
 }
 
+pub fn build_image_done_payload(version_id: &str, url: &str, created_at: &str) -> serde_json::Value {
+    json!({ "versionId": version_id, "url": url, "createdAt": created_at })
+}
+
 pub fn build_skill_node_done_payload(node: serde_json::Value, x: f64, y: f64) -> serde_json::Value {
     json!({ "node": node, "x": x, "y": y })
 }
@@ -272,7 +276,7 @@ async fn run_node_handler(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path((id, node_id)): Path<(String, String)>,
-) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
+) -> Result<Sse<axum::response::sse::KeepAliveStream<std::pin::Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>>>>, ApiError> {
     let principal = resolve_principal(&state, &headers).await?;
     require_csrf(&principal, &headers)?;
 
@@ -285,6 +289,40 @@ async fn run_node_handler(
 
     let node_prompt =
         node.data.get("prompt").and_then(|v| v.as_str()).unwrap_or("").to_string();
+
+    if node.r#type == "ai_image" {
+        if node_prompt.trim().is_empty() {
+            return Err(ApiError::bad_request("image node has no prompt"));
+        }
+        let settings = load_query_settings(&state).await?;
+        build_provider(&settings)?; // validate config before streaming
+        let user_id = principal.user_id.clone();
+        let prompt = node_prompt.clone();
+        let stream_state = state.clone();
+        let event_stream: std::pin::Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>> =
+            Box::pin(async_stream::stream! {
+                match run_image_skill(&stream_state, &user_id, &prompt).await {
+                    Ok(node_json) => {
+                        let url = node_json
+                            .get("data")
+                            .and_then(|d| d.get("url"))
+                            .and_then(|u| u.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let version_id = uuid::Uuid::new_v4().to_string();
+                        let created_at = now_rfc3339();
+                        yield Ok(
+                            Event::default().event("done").data(
+                                build_image_done_payload(&version_id, &url, &created_at)
+                                    .to_string(),
+                            ),
+                        );
+                    }
+                    Err(message) => yield Ok(sse_error(&message)),
+                }
+            });
+        return Ok(Sse::new(event_stream).keep_alive(KeepAlive::default()));
+    }
 
     // Note/URL/prior-analysis references.
     let mut blocks = crate::canvas::service::collect_reference_blocks(&doc, &node_id);
@@ -330,44 +368,45 @@ async fn run_node_handler(
     );
     let messages = vec![ProviderChatMessage { role: "user".to_string(), content: prompt }];
 
-    let event_stream = async_stream::stream! {
-        let mut full_text = String::new();
-        match provider
-            .stream_chat(ProviderChatStreamRequest { system_prompt, messages })
-            .await
-        {
-            Ok(mut deltas) => {
-                while let Some(delta) = deltas.next().await {
-                    match delta {
-                        Ok(text) => {
-                            full_text.push_str(&text);
-                            yield Ok(
-                                Event::default()
-                                    .event("delta")
-                                    .data(json!({ "text": text }).to_string()),
-                            );
-                        }
-                        Err(error) => {
-                            yield Ok(sse_error(error.message()));
-                            return;
+    let event_stream: std::pin::Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>> =
+        Box::pin(async_stream::stream! {
+            let mut full_text = String::new();
+            match provider
+                .stream_chat(ProviderChatStreamRequest { system_prompt, messages })
+                .await
+            {
+                Ok(mut deltas) => {
+                    while let Some(delta) = deltas.next().await {
+                        match delta {
+                            Ok(text) => {
+                                full_text.push_str(&text);
+                                yield Ok(
+                                    Event::default()
+                                        .event("delta")
+                                        .data(json!({ "text": text }).to_string()),
+                                );
+                            }
+                            Err(error) => {
+                                yield Ok(sse_error(error.message()));
+                                return;
+                            }
                         }
                     }
                 }
+                Err(error) => {
+                    yield Ok(sse_error(error.message()));
+                    return;
+                }
             }
-            Err(error) => {
-                yield Ok(sse_error(error.message()));
-                return;
-            }
-        }
 
-        let version_id = uuid::Uuid::new_v4().to_string();
-        let created_at = now_rfc3339();
-        yield Ok(
-            Event::default().event("done").data(
-                build_analyze_done_payload(&version_id, &full_text, &created_at).to_string(),
-            ),
-        );
-    };
+            let version_id = uuid::Uuid::new_v4().to_string();
+            let created_at = now_rfc3339();
+            yield Ok(
+                Event::default().event("done").data(
+                    build_analyze_done_payload(&version_id, &full_text, &created_at).to_string(),
+                ),
+            );
+        });
 
     Ok(Sse::new(event_stream).keep_alive(KeepAlive::default()))
 }
@@ -738,5 +777,13 @@ mod tests {
     #[test]
     fn skill_node_uses_node_event_not_done() {
         assert_eq!(skill_node_event_name(), "node");
+    }
+
+    #[test]
+    fn image_done_payload_carries_url_and_version_fields() {
+        let payload = build_image_done_payload("v-img", "/api/assets/abc", "2026-07-01T00:00:00Z");
+        assert_eq!(payload["versionId"], "v-img");
+        assert_eq!(payload["url"], "/api/assets/abc");
+        assert_eq!(payload["createdAt"], "2026-07-01T00:00:00Z");
     }
 }
