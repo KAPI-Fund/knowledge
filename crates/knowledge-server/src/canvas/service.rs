@@ -95,8 +95,6 @@ fn inline_markdown(el: scraper::ElementRef) -> String {
 }
 
 /// Fetch a URL and extract readable markdown.
-// wired up in Task 10
-#[allow(dead_code)]
 pub async fn fetch_url(client: &reqwest::Client, url: &str) -> Result<ExtractedPage, String> {
     let response = client
         .get(url)
@@ -122,8 +120,6 @@ pub struct SearchResultEntry {
 
 /// Text blocks from incoming Note/URL/prior-analysis nodes (KB handled
 /// separately via RAG).
-// wired up in Task 10
-#[allow(dead_code)]
 pub fn collect_reference_blocks(doc: &CanvasDocument, node_id: &str) -> Vec<String> {
     let sources = doc.incoming_source_ids(node_id);
     let mut blocks = Vec::new();
@@ -156,8 +152,6 @@ pub fn collect_reference_blocks(doc: &CanvasDocument, node_id: &str) -> Vec<Stri
 }
 
 /// Project ids of incoming KB nodes, for RAG retrieval at run time.
-// wired up in Task 10
-#[allow(dead_code)]
 pub fn referenced_kb_project_ids(doc: &CanvasDocument, node_id: &str) -> Vec<String> {
     doc.incoming_source_ids(node_id)
         .into_iter()
@@ -167,8 +161,6 @@ pub fn referenced_kb_project_ids(doc: &CanvasDocument, node_id: &str) -> Vec<Str
         .collect()
 }
 
-// wired up in Task 10
-#[allow(dead_code)]
 pub fn search_results_to_markdown(query: &str, results: &[SearchResultEntry]) -> String {
     let mut out = format!("Search results for \"{query}\":\n\n");
     for r in results {
@@ -177,8 +169,6 @@ pub fn search_results_to_markdown(query: &str, results: &[SearchResultEntry]) ->
     out.trim_end().to_string()
 }
 
-// wired up in Task 10
-#[allow(dead_code)]
 pub fn build_analyze_prompt(node_prompt: &str, blocks: &[String]) -> String {
     let mut prompt = String::new();
     if !blocks.is_empty() {
