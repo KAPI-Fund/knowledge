@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useParams } from "react-router-dom";
 
 import { cn } from "@/lib/utils";
 
 import { extractUrl } from "./api";
 import { CanvasBoard } from "./canvas-board";
+import { CanvasToolbar } from "./canvas-toolbar";
 import { ChatPanel, type SkillNodePayload } from "./chat-panel";
 import { HistorySidebar } from "./history-sidebar";
 import { useCanvas, useSaveCanvas } from "./queries";
@@ -173,7 +174,7 @@ export function CanvasPage() {
     <div className="flex h-full min-h-0">
       <HistorySidebar activeId={canvasId} />
       <div className="flex min-w-0 flex-1 flex-col">
-        <CanvasHeader title={title} status={status} onRetry={() => doc && void onSave(doc)} />
+        <CanvasHeader title={title} status={status} onRetry={() => doc && void onSave(doc)} actions={doc ? <CanvasToolbar onAdd={addSkillNode} /> : null} />
         {doc ? (
           <div className="min-h-0 flex-1">
             <CanvasBoard document={doc} onChange={setDoc} onRunNode={runNode} onFetchUrl={fetchUrlNode} onSelectionChange={setSelectedNodeIds} />
@@ -201,23 +202,27 @@ interface CanvasHeaderProps {
   title: string;
   status: SaveStatus;
   onRetry: () => void;
+  actions?: ReactNode;
 }
 
-function CanvasHeader({ title, status, onRetry }: CanvasHeaderProps) {
+function CanvasHeader({ title, status, onRetry, actions }: CanvasHeaderProps) {
   const label = statusLabels[status];
   return (
     <header className="flex items-center justify-between gap-2 border-b px-4 py-2">
       <span className="truncate text-sm font-semibold">{title || "未命名画布"}</span>
-      {label.text ? (
-        <button
-          type="button"
-          onClick={status === "error" ? onRetry : undefined}
-          disabled={status !== "error"}
-          className={cn("text-xs", label.className, status !== "error" && "cursor-default")}
-        >
-          {label.text}
-        </button>
-      ) : null}
+      <div className="flex items-center gap-3">
+        {actions}
+        {label.text ? (
+          <button
+            type="button"
+            onClick={status === "error" ? onRetry : undefined}
+            disabled={status !== "error"}
+            className={cn("text-xs", label.className, status !== "error" && "cursor-default")}
+          >
+            {label.text}
+          </button>
+        ) : null}
+      </div>
     </header>
   );
 }
