@@ -68,6 +68,18 @@ pub struct ProviderUsage {
     pub total_tokens: u64,
 }
 
+#[derive(Debug, Clone)]
+pub struct ProviderImageRequest {
+    pub prompt: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProviderImageResult {
+    /// e.g. "image/png"
+    pub mime: String,
+    pub bytes: Vec<u8>,
+}
+
 #[derive(Debug, Error)]
 #[error("{message}")]
 pub struct ProviderError {
@@ -107,4 +119,22 @@ impl ProviderError {
   pub fn provider_status(&self) -> Option<u16> {
     self.provider_status
   }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn provider_image_request_holds_prompt() {
+        let req = ProviderImageRequest { prompt: "a red fox".to_string() };
+        assert_eq!(req.prompt, "a red fox");
+    }
+
+    #[test]
+    fn provider_image_result_carries_mime_and_bytes() {
+        let res = ProviderImageResult { mime: "image/png".to_string(), bytes: vec![9, 9, 9] };
+        assert_eq!(res.mime, "image/png");
+        assert_eq!(res.bytes, vec![9, 9, 9]);
+    }
 }
