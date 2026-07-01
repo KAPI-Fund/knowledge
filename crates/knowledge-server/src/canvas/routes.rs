@@ -372,6 +372,7 @@ async fn run_node_handler(
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct CanvasChatRequest {
     message: String,
     #[serde(default)]
@@ -712,5 +713,17 @@ mod tests {
         assert_eq!(node["data"]["prompt"], "summarize");
         assert_eq!(node["data"]["sourceNodeIds"][0], "a");
         assert_eq!(node["data"]["status"], "idle");
+    }
+
+    #[test]
+    fn chat_request_deserializes_camel_case_selected_ids() {
+        let req: CanvasChatRequest = serde_json::from_str(
+            r#"{"message":"hi","selectedNodeIds":["a","b"],"x":10.0,"y":20.0}"#,
+        )
+        .unwrap();
+        assert_eq!(req.message, "hi");
+        assert_eq!(req.selected_node_ids, vec!["a".to_string(), "b".to_string()]);
+        assert_eq!(req.x, Some(10.0));
+        assert_eq!(req.y, Some(20.0));
     }
 }
