@@ -1,6 +1,7 @@
 export const globalNav = [
   { to: "/", label: "Dashboard" },
   { to: "/projects", label: "Projects" },
+  { to: "/canvas", label: "Canvas" },
   { to: "/users", label: "Users" },
   { to: "/api-tokens", label: "API Tokens" },
   { to: "/settings", label: "Settings" },
