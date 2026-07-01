@@ -75,7 +75,16 @@ export function ChatPanel({ canvasId, selectedNodeIds, onSkillNode }: ChatPanelP
     try {
       await streamCanvasChat(canvasId, text, selectedNodeIds, {
         onDelta: (delta) => appendAssistantDelta(assistantId, delta),
-        onNode: (payload) => onSkillNode(payload),
+        onNode: (payload) => {
+          onSkillNode(payload);
+          setMessages((prev) =>
+            prev.map((message) =>
+              message.id === assistantId
+                ? { ...message, content: "已在画布中添加节点。" }
+                : message,
+            ),
+          );
+        },
         onDone: () => setStreaming(false),
         onError: (message) => {
           appendAssistantDelta(assistantId, `\n\n> 出错了：${message}`);
