@@ -34,6 +34,10 @@ const ChatPage = lazy(() =>
   import("../features/chat/page").then((module) => ({ default: module.ChatPage })),
 );
 
+const CanvasPage = lazy(() =>
+  import("../features/canvas/page").then((module) => ({ default: module.CanvasPage })),
+);
+
 export function AppRoutes() {
   return (
     <Routes>
@@ -43,6 +47,30 @@ export function AppRoutes() {
         <Route path="/" element={<AppShell />}>
           <Route index element={<DashboardPage />} />
           <Route path="projects" element={<ProjectsPage />} />
+          <Route
+            path="canvas"
+            element={
+              <Suspense
+                fallback={
+                  <div className="p-6 text-sm text-muted-foreground">Loading canvas…</div>
+                }
+              >
+                <CanvasPage />
+              </Suspense>
+            }
+          />
+          <Route
+            path="canvas/:canvasId"
+            element={
+              <Suspense
+                fallback={
+                  <div className="p-6 text-sm text-muted-foreground">Loading canvas…</div>
+                }
+              >
+                <CanvasPage />
+              </Suspense>
+            }
+          />
           <Route path="projects/:projectId" element={<ProjectWorkspaceLayout />}>
             <Route index element={<ProjectDetailPage />} />
             <Route path="files" element={<FilesPage />} />

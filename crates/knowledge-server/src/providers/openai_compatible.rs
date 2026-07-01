@@ -8,8 +8,8 @@ use serde_json::Value;
 
 use crate::providers::types::{
     ProviderAnswer, ProviderChatStreamRequest, ProviderContentBlock, ProviderEmbeddingRequest,
-    ProviderError, ProviderMultimodalRequest, ProviderQueryRequest, ProviderTextRequest,
-    ProviderTextResponse, ProviderUsage,
+    ProviderError, ProviderImageRequest, ProviderImageResult, ProviderMultimodalRequest,
+    ProviderQueryRequest, ProviderTextRequest, ProviderTextResponse, ProviderUsage,
 };
 
 #[derive(Debug, Clone)]
@@ -318,6 +318,80 @@ impl OpenAiCompatibleProvider {
         headers.insert(reqwest::header::AUTHORIZATION, value);
         Ok(headers)
     }
+
+    pub fn images_url(&self) -> String {
+        let trimmed = self.base_url.trim_end_matches('/');
+        if trimmed.ends_with("/v1") {
+            format!("{trimmed}/images/generations")
+        } else {
+            format!("{trimmed}/v1/images/generations")
+        }
+    }
+
+    pub async fn generate_image(
+        &self,
+        request: ProviderImageRequest,
+    ) -> Result<ProviderImageResult, ProviderError> {
+        use base64::Engine;
+
+        let body = ImageGenerationRequest {
+            model: self.model.clone(),
+            prompt: request.prompt,
+            n: 1,
+            response_format: "b64_json".to_string(),
+        };
+
+        let response = self
+            .client
+            .post(self.images_url())
+            .headers(self.auth_headers()?)
+            .json(&body)
+            .send()
+            .await
+            .map_err(map_transport_error)?;
+
+        let status = response.status();
+        let text = response.text().await.map_err(map_transport_error)?;
+        let payload: Value = serde_json::from_str(&text).map_err(|error| {
+            ProviderError::new(
+                "provider_invalid_response",
+                format!("provider returned invalid JSON: {error}"),
+                false,
+            )
+        })?;
+
+        if !status.is_success() {
+            return Err(map_provider_error(status, &payload));
+        }
+
+        let b64 = payload
+            .get("data")
+            .and_then(|data| data.get(0))
+            .and_then(|item| item.get("b64_json"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                ProviderError::new(
+                    "provider_invalid_response",
+                    "provider did not return data[0].b64_json",
+                    false,
+                )
+            })?;
+
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .map_err(|error| {
+                ProviderError::new(
+                    "provider_invalid_response",
+                    format!("provider returned invalid base64: {error}"),
+                    false,
+                )
+            })?;
+
+        Ok(ProviderImageResult {
+            mime: "image/png".to_string(),
+            bytes,
+        })
+    }
 }
 
 fn chat_completions_url(base_url: &str) -> String {
@@ -527,6 +601,14 @@ struct EmbeddingRequest {
     input: String,
 }
 
+#[derive(Debug, Serialize)]
+struct ImageGenerationRequest {
+    model: String,
+    prompt: String,
+    n: u8,
+    response_format: String,
+}
+
 #[derive(Debug, Deserialize)]
 struct ChatCompletionResponse {
     choices: Vec<ChatChoice>,
@@ -635,5 +717,80 @@ mod tests {
     assert_eq!(content[0]["type"], "text");
     assert_eq!(content[1]["type"], "image_url");
     assert_eq!(content[1]["image_url"]["url"], "data:image/png;base64,Zm9v");
+  }
+}
+
+#[cfg(test)]
+mod image_tests {
+  use super::*;
+  use crate::providers::types::ProviderImageRequest;
+  use base64::Engine;
+
+  #[test]
+  fn image_generation_request_serializes_expected_values() {
+    let body = ImageGenerationRequest {
+      model: "gpt-image-1".to_string(),
+      prompt: "a red fox".to_string(),
+      n: 1,
+      response_format: "b64_json".to_string(),
+    };
+    let json = serde_json::to_value(&body).unwrap();
+    assert_eq!(json["model"], "gpt-image-1");
+    assert_eq!(json["prompt"], "a red fox");
+    assert_eq!(json["n"], 1);
+    assert_eq!(json["response_format"], "b64_json");
+  }
+
+  #[test]
+  fn images_url_appends_v1_images_generations() {
+    let provider = OpenAiCompatibleProvider::new(
+      "https://api.example.com".to_string(),
+      "key".to_string(),
+      "gpt-image-1".to_string(),
+      30,
+    );
+    assert_eq!(
+      provider.images_url(),
+      "https://api.example.com/v1/images/generations"
+    );
+  }
+
+  #[tokio::test]
+  async fn generate_image_decodes_b64_payload() {
+    let raw = vec![1u8, 2, 3, 4];
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&raw);
+    let body = format!("{{\"data\":[{{\"b64_json\":\"{b64}\"}}]}}");
+    let (handle, base) = spawn_mock_images_server(body).await;
+
+    let provider =
+      OpenAiCompatibleProvider::new(base, "key".to_string(), "gpt-image-1".to_string(), 30);
+    let result = provider
+      .generate_image(ProviderImageRequest { prompt: "x".to_string() })
+      .await
+      .expect("image generated");
+
+    assert_eq!(result.mime, "image/png");
+    assert_eq!(result.bytes, raw);
+    handle.abort();
+  }
+
+  async fn spawn_mock_images_server(json_body: String) -> (tokio::task::JoinHandle<()>, String) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let handle = tokio::spawn(async move {
+      if let Ok((mut sock, _)) = listener.accept().await {
+        let mut buf = [0u8; 2048];
+        let _ = sock.read(&mut buf).await;
+        let resp = format!(
+          "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+          json_body.len(),
+          json_body
+        );
+        let _ = sock.write_all(resp.as_bytes()).await;
+        let _ = sock.flush().await;
+      }
+    });
+    (handle, format!("http://{addr}"))
   }
 }

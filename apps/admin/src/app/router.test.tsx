@@ -77,6 +77,10 @@ vi.mock("../features/settings/page", () => ({
   SettingsPage: () => <h1>Settings</h1>,
 }));
 
+vi.mock("../features/canvas/page", () => ({
+  CanvasPage: () => <h1>Canvas Page</h1>,
+}));
+
 describe("AppRoutes", () => {
   it("redirects unauthenticated users to /login", async () => {
     mockUseSession.mockReturnValue({ user: null, isLoading: false });
@@ -97,6 +101,26 @@ describe("AppRoutes", () => {
     );
 
     expect(await screen.findByRole("heading", { name: /sign in/i })).toBeInTheDocument();
+  });
+
+  it("renders the canvas route", async () => {
+    mockUseSession.mockReturnValue({
+      user: { id: "user-1", username: "admin", role: "admin" },
+      isLoading: false,
+    });
+    mockUseProjectDetailQuery.mockReturnValue({ data: null, error: null, isLoading: false });
+
+    const queryClient = new QueryClient();
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={["/canvas"]}>
+          <AppRoutes />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByRole("heading", { name: "Canvas Page" })).toBeInTheDocument();
   });
 
   it("shows project workspace chrome on /projects/:projectId routes", async () => {
