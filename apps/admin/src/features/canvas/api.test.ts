@@ -38,7 +38,10 @@ describe("canvas api", () => {
       title: "B",
       document: { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } },
     });
-    const [url, init] = fetchMock.mock.calls[0];
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [
+      string,
+      { method: string; headers: Record<string, string> },
+    ];
     expect(String(url)).toContain("/api/canvases/c1");
     expect(init.method).toBe("PUT");
     expect(init.headers["x-csrf-token"]).toBeDefined();
