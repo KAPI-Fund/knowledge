@@ -75,20 +75,21 @@ export function CanvasPage() {
                 const versions = Array.isArray(n.data.versions)
                   ? (n.data.versions as unknown[])
                   : [];
+                const version =
+                  n.type === "ai_image"
+                    ? { id: payload.versionId, url: payload.url, createdAt: payload.createdAt }
+                    : {
+                        id: payload.versionId,
+                        content: payload.content,
+                        createdAt: payload.createdAt,
+                      };
                 return {
                   ...n,
                   data: {
                     ...n.data,
                     status: "idle",
                     error: null,
-                    versions: [
-                      ...versions,
-                      {
-                        id: payload.versionId,
-                        content: payload.content,
-                        createdAt: payload.createdAt,
-                      },
-                    ],
+                    versions: [...versions, version],
                     activeVersionId: payload.versionId,
                   },
                 };
