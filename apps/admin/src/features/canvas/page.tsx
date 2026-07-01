@@ -3,6 +3,7 @@ import { useParams } from "react-router-dom";
 
 import { cn } from "@/lib/utils";
 
+import { extractUrl } from "./api";
 import { CanvasBoard } from "./canvas-board";
 import { ChatPanel, type SkillNodePayload } from "./chat-panel";
 import { HistorySidebar } from "./history-sidebar";
@@ -103,6 +104,37 @@ export function CanvasPage() {
     [canvasId, patchNodeData],
   );
 
+  const fetchUrlNode = useCallback(
+    (nodeId: string) => {
+      const node = doc?.nodes.find((n) => n.id === nodeId);
+      const url = typeof node?.data.url === "string" ? node.data.url : "";
+      if (!url) {
+        return;
+      }
+      patchNodeData(nodeId, { status: "loading", error: null });
+      void extractUrl(url)
+        .then((result) => {
+          if (result.status === "ok") {
+            patchNodeData(nodeId, {
+              status: "idle",
+              error: null,
+              title: result.title,
+              markdown: result.markdown,
+            });
+          } else {
+            patchNodeData(nodeId, { status: "error", error: result.error ?? "fetch failed" });
+          }
+        })
+        .catch((error: unknown) => {
+          patchNodeData(nodeId, {
+            status: "error",
+            error: error instanceof Error ? error.message : "fetch failed",
+          });
+        });
+    },
+    [doc, patchNodeData],
+  );
+
   const addSkillNode = useCallback((payload: SkillNodePayload) => {
     const source = payload.node as { type: CanvasNode["type"]; data?: Record<string, unknown> };
     const node: CanvasNode = {
@@ -124,7 +156,7 @@ export function CanvasPage() {
         <CanvasHeader title={title} status={status} onRetry={() => doc && void onSave(doc)} />
         {doc ? (
           <div className="min-h-0 flex-1">
-            <CanvasBoard document={doc} onChange={setDoc} onRunNode={runNode} />
+            <CanvasBoard document={doc} onChange={setDoc} onRunNode={runNode} onFetchUrl={fetchUrlNode} />
           </div>
         ) : (
           <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">

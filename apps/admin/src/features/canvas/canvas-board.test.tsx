@@ -34,6 +34,7 @@ describe("CanvasBoard", () => {
         }}
         onChange={() => {}}
         onRunNode={() => {}}
+        onFetchUrl={() => {}}
       />,
     );
     expect(screen.getByText("n1")).toBeInTheDocument();
