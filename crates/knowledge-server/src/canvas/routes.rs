@@ -210,6 +210,11 @@ pub fn build_skill_node_done_payload(node: serde_json::Value, x: f64, y: f64) ->
     json!({ "node": node, "x": x, "y": y })
 }
 
+/// The SSE event name that carries a freshly-built skill node to the client.
+pub fn skill_node_event_name() -> &'static str {
+    "node"
+}
+
 fn now_rfc3339() -> String {
     OffsetDateTime::now_utc().format(&Rfc3339).unwrap_or_default()
 }
@@ -448,10 +453,11 @@ async fn chat_handler(
                 match run_search_skill(&stream_state, &query).await {
                     Ok(node) => {
                         yield Ok(
-                            Event::default().event("done").data(
+                            Event::default().event(skill_node_event_name()).data(
                                 build_skill_node_done_payload(node, x, y).to_string(),
                             ),
                         );
+                        yield Ok(Event::default().event("done").data("{}".to_string()));
                     }
                     Err(message) => yield Ok(sse_error(&message)),
                 }
@@ -464,10 +470,11 @@ async fn chat_handler(
                 match run_image_skill(&stream_state, &user_id, &prompt).await {
                     Ok(node) => {
                         yield Ok(
-                            Event::default().event("done").data(
+                            Event::default().event(skill_node_event_name()).data(
                                 build_skill_node_done_payload(node, x, y).to_string(),
                             ),
                         );
+                        yield Ok(Event::default().event("done").data("{}".to_string()));
                     }
                     Err(message) => yield Ok(sse_error(&message)),
                 }
@@ -476,9 +483,10 @@ async fn chat_handler(
                 let node = build_analyze_node(&prompt, &selected_ids);
                 yield Ok(
                     Event::default()
-                        .event("done")
+                        .event(skill_node_event_name())
                         .data(build_skill_node_done_payload(node, x, y).to_string()),
                 );
+                yield Ok(Event::default().event("done").data("{}".to_string()));
             }
             ChatCommand::Plain(text) => {
                 let settings = match load_query_settings(&stream_state).await {
@@ -725,5 +733,10 @@ mod tests {
         assert_eq!(req.selected_node_ids, vec!["a".to_string(), "b".to_string()]);
         assert_eq!(req.x, Some(10.0));
         assert_eq!(req.y, Some(20.0));
+    }
+
+    #[test]
+    fn skill_node_uses_node_event_not_done() {
+        assert_eq!(skill_node_event_name(), "node");
     }
 }
