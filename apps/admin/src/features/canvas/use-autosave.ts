@@ -25,15 +25,22 @@ export function useAutosave<T>({ value, delayMs, onSave }: UseAutosaveOptions<T>
   // saved, then cancel the pending debounce. Callers pass their own save
   // function so an edit can be flushed to the right target (e.g. the canvas
   // being navigated away from) instead of whatever the debounced onSave is
-  // currently bound to.
+  // currently bound to. Mirrors the debounced path: only advance lastSaved
+  // after the save resolves so a failed flush surfaces "error" and stays
+  // retriable instead of being silently marked saved.
   const flush = useCallback((save: (value: T) => Promise<unknown>) => {
     if (timer.current) clearTimeout(timer.current);
-    const serialized = JSON.stringify(latest.current);
-    if (serialized === lastSaved.current) {
+    const snapshot = JSON.stringify(latest.current);
+    if (snapshot === lastSaved.current) {
       return;
     }
-    lastSaved.current = serialized;
-    void save(latest.current);
+    setStatus("saving");
+    return save(latest.current)
+      .then(() => {
+        lastSaved.current = snapshot;
+        setStatus("saved");
+      })
+      .catch(() => setStatus("error"));
   }, []);
 
   useEffect(() => {
