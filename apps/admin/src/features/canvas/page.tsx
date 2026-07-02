@@ -34,27 +34,34 @@ export function CanvasPage() {
   const { status, reset } = useAutosave({ value: doc ?? emptyDoc(), delayMs: 800, onSave });
 
   useEffect(() => {
-    // The index route (/canvas) reuses this component instance, so clear any
-    // previously loaded canvas when the id goes away; otherwise the old board
-    // and its autosave state would linger.
-    if (!canvasId) {
-      if (loadedId.current !== undefined) {
-        loadedId.current = undefined;
-        setDoc(null);
-        setTitle("");
+    // Only treat data as loaded when it matches the current route id. This
+    // component instance is reused across /canvas, /canvas/c1, /canvas/c2, so
+    // without this guard the previous board would linger while the new id is
+    // still loading (or failed to load) -- and since `save` is already bound
+    // to the new id, an edit in that window would autosave the stale document
+    // under the wrong canvas.
+    const loaded = canvasId && canvas.data?.id === canvasId ? canvas.data : null;
+    if (loaded) {
+      // Load only when the identity changes so local edits and autosave writes
+      // are not clobbered by react-query refetches of the same canvas.
+      if (loadedId.current !== loaded.id) {
+        loadedId.current = loaded.id;
+        setDoc(loaded.document);
+        setTitle(loaded.title);
         setSelectedNodeIds([]);
-        reset(emptyDoc());
+        reset(loaded.document);
       }
       return;
     }
-    // Load the document only when the canvas identity changes so local edits
-    // and autosave writes are not clobbered by react-query refetches.
-    if (canvas.data && loadedId.current !== canvas.data.id) {
-      loadedId.current = canvas.data.id;
-      setDoc(canvas.data.document);
-      setTitle(canvas.data.title);
+    // No canvas is loaded for the current route: index route, still loading,
+    // load error, or stale data from a previous id. Drop any previous board
+    // and reset autosave so a pending write cannot land under the new id.
+    if (loadedId.current !== undefined) {
+      loadedId.current = undefined;
+      setDoc(null);
+      setTitle("");
       setSelectedNodeIds([]);
-      reset(canvas.data.document);
+      reset(emptyDoc());
     }
   }, [canvasId, canvas.data, reset]);
 

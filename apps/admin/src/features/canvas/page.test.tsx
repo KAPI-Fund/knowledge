@@ -94,6 +94,34 @@ describe("CanvasPage", () => {
     expect(screen.queryByText("board")).not.toBeInTheDocument();
   });
 
+  it("drops the old board while switching to a still-loading canvas", async () => {
+    const { rerender } = render(<CanvasPage />);
+    await waitFor(() => expect(screen.getByText("board")).toBeInTheDocument());
+
+    // Navigate to /canvas/c2 before its detail query resolves. The c1 board
+    // must disappear so an edit cannot autosave under the c2 id.
+    currentParams = { canvasId: "c2" };
+    canvasResult = { data: undefined };
+    rerender(<CanvasPage />);
+    await waitFor(() => expect(screen.queryByText("board")).not.toBeInTheDocument());
+
+    // c2 finishes loading -> its board appears.
+    canvasResult = { data: { ...c1Data(), id: "c2", title: "C2" } };
+    rerender(<CanvasPage />);
+    await waitFor(() => expect(screen.getByText("board")).toBeInTheDocument());
+  });
+
+  it("does not show a stale board when the new canvas fails to load", async () => {
+    const { rerender } = render(<CanvasPage />);
+    await waitFor(() => expect(screen.getByText("board")).toBeInTheDocument());
+
+    // Navigate to /canvas/c2 whose detail query errors (data stays undefined).
+    currentParams = { canvasId: "c2" };
+    canvasResult = { data: undefined };
+    rerender(<CanvasPage />);
+    await waitFor(() => expect(screen.queryByText("board")).not.toBeInTheDocument());
+  });
+
   it("fetches a url node through the extract endpoint", async () => {
     extractUrl.mockResolvedValue({ status: "ok", title: "Hello", markdown: "# hi", error: null });
     render(<CanvasPage />);
