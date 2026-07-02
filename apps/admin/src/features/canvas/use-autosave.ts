@@ -17,6 +17,8 @@ export function useAutosave<T>({ value, delayMs, onSave }: UseAutosaveOptions<T>
 
   const reset = useCallback((next: T) => {
     lastSaved.current = JSON.stringify(next);
+    if (timer.current) clearTimeout(timer.current);
+    setStatus("idle");
   }, []);
 
   useEffect(() => {

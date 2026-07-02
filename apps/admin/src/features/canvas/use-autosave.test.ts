@@ -50,4 +50,19 @@ describe("useAutosave", () => {
     act(() => vi.advanceTimersByTime(200));
     expect(onSave).not.toHaveBeenCalled();
   });
+
+  it("returns status to idle when reset after a save", async () => {
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    const { result, rerender } = renderHook(
+      ({ value }) => useAutosave({ value, delayMs: 100, onSave }),
+      { initialProps: { value: { a: 1 } } },
+    );
+    rerender({ value: { a: 2 } });
+    await act(async () => {
+      vi.advanceTimersByTime(100);
+    });
+    expect(result.current.status).toBe("saved");
+    act(() => result.current.reset({ a: 3 }));
+    expect(result.current.status).toBe("idle");
+  });
 });
