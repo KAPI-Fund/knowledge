@@ -66,12 +66,21 @@ export async function streamCanvasChat(
   message: string,
   selectedNodeIds: string[],
   handlers: ChatHandlers,
+  origin?: { x: number; y: number },
 ): Promise<void> {
+  const payload: { message: string; selectedNodeIds: string[]; x?: number; y?: number } = {
+    message,
+    selectedNodeIds,
+  };
+  if (origin) {
+    payload.x = origin.x;
+    payload.y = origin.y;
+  }
   const response = await fetch(`/api/canvases/${canvasId}/chat`, {
     method: "POST",
     credentials: "include",
     headers: { "content-type": "application/json", "x-csrf-token": getCsrfToken() },
-    body: JSON.stringify({ message, selectedNodeIds }),
+    body: JSON.stringify(payload),
   });
   await consumeSse(response, handlers);
 }

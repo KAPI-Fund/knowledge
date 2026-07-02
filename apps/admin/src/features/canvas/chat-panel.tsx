@@ -32,9 +32,15 @@ interface ChatPanelProps {
   canvasId: string;
   selectedNodeIds: string[];
   onSkillNode: (payload: SkillNodePayload) => void;
+  placementOrigin: { x: number; y: number };
 }
 
-export function ChatPanel({ canvasId, selectedNodeIds, onSkillNode }: ChatPanelProps) {
+export function ChatPanel({
+  canvasId,
+  selectedNodeIds,
+  onSkillNode,
+  placementOrigin,
+}: ChatPanelProps) {
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streaming, setStreaming] = useState(false);
@@ -72,24 +78,30 @@ export function ChatPanel({ canvasId, selectedNodeIds, onSkillNode }: ChatPanelP
     setInput("");
     setStreaming(true);
     try {
-      await streamCanvasChat(canvasId, text, selectedNodeIds, {
-        onDelta: (delta) => appendAssistantDelta(assistantId, delta),
-        onNode: (payload) => {
-          onSkillNode(payload);
-          setMessages((prev) =>
-            prev.map((message) =>
-              message.id === assistantId
-                ? { ...message, content: "Added a node to the canvas." }
-                : message,
-            ),
-          );
+      await streamCanvasChat(
+        canvasId,
+        text,
+        selectedNodeIds,
+        {
+          onDelta: (delta) => appendAssistantDelta(assistantId, delta),
+          onNode: (payload) => {
+            onSkillNode(payload);
+            setMessages((prev) =>
+              prev.map((message) =>
+                message.id === assistantId
+                  ? { ...message, content: "Added a node to the canvas." }
+                  : message,
+              ),
+            );
+          },
+          onDone: () => setStreaming(false),
+          onError: (message) => {
+            appendAssistantDelta(assistantId, `\n\n> Error: ${message}`);
+            setStreaming(false);
+          },
         },
-        onDone: () => setStreaming(false),
-        onError: (message) => {
-          appendAssistantDelta(assistantId, `\n\n> Error: ${message}`);
-          setStreaming(false);
-        },
-      });
+        placementOrigin,
+      );
     } finally {
       setStreaming(false);
     }
@@ -158,8 +170,8 @@ export function ChatPanel({ canvasId, selectedNodeIds, onSkillNode }: ChatPanelP
               onPick={(project) => {
                 onSkillNode({
                   node: { type: "kb", data: { projectId: project.id, projectName: project.name } },
-                  x: 80,
-                  y: 80,
+                  x: placementOrigin.x,
+                  y: placementOrigin.y,
                 });
                 setKbOpen(false);
               }}

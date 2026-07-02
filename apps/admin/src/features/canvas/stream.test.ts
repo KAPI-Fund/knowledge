@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { runCanvasNode } from "./stream";
+import { runCanvasNode, streamCanvasChat } from "./stream";
 
 function sseStream(chunks: string[]) {
   return new ReadableStream({
@@ -33,6 +33,41 @@ describe("runCanvasNode", () => {
     });
     expect(deltas.join("")).toBe("Hello");
     expect(done).toEqual({ versionId: "v1", content: "Hello", createdAt: "t" });
+    vi.unstubAllGlobals();
+  });
+});
+
+describe("streamCanvasChat", () => {
+  const noopHandlers = { onDelta: () => {}, onDone: () => {}, onError: () => {} };
+
+  it("sends the placement origin in the request body when provided", async () => {
+    const fetchMock = vi.fn((_input: unknown, _init?: RequestInit) =>
+      Promise.resolve(new Response(sseStream(["event: done\ndata: {}\n\n"]), { status: 200 })),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await streamCanvasChat("c1", "hi", ["a"], noopHandlers, { x: 120, y: 240 });
+
+    const init = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(JSON.parse(init.body as string)).toEqual({
+      message: "hi",
+      selectedNodeIds: ["a"],
+      x: 120,
+      y: 240,
+    });
+    vi.unstubAllGlobals();
+  });
+
+  it("omits coordinates when no origin is given", async () => {
+    const fetchMock = vi.fn((_input: unknown, _init?: RequestInit) =>
+      Promise.resolve(new Response(sseStream(["event: done\ndata: {}\n\n"]), { status: 200 })),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await streamCanvasChat("c1", "hi", [], noopHandlers);
+
+    const init = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(JSON.parse(init.body as string)).toEqual({ message: "hi", selectedNodeIds: [] });
     vi.unstubAllGlobals();
   });
 });

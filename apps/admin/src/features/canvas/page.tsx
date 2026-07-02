@@ -199,7 +199,7 @@ export function CanvasPage() {
           </div>
         )}
       </div>
-      <ChatPanel canvasId={canvasId ?? ""} selectedNodeIds={selectedNodeIds} onSkillNode={addSkillNode} />
+      <ChatPanel canvasId={canvasId ?? ""} selectedNodeIds={selectedNodeIds} onSkillNode={addSkillNode} placementOrigin={placementOrigin(doc)} />
     </div>
   );
 }
@@ -252,4 +252,13 @@ function suggestedPosition(payload: SkillNodePayload): { x: number; y: number } 
 function nextNodePosition(doc: CanvasDocument): { x: number; y: number } {
   const n = doc.nodes.length;
   return { x: 80 + (n % 6) * 48, y: 80 + (n % 6) * 48 };
+}
+
+// World coordinate near the top-left of the currently visible board (screen
+// origin maps to world (-vp.x, -vp.y) / zoom), so AI-created nodes land in the
+// user's view instead of cascading from the canvas origin.
+function placementOrigin(doc: CanvasDocument | null): { x: number; y: number } {
+  const vp = doc?.viewport ?? { x: 0, y: 0, zoom: 1 };
+  const zoom = vp.zoom || 1;
+  return { x: (-vp.x + 80) / zoom, y: (-vp.y + 80) / zoom };
 }

@@ -31,11 +31,13 @@ vi.mock("./canvas-toolbar", () => ({ CanvasToolbar: () => <div>toolbar</div> }))
 let chatProps: {
   selectedNodeIds?: string[];
   onSkillNode?: (payload: { node: unknown; x: number; y: number }) => void;
+  placementOrigin?: { x: number; y: number };
 } = {};
 vi.mock("./chat-panel", () => ({
   ChatPanel: (props: {
     selectedNodeIds?: string[];
     onSkillNode?: (p: { node: unknown; x: number; y: number }) => void;
+    placementOrigin?: { x: number; y: number };
   }) => {
     chatProps = props;
     return <div>chat</div>;
@@ -115,6 +117,14 @@ describe("CanvasPage", () => {
       const edges = boardProps.document?.edges ?? [];
       expect(edges.some((e) => e.source === "u1")).toBe(true);
     });
+  });
+
+  it("derives the chat placement origin from the current viewport", async () => {
+    const data = c1Data();
+    canvasResult = { data: { ...data, document: { ...data.document, viewport: { x: -200, y: -100, zoom: 1 } } } };
+    render(<CanvasPage />);
+    // Screen top-left maps to world (-vp.x, -vp.y) / zoom; add an 80px margin.
+    await waitFor(() => expect(chatProps.placementOrigin).toEqual({ x: 280, y: 180 }));
   });
 
   it("places a skill node at non-zero payload coordinates", async () => {
