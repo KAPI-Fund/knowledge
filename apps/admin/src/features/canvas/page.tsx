@@ -24,6 +24,14 @@ export function CanvasPage() {
   const [doc, setDoc] = useState<CanvasDocument | null>(null);
   const [title, setTitle] = useState("");
   const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
+  // A leave-save that failed, kept under its own id so it can be retried after
+  // the board has already been dropped. Without this the last edit to the
+  // canvas being navigated away from would be lost with no way to recover it.
+  const [failedSave, setFailedSave] = useState<{
+    id: string;
+    title: string;
+    document: CanvasDocument;
+  } | null>(null);
   const loadedId = useRef<string | undefined>(undefined);
 
   const onSave = useCallback(
@@ -38,11 +46,30 @@ export function CanvasPage() {
   // save through the loaded id captured here instead.
   const flushLoaded = useCallback(() => {
     const staleId = loadedId.current;
+    const staleTitle = title;
     if (!staleId) {
       return;
     }
-    return flush((value) => saveCanvas(staleId, { title, document: value }));
+    return flush((value) =>
+      saveCanvas(staleId, { title: staleTitle, document: value }).catch((error: unknown) => {
+        // The board for staleId is about to be dropped, so a lost save here is
+        // unrecoverable via the current-doc Retry (that saves the new doc, not
+        // this one). Retain the snapshot under its own id so it can be retried.
+        setFailedSave({ id: staleId, title: staleTitle, document: value });
+        throw error;
+      }),
+    );
   }, [flush, title]);
+
+  const retryFailedSave = useCallback(() => {
+    const pending = failedSave;
+    if (!pending) {
+      return;
+    }
+    void saveCanvas(pending.id, { title: pending.title, document: pending.document })
+      .then(() => setFailedSave(null))
+      .catch(() => setFailedSave(pending));
+  }, [failedSave]);
 
   // A same-instance route change runs the load effect's clear branch; leaving
   // the canvas section entirely unmounts this component and only runs effect
@@ -236,7 +263,7 @@ export function CanvasPage() {
     <div className="flex h-full min-h-0">
       <HistorySidebar activeId={canvasId} />
       <div className="flex min-w-0 flex-1 flex-col">
-        <CanvasHeader title={title} status={status} onRetry={() => doc && void onSave(doc)} actions={doc ? <CanvasToolbar onAdd={addSkillNode} /> : null} />
+        <CanvasHeader title={title} status={status} hasDoc={!!doc} onRetry={() => doc && void onSave(doc)} failedSaveTitle={failedSave?.title} onRetryFailed={retryFailedSave} actions={doc ? <CanvasToolbar onAdd={addSkillNode} /> : null} />
         {doc ? (
           <div className="min-h-0 flex-1">
             <CanvasBoard key={canvasId} document={doc} onChange={setDoc} onRunNode={runNode} onFetchUrl={fetchUrlNode} onSelectionChange={setSelectedNodeIds} />
@@ -263,18 +290,34 @@ const statusLabels: Record<SaveStatus, { text: string; className: string }> = {
 interface CanvasHeaderProps {
   title: string;
   status: SaveStatus;
+  hasDoc: boolean;
   onRetry: () => void;
+  failedSaveTitle?: string;
+  onRetryFailed: () => void;
   actions?: ReactNode;
 }
 
-function CanvasHeader({ title, status, onRetry, actions }: CanvasHeaderProps) {
+function CanvasHeader({
+  title,
+  status,
+  hasDoc,
+  onRetry,
+  failedSaveTitle,
+  onRetryFailed,
+  actions,
+}: CanvasHeaderProps) {
   const label = statusLabels[status];
   return (
     <header className="flex items-center justify-between gap-2 border-b px-4 py-2">
       <span className="truncate text-sm font-semibold">{title || "Untitled canvas"}</span>
       <div className="flex items-center gap-3">
         {actions}
-        {label.text ? (
+        {failedSaveTitle !== undefined ? (
+          <button type="button" onClick={onRetryFailed} className="text-xs text-destructive">
+            {`Couldn't save "${failedSaveTitle || "Untitled canvas"}" - Retry`}
+          </button>
+        ) : null}
+        {hasDoc && label.text ? (
           <button
             type="button"
             onClick={status === "error" ? onRetry : undefined}

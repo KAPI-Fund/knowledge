@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const extractUrl = vi.fn();
@@ -267,6 +267,39 @@ describe("CanvasPage", () => {
 
     await waitFor(() =>
       expect(saveCanvas).toHaveBeenCalledWith("c1", expect.objectContaining({ document: edited })),
+    );
+  });
+
+  it("retains a failed leave-save so it can be retried under the old canvas id", async () => {
+    // The save triggered by leaving c1 fails. The old content must not be
+    // discarded: the snapshot is retained and retriable under c1's own id,
+    // not the new route and not the (now empty) current doc.
+    saveCanvas.mockRejectedValueOnce(new Error("save failed"));
+    const { rerender } = render(<CanvasPage />);
+    await waitFor(() => expect(boardProps.onChange).toBeTypeOf("function"));
+
+    const edited = {
+      nodes: [{ id: "u1", type: "url", x: 55, y: 66, w: 280, h: 160, data: { url: "https://x.test" } }],
+      edges: [],
+      viewport: { x: 0, y: 0, zoom: 1 },
+    };
+    act(() => boardProps.onChange?.(edited));
+
+    // Leave c1 for the index route before the debounce fires; the flush rejects.
+    currentParams = {};
+    canvasResult = { data: undefined };
+    rerender(<CanvasPage />);
+
+    const retry = await screen.findByRole("button", { name: /couldn't save/i });
+    saveCanvas.mockClear();
+    fireEvent.click(retry);
+
+    await waitFor(() =>
+      expect(saveCanvas).toHaveBeenCalledWith("c1", expect.objectContaining({ document: edited })),
+    );
+    // A successful retry clears the failed-save affordance.
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: /couldn't save/i })).not.toBeInTheDocument(),
     );
   });
 
