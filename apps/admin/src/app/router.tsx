@@ -52,7 +52,7 @@ export function AppRoutes() {
             element={
               <Suspense
                 fallback={
-                  <div className="p-6 text-sm text-muted-foreground">Loading canvas…</div>
+                  <div className="p-6 text-sm text-muted-foreground">Loading canvas...</div>
                 }
               >
                 <CanvasPage />
@@ -64,7 +64,7 @@ export function AppRoutes() {
             element={
               <Suspense
                 fallback={
-                  <div className="p-6 text-sm text-muted-foreground">Loading canvas…</div>
+                  <div className="p-6 text-sm text-muted-foreground">Loading canvas...</div>
                 }
               >
                 <CanvasPage />
@@ -81,7 +81,7 @@ export function AppRoutes() {
               path="chat"
               element={
                 <Suspense
-                  fallback={<div className="p-6 text-sm text-muted-foreground">Loading chat…</div>}
+                  fallback={<div className="p-6 text-sm text-muted-foreground">Loading chat...</div>}
                 >
                   <ChatPage />
                 </Suspense>
@@ -92,7 +92,7 @@ export function AppRoutes() {
               path="graph"
               element={
                 <Suspense
-                  fallback={<div className="p-6 text-sm text-muted-foreground">Loading graph…</div>}
+                  fallback={<div className="p-6 text-sm text-muted-foreground">Loading graph...</div>}
                 >
                   <GraphPage />
                 </Suspense>
