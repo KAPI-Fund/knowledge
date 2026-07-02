@@ -28,7 +28,7 @@ export function UrlNode({ data, onUrlChange, onFetch }: UrlNodeProps) {
         <Input
           value={data.url ?? ""}
           onChange={(event) => onUrlChange(event.target.value)}
-          placeholder="https://…"
+          placeholder="https://..."
           className="h-8 text-sm"
         />
         <Button type="button" size="sm" onClick={onFetch} disabled={loading || !data.url}>

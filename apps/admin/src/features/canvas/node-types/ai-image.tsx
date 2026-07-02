@@ -35,7 +35,7 @@ export function AiImageNode({ data, onRegenerate, onVersionChange }: AiImageNode
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-1 text-xs font-medium text-muted-foreground">
           <ImageIcon className="size-3" />
-          AI · Image
+          AI - Image
         </div>
         <div className="flex items-center gap-1">
           {versions.length > 0 && active ? (

@@ -11,7 +11,7 @@ export function KbProjectPicker({ onPick }: KbProjectPickerProps) {
   const items = projects.data ?? [];
 
   if (projects.isLoading) {
-    return <p className="text-sm text-muted-foreground">Loading projects…</p>;
+    return <p className="text-sm text-muted-foreground">Loading projects...</p>;
   }
   if (items.length === 0) {
     return <p className="text-sm text-muted-foreground">No knowledge bases available.</p>;

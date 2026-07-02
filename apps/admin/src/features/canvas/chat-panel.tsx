@@ -110,7 +110,7 @@ export function ChatPanel({ canvasId, selectedNodeIds, onSkillNode }: ChatPanelP
                 message.role === "user" ? "bg-primary/10" : "bg-muted",
               )}
             >
-              <MarkdownMessage content={message.content || "…"} />
+              <MarkdownMessage content={message.content || "..."} />
             </div>
           ))
         )}

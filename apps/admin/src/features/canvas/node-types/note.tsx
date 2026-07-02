@@ -16,7 +16,7 @@ export function NoteNode({ data, onChange }: NoteNodeProps) {
       <Textarea
         value={data.markdown ?? ""}
         onChange={(event) => onChange(event.target.value)}
-        placeholder="Write a note in markdown…"
+        placeholder="Write a note in markdown..."
         className="h-full resize-none border-none bg-transparent p-0 text-sm shadow-none focus-visible:ring-0"
       />
     </div>

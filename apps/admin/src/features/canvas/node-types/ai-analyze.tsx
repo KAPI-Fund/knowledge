@@ -36,7 +36,7 @@ export function AiAnalyzeNode({ data, onRerun, onVersionChange }: AiAnalyzeNodeP
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-1 text-xs font-medium text-muted-foreground">
           <Sparkles className="size-3" />
-          AI · Analyze
+          AI - Analyze
         </div>
         <div className="flex items-center gap-1">
           {versions.length > 0 && active ? (

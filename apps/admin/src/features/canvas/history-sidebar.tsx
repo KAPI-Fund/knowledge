@@ -38,9 +38,9 @@ export function HistorySidebar({ activeId }: HistorySidebarProps) {
       </div>
       <ScrollArea className="min-h-0 flex-1 px-2 pb-2">
         {list.isLoading ? (
-          <p className="px-2 py-4 text-xs text-muted-foreground">Loading…</p>
+          <p className="px-2 py-4 text-xs text-muted-foreground">Loading...</p>
         ) : (list.data ?? []).length === 0 ? (
-          <p className="px-2 py-4 text-xs text-muted-foreground">No canvases yet — click "New canvas".</p>
+          <p className="px-2 py-4 text-xs text-muted-foreground">No canvases yet - click "New canvas".</p>
         ) : (
           <ul className="space-y-1">
             {(list.data ?? []).map((canvas) => (
