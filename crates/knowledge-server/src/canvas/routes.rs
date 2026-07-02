@@ -638,10 +638,33 @@ async fn run_image_skill(
         .await
         .map_err(|error| error.to_string())?;
     let url = crate::assets::store::asset_url(&asset_id);
-    Ok(json!({
+    let version_id = uuid::Uuid::new_v4().to_string();
+    let created_at = now_rfc3339();
+    Ok(build_image_node(&asset_id, &url, prompt, &version_id, &created_at))
+}
+
+/// Build an `ai_image` node whose first version is already populated so the
+/// client renders the image immediately. `data.url` is kept alongside the
+/// version so the node-run path can extract it.
+fn build_image_node(
+    asset_id: &str,
+    url: &str,
+    prompt: &str,
+    version_id: &str,
+    created_at: &str,
+) -> serde_json::Value {
+    json!({
         "type": "ai_image",
-        "data": { "assetId": asset_id, "url": url, "prompt": prompt }
-    }))
+        "data": {
+            "assetId": asset_id,
+            "url": url,
+            "prompt": prompt,
+            "versions": [{ "id": version_id, "url": url, "createdAt": created_at }],
+            "activeVersionId": version_id,
+            "status": "idle",
+            "error": null
+        }
+    })
 }
 
 /// `/analyze` skill: build an idle `ai_analyze` node referencing the selected
@@ -785,5 +808,27 @@ mod tests {
         assert_eq!(payload["versionId"], "v-img");
         assert_eq!(payload["url"], "/api/assets/abc");
         assert_eq!(payload["createdAt"], "2026-07-01T00:00:00Z");
+    }
+
+    #[test]
+    fn image_node_seeds_active_version() {
+        let node = build_image_node(
+            "asset-1",
+            "/api/assets/asset-1",
+            "a fox",
+            "v-1",
+            "2026-07-01T00:00:00Z",
+        );
+        assert_eq!(node["type"], "ai_image");
+        assert_eq!(node["data"]["assetId"], "asset-1");
+        assert_eq!(node["data"]["url"], "/api/assets/asset-1");
+        assert_eq!(node["data"]["prompt"], "a fox");
+        assert_eq!(node["data"]["activeVersionId"], "v-1");
+        assert_eq!(node["data"]["status"], "idle");
+        let versions = node["data"]["versions"].as_array().unwrap();
+        assert_eq!(versions.len(), 1);
+        assert_eq!(versions[0]["id"], "v-1");
+        assert_eq!(versions[0]["url"], "/api/assets/asset-1");
+        assert_eq!(versions[0]["createdAt"], "2026-07-01T00:00:00Z");
     }
 }
