@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { createCanvas, deleteCanvas, getCanvas, listCanvases, saveCanvas } from "./api";
-import type { CanvasDocument } from "./types";
+import type { CanvasDocument, CanvasSummary } from "./types";
 
 export const canvasKeys = {
   all: ["canvases"] as const,
@@ -33,7 +33,20 @@ export function useSaveCanvas(id: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: { title: string; document: CanvasDocument }) => saveCanvas(id, body),
-    onSuccess: (data) => qc.setQueryData(canvasKeys.detail(id), data),
+    onSuccess: (data) => {
+      qc.setQueryData(canvasKeys.detail(id), data);
+      qc.setQueryData<CanvasSummary[]>(canvasKeys.list(), (prev) => {
+        if (!prev) {
+          return prev;
+        }
+        const patched = prev.map((summary) =>
+          summary.id === id
+            ? { ...summary, title: data.title, updated_at: data.updated_at }
+            : summary,
+        );
+        return [...patched].sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+      });
+    },
   });
 }
 
