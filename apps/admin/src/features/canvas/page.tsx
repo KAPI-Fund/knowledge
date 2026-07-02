@@ -178,7 +178,7 @@ export function CanvasPage() {
         <CanvasHeader title={title} status={status} onRetry={() => doc && void onSave(doc)} actions={doc ? <CanvasToolbar onAdd={addSkillNode} /> : null} />
         {doc ? (
           <div className="min-h-0 flex-1">
-            <CanvasBoard document={doc} onChange={setDoc} onRunNode={runNode} onFetchUrl={fetchUrlNode} onSelectionChange={setSelectedNodeIds} />
+            <CanvasBoard key={canvasId} document={doc} onChange={setDoc} onRunNode={runNode} onFetchUrl={fetchUrlNode} onSelectionChange={setSelectedNodeIds} />
           </div>
         ) : (
           <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
