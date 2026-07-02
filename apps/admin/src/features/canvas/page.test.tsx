@@ -1,7 +1,8 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const extractUrl = vi.fn();
+const saveCanvas = vi.fn();
 
 function c1Data() {
   return {
@@ -21,10 +22,14 @@ let canvasResult: { data: ReturnType<typeof c1Data> | undefined } = { data: c1Da
 beforeEach(() => {
   currentParams = { canvasId: "c1" };
   canvasResult = { data: c1Data() };
+  saveCanvas.mockReset();
 });
 
 vi.mock("react-router-dom", () => ({ useParams: () => currentParams }));
-vi.mock("./api", () => ({ extractUrl: (url: string) => extractUrl(url) }));
+vi.mock("./api", () => ({
+  extractUrl: (url: string) => extractUrl(url),
+  saveCanvas: (id: string, body: unknown) => saveCanvas(id, body),
+}));
 vi.mock("./history-sidebar", () => ({ HistorySidebar: () => <div>history</div> }));
 vi.mock("./canvas-toolbar", () => ({ CanvasToolbar: () => <div>toolbar</div> }));
 
@@ -167,6 +172,30 @@ describe("CanvasPage", () => {
       const nodes = boardProps.document?.nodes ?? [];
       expect(nodes.some((n) => n.x === 321 && n.y === 654)).toBe(true);
     });
+  });
+
+  it("flushes a pending edit to its own canvas id when navigating away", async () => {
+    saveCanvas.mockResolvedValue(undefined);
+    const { rerender } = render(<CanvasPage />);
+    await waitFor(() => expect(boardProps.onChange).toBeTypeOf("function"));
+
+    // Edit c1 while still inside the 800ms autosave debounce window.
+    const edited = {
+      nodes: [{ id: "u1", type: "url", x: 42, y: 99, w: 280, h: 160, data: { url: "https://x.test" } }],
+      edges: [],
+      viewport: { x: 0, y: 0, zoom: 1 },
+    };
+    act(() => boardProps.onChange?.(edited));
+
+    // Navigate to /canvas before the debounce fires. The pending edit must be
+    // persisted under c1's own id, not dropped and not saved under the new route.
+    currentParams = {};
+    canvasResult = { data: undefined };
+    rerender(<CanvasPage />);
+
+    await waitFor(() =>
+      expect(saveCanvas).toHaveBeenCalledWith("c1", expect.objectContaining({ document: edited })),
+    );
   });
 
   it("does not create edges to source ids absent from the canvas", async () => {

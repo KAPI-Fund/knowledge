@@ -21,6 +21,21 @@ export function useAutosave<T>({ value, delayMs, onSave }: UseAutosaveOptions<T>
     setStatus("idle");
   }, []);
 
+  // Persist the latest value immediately if it differs from what was last
+  // saved, then cancel the pending debounce. Callers pass their own save
+  // function so an edit can be flushed to the right target (e.g. the canvas
+  // being navigated away from) instead of whatever the debounced onSave is
+  // currently bound to.
+  const flush = useCallback((save: (value: T) => Promise<unknown>) => {
+    if (timer.current) clearTimeout(timer.current);
+    const serialized = JSON.stringify(latest.current);
+    if (serialized === lastSaved.current) {
+      return;
+    }
+    lastSaved.current = serialized;
+    void save(latest.current);
+  }, []);
+
   useEffect(() => {
     const serialized = JSON.stringify(value);
     if (lastSaved.current === null) {
@@ -47,5 +62,5 @@ export function useAutosave<T>({ value, delayMs, onSave }: UseAutosaveOptions<T>
     };
   }, [value, delayMs, onSave]);
 
-  return { status, reset };
+  return { status, reset, flush };
 }

@@ -3,7 +3,7 @@ import { useParams } from "react-router-dom";
 
 import { cn } from "@/lib/utils";
 
-import { extractUrl } from "./api";
+import { extractUrl, saveCanvas } from "./api";
 import { CanvasBoard } from "./canvas-board";
 import { CanvasToolbar } from "./canvas-toolbar";
 import { ChatPanel, type SkillNodePayload } from "./chat-panel";
@@ -31,7 +31,7 @@ export function CanvasPage() {
     [save, title],
   );
 
-  const { status, reset } = useAutosave({ value: doc ?? emptyDoc(), delayMs: 800, onSave });
+  const { status, reset, flush } = useAutosave({ value: doc ?? emptyDoc(), delayMs: 800, onSave });
 
   useEffect(() => {
     // Only treat data as loaded when it matches the current route id. This
@@ -57,13 +57,19 @@ export function CanvasPage() {
     // load error, or stale data from a previous id. Drop any previous board
     // and reset autosave so a pending write cannot land under the new id.
     if (loadedId.current !== undefined) {
+      const staleId = loadedId.current;
       loadedId.current = undefined;
+      // Persist any edit still inside the autosave debounce before dropping the
+      // board. reset() below cancels the timer, and onSave is bound to the new
+      // route id, so without flushing to the leaving canvas's own id the last
+      // edit made within the debounce window would be lost.
+      flush((value) => saveCanvas(staleId, { title, document: value }));
       setDoc(null);
       setTitle("");
       setSelectedNodeIds([]);
       reset(emptyDoc());
     }
-  }, [canvasId, canvas.data, reset]);
+  }, [canvasId, canvas.data, reset, flush, title]);
 
   const patchNodeData = useCallback((nodeId: string, patch: Record<string, unknown>) => {
     setDoc((prev) =>
