@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const extractUrl = vi.fn();
 const saveCanvas = vi.fn();
+const runCanvasNode = vi.fn();
 
 function c1Data() {
   return {
@@ -24,12 +25,18 @@ beforeEach(() => {
   canvasResult = { data: c1Data() };
   saveCanvas.mockReset();
   saveCanvas.mockResolvedValue(undefined);
+  runCanvasNode.mockReset();
+  runCanvasNode.mockResolvedValue(undefined);
 });
 
 vi.mock("react-router-dom", () => ({ useParams: () => currentParams }));
 vi.mock("./api", () => ({
   extractUrl: (url: string) => extractUrl(url),
   saveCanvas: (id: string, body: unknown) => saveCanvas(id, body),
+}));
+vi.mock("./stream", () => ({
+  runCanvasNode: (id: string, nodeId: string, handlers: unknown) =>
+    runCanvasNode(id, nodeId, handlers),
 }));
 vi.mock("./history-sidebar", () => ({ HistorySidebar: () => <div>history</div> }));
 vi.mock("./canvas-toolbar", () => ({ CanvasToolbar: () => <div>toolbar</div> }));
@@ -52,6 +59,7 @@ vi.mock("./chat-panel", () => ({
 
 let boardProps: {
   onFetchUrl?: (id: string) => void;
+  onRunNode?: (id: string) => void;
   onSelectionChange?: (ids: string[]) => void;
   document?: {
     nodes: { id: string; x: number; y: number }[];
@@ -197,6 +205,49 @@ describe("CanvasPage", () => {
     await waitFor(() =>
       expect(saveCanvas).toHaveBeenCalledWith("c1", expect.objectContaining({ document: edited })),
     );
+  });
+
+  it("saves the current doc before running a node so the backend sees the edit", async () => {
+    render(<CanvasPage />);
+    await waitFor(() => expect(boardProps.onRunNode).toBeTypeOf("function"));
+
+    // Add a node client-side (inside the debounce), then run a node immediately.
+    const edited = {
+      nodes: [
+        { id: "u1", type: "url", x: 0, y: 0, w: 280, h: 160, data: { url: "https://x.test" } },
+        { id: "n2", type: "note", x: 10, y: 10, w: 280, h: 160, data: {} },
+      ],
+      edges: [],
+      viewport: { x: 0, y: 0, zoom: 1 },
+    };
+    act(() => boardProps.onChange?.(edited));
+    act(() => boardProps.onRunNode?.("n2"));
+
+    await waitFor(() =>
+      expect(saveCanvas).toHaveBeenCalledWith("c1", expect.objectContaining({ document: edited })),
+    );
+    await waitFor(() =>
+      expect(runCanvasNode).toHaveBeenCalledWith("c1", "n2", expect.anything()),
+    );
+  });
+
+  it("does not run a node when the pre-run save fails", async () => {
+    saveCanvas.mockRejectedValue(new Error("save failed"));
+    render(<CanvasPage />);
+    await waitFor(() => expect(boardProps.onRunNode).toBeTypeOf("function"));
+
+    const edited = {
+      nodes: [{ id: "u1", type: "url", x: 1, y: 2, w: 280, h: 160, data: { url: "https://x.test" } }],
+      edges: [],
+      viewport: { x: 0, y: 0, zoom: 1 },
+    };
+    act(() => boardProps.onChange?.(edited));
+    act(() => boardProps.onRunNode?.("u1"));
+
+    await waitFor(() => expect(saveCanvas).toHaveBeenCalled());
+    // Give any queued microtasks a chance; the SSE run must not have started.
+    await Promise.resolve();
+    expect(runCanvasNode).not.toHaveBeenCalled();
   });
 
   it("flushes a pending edit when the page unmounts (leaving for another route)", async () => {

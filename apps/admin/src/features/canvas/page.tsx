@@ -102,54 +102,71 @@ export function CanvasPage() {
     );
   }, []);
 
+  // Persist the current doc to the active canvas before an SSE action. The
+  // run/chat endpoints re-read the canvas from the DB, so an edit still inside
+  // the autosave debounce would be invisible (node not found, missing edges,
+  // stale chat context) without this write.
+  const flushCurrent = useCallback(() => {
+    if (!canvasId) {
+      return Promise.resolve(true);
+    }
+    return flush((value) => saveCanvas(canvasId, { title, document: value }));
+  }, [canvasId, title, flush]);
+
   const runNode = useCallback(
     (nodeId: string) => {
       if (!canvasId) {
         return;
       }
       patchNodeData(nodeId, { status: "running", error: null });
-      void runCanvasNode(canvasId, nodeId, {
-        onDelta: () => {},
-        onDone: (payload) => {
-          setDoc((prev) => {
-            if (!prev) {
-              return prev;
-            }
-            return {
-              ...prev,
-              nodes: prev.nodes.map((n) => {
-                if (n.id !== nodeId) {
-                  return n;
-                }
-                const versions = Array.isArray(n.data.versions)
-                  ? (n.data.versions as unknown[])
-                  : [];
-                const version =
-                  n.type === "ai_image"
-                    ? { id: payload.versionId, url: payload.url, createdAt: payload.createdAt }
-                    : {
-                        id: payload.versionId,
-                        content: payload.content,
-                        createdAt: payload.createdAt,
-                      };
-                return {
-                  ...n,
-                  data: {
-                    ...n.data,
-                    status: "idle",
-                    error: null,
-                    versions: [...versions, version],
-                    activeVersionId: payload.versionId,
-                  },
-                };
-              }),
-            };
-          });
-        },
-        onError: (message) => patchNodeData(nodeId, { status: "error", error: message }),
+      void flushCurrent().then((ok) => {
+        if (!ok) {
+          patchNodeData(nodeId, { status: "error", error: "could not save canvas" });
+          return;
+        }
+        return runCanvasNode(canvasId, nodeId, {
+          onDelta: () => {},
+          onDone: (payload) => {
+            setDoc((prev) => {
+              if (!prev) {
+                return prev;
+              }
+              return {
+                ...prev,
+                nodes: prev.nodes.map((n) => {
+                  if (n.id !== nodeId) {
+                    return n;
+                  }
+                  const versions = Array.isArray(n.data.versions)
+                    ? (n.data.versions as unknown[])
+                    : [];
+                  const version =
+                    n.type === "ai_image"
+                      ? { id: payload.versionId, url: payload.url, createdAt: payload.createdAt }
+                      : {
+                          id: payload.versionId,
+                          content: payload.content,
+                          createdAt: payload.createdAt,
+                        };
+                  return {
+                    ...n,
+                    data: {
+                      ...n.data,
+                      status: "idle",
+                      error: null,
+                      versions: [...versions, version],
+                      activeVersionId: payload.versionId,
+                    },
+                  };
+                }),
+              };
+            });
+          },
+          onError: (message) => patchNodeData(nodeId, { status: "error", error: message }),
+        });
       });
     },
-    [canvasId, patchNodeData],
+    [canvasId, flushCurrent, patchNodeData],
   );
 
   const fetchUrlNode = useCallback(
@@ -230,7 +247,7 @@ export function CanvasPage() {
           </div>
         )}
       </div>
-      <ChatPanel canvasId={canvasId ?? ""} selectedNodeIds={selectedNodeIds} onSkillNode={addSkillNode} placementOrigin={placementOrigin(doc)} />
+      <ChatPanel canvasId={canvasId ?? ""} selectedNodeIds={selectedNodeIds} onSkillNode={addSkillNode} placementOrigin={placementOrigin(doc)} onBeforeSend={flushCurrent} />
     </div>
   );
 }

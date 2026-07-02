@@ -69,6 +69,32 @@ describe("useAutosave", () => {
     expect(onSave).not.toHaveBeenCalled();
   });
 
+  it("flush resolves true on success, false on failure, and true when nothing changed", async () => {
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    const { result, rerender } = renderHook(
+      ({ value }) => useAutosave({ value, delayMs: 100, onSave }),
+      { initialProps: { value: { a: 1 } } },
+    );
+    // Nothing changed yet: flush is a no-op that reports success.
+    const noop = vi.fn().mockResolvedValue(undefined);
+    await act(async () => {
+      await expect(result.current.flush(noop)).resolves.toBe(true);
+    });
+    expect(noop).not.toHaveBeenCalled();
+
+    rerender({ value: { a: 2 } });
+    await act(async () => {
+      await expect(result.current.flush(vi.fn().mockResolvedValue(undefined))).resolves.toBe(true);
+    });
+
+    rerender({ value: { a: 3 } });
+    await act(async () => {
+      await expect(result.current.flush(vi.fn().mockRejectedValue(new Error("x")))).resolves.toBe(
+        false,
+      );
+    });
+  });
+
   it("flush surfaces an error and does not mark the value saved when it fails", async () => {
     const onSave = vi.fn().mockResolvedValue(undefined);
     const { result, rerender } = renderHook(

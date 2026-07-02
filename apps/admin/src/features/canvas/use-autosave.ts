@@ -27,20 +27,25 @@ export function useAutosave<T>({ value, delayMs, onSave }: UseAutosaveOptions<T>
   // being navigated away from) instead of whatever the debounced onSave is
   // currently bound to. Mirrors the debounced path: only advance lastSaved
   // after the save resolves so a failed flush surfaces "error" and stays
-  // retriable instead of being silently marked saved.
-  const flush = useCallback((save: (value: T) => Promise<unknown>) => {
+  // retriable instead of being silently marked saved. Resolves true when the
+  // value is persisted (or there was nothing to save) and false on failure,
+  // so callers can gate follow-up work (e.g. an SSE run) on a durable write.
+  const flush = useCallback(async (save: (value: T) => Promise<unknown>): Promise<boolean> => {
     if (timer.current) clearTimeout(timer.current);
     const snapshot = JSON.stringify(latest.current);
     if (snapshot === lastSaved.current) {
-      return;
+      return true;
     }
     setStatus("saving");
-    return save(latest.current)
-      .then(() => {
-        lastSaved.current = snapshot;
-        setStatus("saved");
-      })
-      .catch(() => setStatus("error"));
+    try {
+      await save(latest.current);
+      lastSaved.current = snapshot;
+      setStatus("saved");
+      return true;
+    } catch {
+      setStatus("error");
+      return false;
+    }
   }, []);
 
   useEffect(() => {

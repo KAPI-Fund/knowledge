@@ -33,6 +33,10 @@ interface ChatPanelProps {
   selectedNodeIds: string[];
   onSkillNode: (payload: SkillNodePayload) => void;
   placementOrigin: { x: number; y: number };
+  // Persist the current canvas before an SSE chat. Chat re-reads the canvas
+  // from the DB, so an unsaved edit (new node, edge, note content) would be
+  // invisible. Resolves false when the save fails, and the chat is aborted.
+  onBeforeSend: () => Promise<boolean>;
 }
 
 export function ChatPanel({
@@ -40,6 +44,7 @@ export function ChatPanel({
   selectedNodeIds,
   onSkillNode,
   placementOrigin,
+  onBeforeSend,
 }: ChatPanelProps) {
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -77,6 +82,18 @@ export function ChatPanel({
     setMessages((prev) => [...prev, userMessage, { id: assistantId, role: "assistant", content: "" }]);
     setInput("");
     setStreaming(true);
+    const saved = await onBeforeSend();
+    if (!saved) {
+      setMessages((prev) =>
+        prev.map((message) =>
+          message.id === assistantId
+            ? { ...message, content: "> Error: could not save canvas" }
+            : message,
+        ),
+      );
+      setStreaming(false);
+      return;
+    }
     try {
       await streamCanvasChat(
         canvasId,

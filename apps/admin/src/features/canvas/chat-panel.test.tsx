@@ -30,7 +30,13 @@ beforeEach(() => {
 describe("ChatPanel slash menu", () => {
   it("lists the four v1 skills when input starts with /", () => {
     render(
-      <ChatPanel canvasId="c1" selectedNodeIds={[]} onSkillNode={() => {}} placementOrigin={origin} />,
+      <ChatPanel
+        canvasId="c1"
+        selectedNodeIds={[]}
+        onSkillNode={() => {}}
+        placementOrigin={origin}
+        onBeforeSend={async () => true}
+      />,
     );
     const input = screen.getByPlaceholderText("/ or ask");
     fireEvent.change(input, { target: { value: "/" } });
@@ -50,6 +56,7 @@ describe("ChatPanel skill submit", () => {
         selectedNodeIds={[]}
         onSkillNode={onSkillNode}
         placementOrigin={origin}
+        onBeforeSend={async () => true}
       />,
     );
     const input = screen.getByPlaceholderText("/ or ask");
@@ -61,7 +68,13 @@ describe("ChatPanel skill submit", () => {
 
   it("forwards the placement origin to streamCanvasChat", async () => {
     render(
-      <ChatPanel canvasId="c1" selectedNodeIds={["a"]} onSkillNode={() => {}} placementOrigin={origin} />,
+      <ChatPanel
+        canvasId="c1"
+        selectedNodeIds={["a"]}
+        onSkillNode={() => {}}
+        placementOrigin={origin}
+        onBeforeSend={async () => true}
+      />,
     );
     const input = screen.getByPlaceholderText("/ or ask");
     fireEvent.change(input, { target: { value: "hello" } });
@@ -70,5 +83,48 @@ describe("ChatPanel skill submit", () => {
     const call = vi.mocked(streamCanvasChat).mock.lastCall!;
     expect(call.slice(0, 3)).toEqual(["c1", "hello", ["a"]]);
     expect(call[4]).toEqual(origin);
+  });
+
+  it("saves the canvas before streaming so the backend sees the edit", async () => {
+    const onBeforeSend = vi.fn().mockResolvedValue(true);
+    render(
+      <ChatPanel
+        canvasId="c1"
+        selectedNodeIds={[]}
+        onSkillNode={() => {}}
+        placementOrigin={origin}
+        onBeforeSend={onBeforeSend}
+      />,
+    );
+    const input = screen.getByPlaceholderText("/ or ask");
+    fireEvent.change(input, { target: { value: "hello" } });
+    fireEvent.submit(input.closest("form")!);
+
+    await waitFor(() => expect(streamCanvasChat).toHaveBeenCalled());
+    expect(onBeforeSend).toHaveBeenCalledTimes(1);
+    // The save must resolve before the SSE run starts.
+    expect(onBeforeSend.mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(streamCanvasChat).mock.invocationCallOrder[0],
+    );
+  });
+
+  it("does not stream when the pre-send save fails", async () => {
+    const onBeforeSend = vi.fn().mockResolvedValue(false);
+    render(
+      <ChatPanel
+        canvasId="c1"
+        selectedNodeIds={[]}
+        onSkillNode={() => {}}
+        placementOrigin={origin}
+        onBeforeSend={onBeforeSend}
+      />,
+    );
+    const input = screen.getByPlaceholderText("/ or ask");
+    fireEvent.change(input, { target: { value: "hello" } });
+    fireEvent.submit(input.closest("form")!);
+
+    await waitFor(() => expect(onBeforeSend).toHaveBeenCalled());
+    await Promise.resolve();
+    expect(streamCanvasChat).not.toHaveBeenCalled();
   });
 });
