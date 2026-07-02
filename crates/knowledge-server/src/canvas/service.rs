@@ -126,28 +126,45 @@ pub fn validate_public_url(raw: &str) -> Result<reqwest::Url, String> {
     Ok(url)
 }
 
+// Block anything that is not a globally routable public address. std's
+// IpAddr::is_global is still unstable, so the special-use ranges (RFC 6890 and
+// friends) are enumerated explicitly rather than derived.
 fn is_blocked_ip(ip: &IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => {
+            let o = v4.octets();
             v4.is_loopback()
                 || v4.is_private()
                 || v4.is_link_local()
                 || v4.is_unspecified()
                 || v4.is_broadcast()
                 || v4.is_documentation()
+                || v4.is_multicast()
                 // 100.64.0.0/10 shared address space (CGNAT).
-                || (v4.octets()[0] == 100 && (v4.octets()[1] & 0xc0) == 0x40)
+                || (o[0] == 100 && (o[1] & 0xc0) == 0x40)
+                // 192.0.0.0/24 IETF protocol assignments.
+                || (o[0] == 192 && o[1] == 0 && o[2] == 0)
+                // 192.88.99.0/24 6to4 relay anycast (deprecated).
+                || (o[0] == 192 && o[1] == 88 && o[2] == 99)
+                // 198.18.0.0/15 benchmarking.
+                || (o[0] == 198 && (o[1] & 0xfe) == 18)
+                // 240.0.0.0/4 reserved / future use.
+                || o[0] >= 240
         }
         IpAddr::V6(v6) => {
             if let Some(mapped) = v6.to_ipv4_mapped() {
                 return is_blocked_ip(&IpAddr::V4(mapped));
             }
+            let s = v6.segments();
             v6.is_loopback()
                 || v6.is_unspecified()
+                || v6.is_multicast()
                 // Unique local fc00::/7.
-                || (v6.segments()[0] & 0xfe00) == 0xfc00
+                || (s[0] & 0xfe00) == 0xfc00
                 // Link-local fe80::/10.
-                || (v6.segments()[0] & 0xffc0) == 0xfe80
+                || (s[0] & 0xffc0) == 0xfe80
+                // Documentation 2001:db8::/32.
+                || (s[0] == 0x2001 && s[1] == 0x0db8)
         }
     }
 }
@@ -387,6 +404,39 @@ mod url_tests {
         assert!(validate_public_url("http://0.0.0.0/").is_err());
         // IPv4-mapped IPv6 form of a loopback address.
         assert!(validate_public_url("http://[::ffff:127.0.0.1]/").is_err());
+    }
+
+    #[test]
+    fn validate_public_url_rejects_ipv4_special_use_ranges() {
+        // Benchmarking 198.18.0.0/15.
+        assert!(validate_public_url("http://198.18.0.1/").is_err());
+        assert!(validate_public_url("http://198.19.255.255/").is_err());
+        // Multicast 224.0.0.0/4.
+        assert!(validate_public_url("http://224.0.0.1/").is_err());
+        assert!(validate_public_url("http://239.255.255.255/").is_err());
+        // Reserved / future use 240.0.0.0/4.
+        assert!(validate_public_url("http://240.0.0.1/").is_err());
+        assert!(validate_public_url("http://255.255.255.254/").is_err());
+        // IETF protocol assignments 192.0.0.0/24.
+        assert!(validate_public_url("http://192.0.0.1/").is_err());
+        // 6to4 relay anycast 192.88.99.0/24.
+        assert!(validate_public_url("http://192.88.99.1/").is_err());
+    }
+
+    #[test]
+    fn validate_public_url_rejects_ipv6_special_use_ranges() {
+        // Multicast ff00::/8.
+        assert!(validate_public_url("http://[ff02::1]/").is_err());
+        // Documentation 2001:db8::/32.
+        assert!(validate_public_url("http://[2001:db8::1]/").is_err());
+    }
+
+    #[test]
+    fn validate_public_url_still_accepts_ordinary_public_ips() {
+        // Guard against the extended denylist over-blocking real public hosts.
+        assert!(validate_public_url("http://8.8.8.8/").is_ok());
+        assert!(validate_public_url("http://1.1.1.1/").is_ok());
+        assert!(validate_public_url("http://93.184.216.34/").is_ok());
     }
 
     #[test]
