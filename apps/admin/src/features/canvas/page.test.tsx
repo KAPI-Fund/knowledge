@@ -79,6 +79,7 @@ vi.mock("./queries", () => ({
   useCanvas: () => canvasResult,
   useCreateCanvas: () => ({ mutate: vi.fn() }),
   useSaveCanvas: () => ({ mutateAsync: vi.fn().mockResolvedValue(undefined) }),
+  useCanvasCacheSave: () => (id: string, body: unknown) => saveCanvas(id, body),
   useDeleteCanvas: () => ({ mutate: vi.fn() }),
 }));
 

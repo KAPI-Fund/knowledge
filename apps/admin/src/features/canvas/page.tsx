@@ -3,12 +3,12 @@ import { useParams } from "react-router-dom";
 
 import { cn } from "@/lib/utils";
 
-import { extractUrl, saveCanvas } from "./api";
+import { extractUrl } from "./api";
 import { CanvasBoard } from "./canvas-board";
 import { CanvasToolbar } from "./canvas-toolbar";
 import { ChatPanel, type SkillNodePayload } from "./chat-panel";
 import { HistorySidebar } from "./history-sidebar";
-import { useCanvas, useSaveCanvas } from "./queries";
+import { useCanvas, useCanvasCacheSave, useSaveCanvas } from "./queries";
 import { runCanvasNode } from "./stream";
 import type { CanvasDocument, CanvasNode } from "./types";
 import { useAutosave, type SaveStatus } from "./use-autosave";
@@ -21,6 +21,7 @@ export function CanvasPage() {
   const { canvasId } = useParams();
   const canvas = useCanvas(canvasId);
   const save = useSaveCanvas(canvasId ?? "");
+  const cacheSave = useCanvasCacheSave();
   const [doc, setDoc] = useState<CanvasDocument | null>(null);
   const [title, setTitle] = useState("");
   const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
@@ -51,7 +52,7 @@ export function CanvasPage() {
       return;
     }
     return flush((value) =>
-      saveCanvas(staleId, { title: staleTitle, document: value }).catch((error: unknown) => {
+      cacheSave(staleId, { title: staleTitle, document: value }).catch((error: unknown) => {
         // The board for staleId is about to be dropped, so a lost save here is
         // unrecoverable via the current-doc Retry (that saves the new doc, not
         // this one). Retain the snapshot under its own id so it can be retried.
@@ -59,17 +60,17 @@ export function CanvasPage() {
         throw error;
       }),
     );
-  }, [flush, title]);
+  }, [flush, title, cacheSave]);
 
   const retryFailedSave = useCallback(() => {
     const pending = failedSave;
     if (!pending) {
       return;
     }
-    void saveCanvas(pending.id, { title: pending.title, document: pending.document })
+    void cacheSave(pending.id, { title: pending.title, document: pending.document })
       .then(() => setFailedSave(null))
       .catch(() => setFailedSave(pending));
-  }, [failedSave]);
+  }, [failedSave, cacheSave]);
 
   // A same-instance route change runs the load effect's clear branch; leaving
   // the canvas section entirely unmounts this component and only runs effect
@@ -137,8 +138,8 @@ export function CanvasPage() {
     if (!canvasId) {
       return Promise.resolve(true);
     }
-    return flush((value) => saveCanvas(canvasId, { title, document: value }));
-  }, [canvasId, title, flush]);
+    return flush((value) => cacheSave(canvasId, { title, document: value }));
+  }, [canvasId, title, flush, cacheSave]);
 
   const runNode = useCallback(
     (nodeId: string) => {
