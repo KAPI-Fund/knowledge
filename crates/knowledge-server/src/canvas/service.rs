@@ -1,5 +1,7 @@
 use std::collections::HashSet;
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
+use std::sync::Arc;
+use std::time::Duration;
 
 use scraper::{Html, Selector};
 
@@ -101,8 +103,9 @@ pub const MAX_EXTRACT_BYTES: usize = 5 * 1024 * 1024;
 /// Guard against SSRF: only allow http/https to public hosts. A literal-IP
 /// host in a private/loopback/link-local/unspecified range is rejected, as is
 /// `localhost`. This blocks the direct vectors (cloud metadata, internal
-/// services). It does NOT defend against a public hostname that resolves to a
-/// private IP (DNS rebinding) — that needs a pinning connector.
+/// services). It does NOT by itself defend against a public hostname that
+/// resolves to a private IP (DNS rebinding); that vector is closed at connect
+/// time by PublicOnlyResolver, which screens every resolved address.
 pub fn validate_public_url(raw: &str) -> Result<reqwest::Url, String> {
     let url = reqwest::Url::parse(raw).map_err(|_| "invalid URL".to_string())?;
     match url.scheme() {
@@ -147,6 +150,75 @@ fn is_blocked_ip(ip: &IpAddr) -> bool {
                 || (v6.segments()[0] & 0xffc0) == 0xfe80
         }
     }
+}
+
+/// Screen the addresses a hostname resolved to. Reject if the host resolved to
+/// nothing, or if ANY resolved address is in a blocked range. Screening every
+/// address (not just the first) is what closes the DNS-rebinding vector that
+/// validate_public_url cannot see: it only inspects the hostname/literal IP.
+pub fn screen_resolved_addrs(addrs: Vec<SocketAddr>) -> Result<Vec<SocketAddr>, String> {
+    if addrs.is_empty() {
+        return Err("host did not resolve to any address".to_string());
+    }
+    if addrs.iter().any(|addr| is_blocked_ip(&addr.ip())) {
+        return Err("URL host resolves to a non-public address".to_string());
+    }
+    Ok(addrs)
+}
+
+/// A reqwest DNS resolver that performs normal system resolution, then rejects
+/// the connection if any resolved address is non-public. Paired with
+/// validate_public_url (hostname/literal-IP screening at request build time),
+/// this ensures reqwest only ever connects to public IPs, closing the
+/// DNS-rebinding hole. tokio's "net" feature is not enabled in this workspace,
+/// so resolution runs on a blocking thread via std::net::ToSocketAddrs.
+#[derive(Debug, Clone, Default)]
+pub struct PublicOnlyResolver;
+
+impl reqwest::dns::Resolve for PublicOnlyResolver {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        Box::pin(async move {
+            let host = name.as_str().to_string();
+            let resolved = tokio::task::spawn_blocking(move || {
+                (host.as_str(), 0u16).to_socket_addrs().map(|it| it.collect::<Vec<_>>())
+            })
+            .await
+            .map_err(box_dns_err)?
+            .map_err(box_dns_err)?;
+
+            let screened = screen_resolved_addrs(resolved)
+                .map_err(|msg| box_dns_err(std::io::Error::other(msg)))?;
+            let addrs: reqwest::dns::Addrs = Box::new(screened.into_iter());
+            Ok(addrs)
+        })
+    }
+}
+
+fn box_dns_err<E>(err: E) -> Box<dyn std::error::Error + Send + Sync>
+where
+    E: std::error::Error + Send + Sync + 'static,
+{
+    Box::new(err)
+}
+
+/// Build the reqwest client used for URL extraction: a request timeout, a
+/// redirect policy that re-validates every hop's URL, and a DNS resolver that
+/// rejects non-public resolved IPs. Centralized here so the SSRF defenses stay
+/// in one place rather than being re-declared at each call site.
+pub fn build_extractor_client() -> reqwest::Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            if attempt.previous().len() >= 5 {
+                return attempt.error("too many redirects");
+            }
+            match validate_public_url(attempt.url().as_str()) {
+                Ok(_) => attempt.follow(),
+                Err(_) => attempt.stop(),
+            }
+        }))
+        .dns_resolver(Arc::new(PublicOnlyResolver))
+        .build()
 }
 
 /// Fetch a URL and extract readable markdown.
@@ -315,6 +387,33 @@ mod url_tests {
         assert!(validate_public_url("http://0.0.0.0/").is_err());
         // IPv4-mapped IPv6 form of a loopback address.
         assert!(validate_public_url("http://[::ffff:127.0.0.1]/").is_err());
+    }
+
+    #[test]
+    fn screen_resolved_addrs_rejects_empty() {
+        assert!(screen_resolved_addrs(Vec::new()).is_err());
+    }
+
+    #[test]
+    fn screen_resolved_addrs_rejects_any_blocked_address() {
+        // A hostname that resolves to both a public and a loopback address must
+        // be rejected: this is the DNS-rebinding vector.
+        let addrs: Vec<SocketAddr> =
+            vec!["93.184.216.34:0".parse().unwrap(), "127.0.0.1:0".parse().unwrap()];
+        assert!(screen_resolved_addrs(addrs).is_err());
+    }
+
+    #[test]
+    fn screen_resolved_addrs_rejects_link_local_metadata() {
+        let addrs: Vec<SocketAddr> = vec!["169.254.169.254:0".parse().unwrap()];
+        assert!(screen_resolved_addrs(addrs).is_err());
+    }
+
+    #[test]
+    fn screen_resolved_addrs_accepts_all_public() {
+        let addrs: Vec<SocketAddr> =
+            vec!["93.184.216.34:0".parse().unwrap(), "8.8.8.8:0".parse().unwrap()];
+        assert_eq!(screen_resolved_addrs(addrs.clone()).unwrap(), addrs);
     }
 }
 

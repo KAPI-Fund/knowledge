@@ -1,5 +1,4 @@
 use std::convert::Infallible;
-use std::time::Duration;
 
 use axum::extract::{Path, State};
 use axum::http::HeaderMap;
@@ -700,18 +699,7 @@ async fn extract_url_handler(
     let principal = resolve_principal(&state, &headers).await?;
     require_csrf(&principal, &headers)?;
 
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .redirect(reqwest::redirect::Policy::custom(|attempt| {
-            if attempt.previous().len() >= 5 {
-                return attempt.error("too many redirects");
-            }
-            match crate::canvas::service::validate_public_url(attempt.url().as_str()) {
-                Ok(_) => attempt.follow(),
-                Err(_) => attempt.stop(),
-            }
-        }))
-        .build()
+    let client = crate::canvas::service::build_extractor_client()
         .map_err(|error| ApiError::internal(format!("http client init failed: {error}")))?;
 
     match crate::canvas::service::fetch_url(&client, &body.url).await {
