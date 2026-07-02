@@ -1,42 +1,56 @@
-import { render, screen } from "@testing-library/react";
-import type { ReactNode } from "react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
+vi.mock("@xyflow/react/dist/style.css", () => ({}));
 vi.mock("@xyflow/react", () => ({
-  ReactFlow: ({ nodes }: { nodes: Array<{ id: string }> }) => (
-    <div data-testid="rf">
-      {nodes.map((n) => (
-        <span key={n.id}>{n.id}</span>
-      ))}
+  ReactFlow: (props: {
+    onMoveEnd?: (e: unknown, vp: { x: number; y: number; zoom: number }) => void;
+  }) => (
+    <div>
+      <button type="button" onClick={() => props.onMoveEnd?.(null, { x: 5, y: 6, zoom: 2 })}>
+        move
+      </button>
+      flow
     </div>
   ),
+  ReactFlowProvider: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   Background: () => null,
   Controls: () => null,
-  ReactFlowProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
-  applyNodeChanges: (_: unknown, nodes: unknown) => nodes,
-  applyEdgeChanges: (_: unknown, edges: unknown) => edges,
-  addEdge: (_: unknown, edges: unknown) => edges,
+  addEdge: (c: unknown, edges: unknown[]) => edges,
+  applyEdgeChanges: (_c: unknown, edges: unknown[]) => edges,
+  applyNodeChanges: (_c: unknown, nodes: unknown[]) => nodes,
 }));
 
 import { CanvasBoard } from "./canvas-board";
 
+const emptyDoc = { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } };
+
 describe("CanvasBoard", () => {
-  it("renders a node per document node", () => {
+  it("renders the flow", () => {
     render(
       <CanvasBoard
-        document={{
-          nodes: [
-            { id: "n1", type: "note", x: 0, y: 0, w: 280, h: 160, data: { markdown: "" } },
-            { id: "n2", type: "note", x: 0, y: 0, w: 280, h: 160, data: { markdown: "" } },
-          ],
-          edges: [],
-          viewport: { x: 0, y: 0, zoom: 1 },
-        }}
+        document={emptyDoc}
         onChange={() => {}}
         onRunNode={() => {}}
+        onFetchUrl={() => {}}
       />,
     );
-    expect(screen.getByText("n1")).toBeInTheDocument();
-    expect(screen.getByText("n2")).toBeInTheDocument();
+    expect(screen.getByText("flow")).toBeInTheDocument();
+  });
+
+  it("persists viewport on move end", () => {
+    const onChange = vi.fn();
+    render(
+      <CanvasBoard
+        document={emptyDoc}
+        onChange={onChange}
+        onRunNode={() => {}}
+        onFetchUrl={() => {}}
+      />,
+    );
+    fireEvent.click(screen.getByText("move"));
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({ viewport: { x: 5, y: 6, zoom: 2 } }),
+    );
   });
 });

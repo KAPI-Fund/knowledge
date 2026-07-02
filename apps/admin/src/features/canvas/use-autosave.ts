@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 export type SaveStatus = "idle" | "pending" | "saving" | "saved" | "error";
 
@@ -11,21 +11,33 @@ interface UseAutosaveOptions<T> {
 export function useAutosave<T>({ value, delayMs, onSave }: UseAutosaveOptions<T>) {
   const [status, setStatus] = useState<SaveStatus>("idle");
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const first = useRef(true);
+  const lastSaved = useRef<string | null>(null);
   const latest = useRef(value);
   latest.current = value;
 
+  const reset = useCallback((next: T) => {
+    lastSaved.current = JSON.stringify(next);
+  }, []);
+
   useEffect(() => {
-    if (first.current) {
-      first.current = false;
+    const serialized = JSON.stringify(value);
+    if (lastSaved.current === null) {
+      lastSaved.current = serialized;
+      return;
+    }
+    if (serialized === lastSaved.current) {
       return;
     }
     setStatus("pending");
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => {
+      const snapshot = JSON.stringify(latest.current);
       setStatus("saving");
       onSave(latest.current)
-        .then(() => setStatus("saved"))
+        .then(() => {
+          lastSaved.current = snapshot;
+          setStatus("saved");
+        })
         .catch(() => setStatus("error"));
     }, delayMs);
     return () => {
@@ -33,5 +45,5 @@ export function useAutosave<T>({ value, delayMs, onSave }: UseAutosaveOptions<T>
     };
   }, [value, delayMs, onSave]);
 
-  return { status };
+  return { status, reset };
 }

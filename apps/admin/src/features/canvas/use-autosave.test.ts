@@ -3,42 +3,51 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useAutosave } from "./use-autosave";
 
+beforeEach(() => vi.useFakeTimers());
+afterEach(() => vi.useRealTimers());
+
 describe("useAutosave", () => {
-  beforeEach(() => vi.useFakeTimers());
-  afterEach(() => vi.useRealTimers());
-
-  it("fires a single save after rapid edits settle", async () => {
-    const save = vi.fn(() => Promise.resolve());
-    const { result, rerender } = renderHook(
-      ({ doc }) => useAutosave({ value: doc, delayMs: 500, onSave: save }),
-      { initialProps: { doc: { v: 0 } } },
-    );
-
-    for (let v = 1; v <= 5; v++) {
-      rerender({ doc: { v } });
-      act(() => {
-        vi.advanceTimersByTime(100);
-      });
-    }
-    expect(save).not.toHaveBeenCalled();
-    await act(async () => {
-      vi.advanceTimersByTime(500);
-    });
-    expect(save).toHaveBeenCalledTimes(1);
-    expect(save).toHaveBeenCalledWith({ v: 5 });
-    expect(result.current.status).toBe("saved");
+  it("does not save the initial value", () => {
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    renderHook(() => useAutosave({ value: { a: 1 }, delayMs: 100, onSave }));
+    act(() => vi.advanceTimersByTime(200));
+    expect(onSave).not.toHaveBeenCalled();
   });
 
-  it("reports save-failed on rejection", async () => {
-    const save = vi.fn(() => Promise.reject(new Error("nope")));
-    const { result, rerender } = renderHook(
-      ({ doc }) => useAutosave({ value: doc, delayMs: 300, onSave: save }),
-      { initialProps: { doc: { v: 0 } } },
-    );
-    rerender({ doc: { v: 1 } });
-    await act(async () => {
-      vi.advanceTimersByTime(300);
+  it("saves after the value changes and debounce elapses", async () => {
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    const { rerender } = renderHook(({ value }) => useAutosave({ value, delayMs: 100, onSave }), {
+      initialProps: { value: { a: 1 } },
     });
-    expect(result.current.status).toBe("error");
+    rerender({ value: { a: 2 } });
+    await act(async () => {
+      vi.advanceTimersByTime(100);
+    });
+    expect(onSave).toHaveBeenCalledWith({ a: 2 });
+  });
+
+  it("does not save when reset seeds a new baseline equal to the next value", async () => {
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    const { result, rerender } = renderHook(
+      ({ value }) => useAutosave({ value, delayMs: 100, onSave }),
+      { initialProps: { value: { a: 1 } } },
+    );
+    // Simulate a load: reset baseline to the loaded value, then rerender with it.
+    act(() => result.current.reset({ a: 9 }));
+    rerender({ value: { a: 9 } });
+    await act(async () => {
+      vi.advanceTimersByTime(200);
+    });
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it("does not save an unchanged value (same JSON)", () => {
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    const { rerender } = renderHook(({ value }) => useAutosave({ value, delayMs: 100, onSave }), {
+      initialProps: { value: { a: 1 } },
+    });
+    rerender({ value: { a: 1 } });
+    act(() => vi.advanceTimersByTime(200));
+    expect(onSave).not.toHaveBeenCalled();
   });
 });

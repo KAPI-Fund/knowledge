@@ -1,14 +1,13 @@
 import { useMemo, useState } from "react";
 
 import { MarkdownMessage } from "@/components/shared/markdown-message";
-import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 
-import { useProjectsQuery } from "../projects/queries";
 import { streamCanvasChat } from "./stream";
+import { KbProjectPicker } from "./kb-picker";
 
 export const CANVAS_SKILLS = [
   { name: "/search", description: "Web search -> result node" },
@@ -75,7 +74,16 @@ export function ChatPanel({ canvasId, selectedNodeIds, onSkillNode }: ChatPanelP
     try {
       await streamCanvasChat(canvasId, text, selectedNodeIds, {
         onDelta: (delta) => appendAssistantDelta(assistantId, delta),
-        onNode: (payload) => onSkillNode(payload),
+        onNode: (payload) => {
+          onSkillNode(payload);
+          setMessages((prev) =>
+            prev.map((message) =>
+              message.id === assistantId
+                ? { ...message, content: "已在画布中添加节点。" }
+                : message,
+            ),
+          );
+        },
         onDone: () => setStreaming(false),
         onError: (message) => {
           appendAssistantDelta(assistantId, `\n\n> 出错了：${message}`);
@@ -163,36 +171,3 @@ export function ChatPanel({ canvasId, selectedNodeIds, onSkillNode }: ChatPanelP
   );
 }
 
-interface KbProjectPickerProps {
-  onPick: (project: { id: string; name: string }) => void;
-}
-
-function KbProjectPicker({ onPick }: KbProjectPickerProps) {
-  const projects = useProjectsQuery();
-  const items = projects.data ?? [];
-
-  if (projects.isLoading) {
-    return <p className="text-sm text-muted-foreground">加载项目中…</p>;
-  }
-  if (items.length === 0) {
-    return <p className="text-sm text-muted-foreground">没有可用的知识库。</p>;
-  }
-  return (
-    <div className="space-y-2">
-      <ul className="max-h-64 space-y-1 overflow-auto">
-        {items.map((project) => (
-          <li key={project.id}>
-            <Button
-              type="button"
-              variant="ghost"
-              className="w-full justify-start"
-              onClick={() => onPick(project)}
-            >
-              {project.name}
-            </Button>
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
-}

@@ -28,10 +28,11 @@ import type { CanvasDocument } from "./types";
 interface NodeCallbacks {
   onPatch: (patch: Record<string, unknown>) => void;
   onRun: () => void;
+  onFetchUrl: () => void;
 }
 
 function callbacks(data: Record<string, unknown>): NodeCallbacks {
-  return (data.__cb as NodeCallbacks | undefined) ?? { onPatch: () => {}, onRun: () => {} };
+  return (data.__cb as NodeCallbacks | undefined) ?? { onPatch: () => {}, onRun: () => {}, onFetchUrl: () => {} };
 }
 
 function NoteAdapter({ data }: NodeProps) {
@@ -50,7 +51,7 @@ function UrlAdapter({ data }: NodeProps) {
     <UrlNode
       data={data as unknown as UrlNodeData}
       onUrlChange={(url) => cb.onPatch({ url })}
-      onFetch={cb.onRun}
+      onFetch={cb.onFetchUrl}
     />
   );
 }
@@ -93,9 +94,11 @@ interface CanvasBoardProps {
   document: CanvasDocument;
   onChange: (next: CanvasDocument) => void;
   onRunNode: (nodeId: string) => void;
+  onFetchUrl: (nodeId: string) => void;
+  onSelectionChange?: (nodeIds: string[]) => void;
 }
 
-export function CanvasBoard({ document, onChange, onRunNode }: CanvasBoardProps) {
+export function CanvasBoard({ document, onChange, onRunNode, onFetchUrl, onSelectionChange }: CanvasBoardProps) {
   const patchNode = useCallback(
     (nodeId: string, patch: Record<string, unknown>) => {
       onChange({
@@ -119,10 +122,11 @@ export function CanvasBoard({ document, onChange, onRunNode }: CanvasBoardProps)
           __cb: {
             onPatch: (patch: Record<string, unknown>) => patchNode(n.id, patch),
             onRun: () => onRunNode(n.id),
+            onFetchUrl: () => onFetchUrl(n.id),
           } satisfies NodeCallbacks,
         },
       })),
-    [document.nodes, patchNode, onRunNode],
+    [document.nodes, patchNode, onRunNode, onFetchUrl],
   );
 
   const rfEdges = useMemo<Edge[]>(
@@ -168,6 +172,20 @@ export function CanvasBoard({ document, onChange, onRunNode }: CanvasBoardProps)
     [document, onChange, rfEdges],
   );
 
+  const handleSelectionChange = useCallback(
+    ({ nodes }: { nodes: Node[] }) => {
+      onSelectionChange?.(nodes.map((n) => n.id));
+    },
+    [onSelectionChange],
+  );
+
+  const onMoveEnd = useCallback(
+    (_event: unknown, viewport: { x: number; y: number; zoom: number }) => {
+      onChange({ ...document, viewport: { x: viewport.x, y: viewport.y, zoom: viewport.zoom } });
+    },
+    [document, onChange],
+  );
+
   return (
     <div className="h-full w-full">
       <ReactFlowProvider>
@@ -178,7 +196,9 @@ export function CanvasBoard({ document, onChange, onRunNode }: CanvasBoardProps)
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onConnect={onConnect}
-          fitView
+          onSelectionChange={handleSelectionChange}
+          defaultViewport={document.viewport}
+          onMoveEnd={onMoveEnd}
         >
           <Background />
           <Controls />

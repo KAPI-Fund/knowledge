@@ -32,7 +32,12 @@ export function parseSseBuffer(buffer: string): { events: CanvasStreamEvent[]; r
 
 export interface NodeRunHandlers {
   onDelta: (text: string) => void;
-  onDone: (payload: { versionId: string; content: string; createdAt: string }) => void;
+  onDone: (payload: {
+    versionId: string;
+    createdAt: string;
+    content?: string;
+    url?: string;
+  }) => void;
   onError: (message: string) => void;
 }
 
