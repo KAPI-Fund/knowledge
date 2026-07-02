@@ -146,7 +146,7 @@ export function CanvasPage() {
       if (!prev) {
         return prev;
       }
-      const position = nextNodePosition(prev);
+      const position = suggestedPosition(payload) ?? nextNodePosition(prev);
       const node: CanvasNode = {
         id,
         type: source.type,
@@ -226,6 +226,14 @@ function CanvasHeader({ title, status, onRetry, actions }: CanvasHeaderProps) {
       </div>
     </header>
   );
+}
+
+function suggestedPosition(payload: SkillNodePayload): { x: number; y: number } | null {
+  const { x, y } = payload;
+  if (Number.isFinite(x) && Number.isFinite(y) && (x !== 0 || y !== 0)) {
+    return { x, y };
+  }
+  return null;
 }
 
 function nextNodePosition(doc: CanvasDocument): { x: number; y: number } {

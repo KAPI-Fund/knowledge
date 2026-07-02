@@ -24,7 +24,10 @@ vi.mock("./chat-panel", () => ({
 let boardProps: {
   onFetchUrl?: (id: string) => void;
   onSelectionChange?: (ids: string[]) => void;
-  document?: { nodes: unknown[]; edges: { source: string; target: string }[] };
+  document?: {
+    nodes: { id: string; x: number; y: number }[];
+    edges: { source: string; target: string }[];
+  };
   onChange?: (doc: unknown) => void;
 } = {};
 vi.mock("./canvas-board", () => ({
@@ -84,6 +87,20 @@ describe("CanvasPage", () => {
     await waitFor(() => {
       const edges = boardProps.document?.edges ?? [];
       expect(edges.some((e) => e.source === "u1")).toBe(true);
+    });
+  });
+
+  it("places a skill node at non-zero payload coordinates", async () => {
+    render(<CanvasPage />);
+    await waitFor(() => expect(chatProps.onSkillNode).toBeTypeOf("function"));
+    chatProps.onSkillNode?.({
+      node: { type: "note", data: {} },
+      x: 321,
+      y: 654,
+    });
+    await waitFor(() => {
+      const nodes = boardProps.document?.nodes ?? [];
+      expect(nodes.some((n) => n.x === 321 && n.y === 654)).toBe(true);
     });
   });
 
