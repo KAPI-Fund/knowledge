@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::net::IpAddr;
 
 use scraper::{Html, Selector};
 
@@ -94,9 +95,64 @@ fn inline_markdown(el: scraper::ElementRef) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// Cap on the response body we will buffer from an extracted page (5 MiB).
+pub const MAX_EXTRACT_BYTES: usize = 5 * 1024 * 1024;
+
+/// Guard against SSRF: only allow http/https to public hosts. A literal-IP
+/// host in a private/loopback/link-local/unspecified range is rejected, as is
+/// `localhost`. This blocks the direct vectors (cloud metadata, internal
+/// services). It does NOT defend against a public hostname that resolves to a
+/// private IP (DNS rebinding) — that needs a pinning connector.
+pub fn validate_public_url(raw: &str) -> Result<reqwest::Url, String> {
+    let url = reqwest::Url::parse(raw).map_err(|_| "invalid URL".to_string())?;
+    match url.scheme() {
+        "http" | "https" => {}
+        other => return Err(format!("unsupported URL scheme: {other}")),
+    }
+    let host = url.host_str().ok_or_else(|| "URL has no host".to_string())?;
+    if host.eq_ignore_ascii_case("localhost") {
+        return Err("URL host is not allowed".to_string());
+    }
+    // IPv6 literals arrive bracketed (e.g. "[::1]"); strip them before parsing.
+    let host_ip = host.strip_prefix('[').and_then(|h| h.strip_suffix(']')).unwrap_or(host);
+    if let Ok(ip) = host_ip.parse::<IpAddr>()
+        && is_blocked_ip(&ip)
+    {
+        return Err("URL host is not allowed".to_string());
+    }
+    Ok(url)
+}
+
+fn is_blocked_ip(ip: &IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_unspecified()
+                || v4.is_broadcast()
+                || v4.is_documentation()
+                // 100.64.0.0/10 shared address space (CGNAT).
+                || (v4.octets()[0] == 100 && (v4.octets()[1] & 0xc0) == 0x40)
+        }
+        IpAddr::V6(v6) => {
+            if let Some(mapped) = v6.to_ipv4_mapped() {
+                return is_blocked_ip(&IpAddr::V4(mapped));
+            }
+            v6.is_loopback()
+                || v6.is_unspecified()
+                // Unique local fc00::/7.
+                || (v6.segments()[0] & 0xfe00) == 0xfc00
+                // Link-local fe80::/10.
+                || (v6.segments()[0] & 0xffc0) == 0xfe80
+        }
+    }
+}
+
 /// Fetch a URL and extract readable markdown.
 pub async fn fetch_url(client: &reqwest::Client, url: &str) -> Result<ExtractedPage, String> {
-    let response = client
+    let url = validate_public_url(url)?;
+    let mut response = client
         .get(url)
         .header("User-Agent", "Mozilla/5.0 (compatible; KnowledgeCanvas/1.0)")
         .send()
@@ -105,7 +161,14 @@ pub async fn fetch_url(client: &reqwest::Client, url: &str) -> Result<ExtractedP
     if !response.status().is_success() {
         return Err(format!("fetch failed: HTTP {}", response.status()));
     }
-    let html = response.text().await.map_err(|e| format!("read body failed: {e}"))?;
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|e| format!("read body failed: {e}"))? {
+        if body.len() + chunk.len() > MAX_EXTRACT_BYTES {
+            return Err("response too large".to_string());
+        }
+        body.extend_from_slice(&chunk);
+    }
+    let html = String::from_utf8_lossy(&body);
     Ok(html_to_markdown(&html))
 }
 
@@ -216,6 +279,42 @@ mod url_tests {
         let extracted = html_to_markdown("<html><body><p>hi</p></body></html>");
         assert_eq!(extracted.title, "Untitled");
         assert!(extracted.markdown.contains("hi"));
+    }
+
+    #[test]
+    fn validate_public_url_accepts_public_http_and_https() {
+        assert!(validate_public_url("http://93.184.216.34/").is_ok());
+        assert!(validate_public_url("https://example.com/page").is_ok());
+    }
+
+    #[test]
+    fn validate_public_url_rejects_non_http_schemes() {
+        assert!(validate_public_url("file:///etc/passwd").is_err());
+        assert!(validate_public_url("ftp://example.com/x").is_err());
+        assert!(validate_public_url("gopher://example.com/").is_err());
+    }
+
+    #[test]
+    fn validate_public_url_rejects_localhost_and_loopback() {
+        assert!(validate_public_url("http://localhost/").is_err());
+        assert!(validate_public_url("http://127.0.0.1/").is_err());
+        assert!(validate_public_url("http://[::1]/").is_err());
+    }
+
+    #[test]
+    fn validate_public_url_rejects_private_and_link_local() {
+        assert!(validate_public_url("http://10.0.0.1/").is_err());
+        assert!(validate_public_url("http://192.168.1.1/").is_err());
+        assert!(validate_public_url("http://172.16.5.4/").is_err());
+        // Cloud metadata endpoint (link-local).
+        assert!(validate_public_url("http://169.254.169.254/latest/meta-data/").is_err());
+    }
+
+    #[test]
+    fn validate_public_url_rejects_unspecified_and_mapped() {
+        assert!(validate_public_url("http://0.0.0.0/").is_err());
+        // IPv4-mapped IPv6 form of a loopback address.
+        assert!(validate_public_url("http://[::ffff:127.0.0.1]/").is_err());
     }
 }
 
