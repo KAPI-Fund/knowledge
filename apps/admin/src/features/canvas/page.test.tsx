@@ -1,8 +1,29 @@
 import { render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const extractUrl = vi.fn();
 
+function c1Data() {
+  return {
+    id: "c1",
+    title: "B",
+    document: {
+      nodes: [{ id: "u1", type: "url", x: 0, y: 0, w: 280, h: 160, data: { url: "https://x.test" } }],
+      edges: [],
+      viewport: { x: 0, y: 0, zoom: 1 },
+    },
+  };
+}
+
+let currentParams: { canvasId?: string } = { canvasId: "c1" };
+let canvasResult: { data: ReturnType<typeof c1Data> | undefined } = { data: c1Data() };
+
+beforeEach(() => {
+  currentParams = { canvasId: "c1" };
+  canvasResult = { data: c1Data() };
+});
+
+vi.mock("react-router-dom", () => ({ useParams: () => currentParams }));
 vi.mock("./api", () => ({ extractUrl: (url: string) => extractUrl(url) }));
 vi.mock("./history-sidebar", () => ({ HistorySidebar: () => <div>history</div> }));
 vi.mock("./canvas-toolbar", () => ({ CanvasToolbar: () => <div>toolbar</div> }));
@@ -39,17 +60,7 @@ vi.mock("./canvas-board", () => ({
 
 vi.mock("./queries", () => ({
   useCanvasList: () => ({ data: [], isLoading: false }),
-  useCanvas: () => ({
-    data: {
-      id: "c1",
-      title: "B",
-      document: {
-        nodes: [{ id: "u1", type: "url", x: 0, y: 0, w: 280, h: 160, data: { url: "https://x.test" } }],
-        edges: [],
-        viewport: { x: 0, y: 0, zoom: 1 },
-      },
-    },
-  }),
+  useCanvas: () => canvasResult,
   useCreateCanvas: () => ({ mutate: vi.fn() }),
   useSaveCanvas: () => ({ mutateAsync: vi.fn().mockResolvedValue(undefined) }),
   useDeleteCanvas: () => ({ mutate: vi.fn() }),
@@ -63,6 +74,22 @@ describe("CanvasPage", () => {
     expect(screen.getByText("history")).toBeInTheDocument();
     expect(screen.getByText("board")).toBeInTheDocument();
     expect(screen.getByText("chat")).toBeInTheDocument();
+  });
+
+  it("clears the loaded canvas when navigating to the index route", async () => {
+    const { rerender } = render(<CanvasPage />);
+    await waitFor(() => expect(screen.getByText("board")).toBeInTheDocument());
+
+    // Navigate from /canvas/c1 to /canvas: params clear and the detail query
+    // is disabled, so canvas.data becomes undefined.
+    currentParams = {};
+    canvasResult = { data: undefined };
+    rerender(<CanvasPage />);
+
+    await waitFor(() =>
+      expect(screen.getByText(/select a canvas on the left/i)).toBeInTheDocument(),
+    );
+    expect(screen.queryByText("board")).not.toBeInTheDocument();
   });
 
   it("fetches a url node through the extract endpoint", async () => {

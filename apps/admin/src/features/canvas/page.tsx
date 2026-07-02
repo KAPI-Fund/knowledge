@@ -34,6 +34,19 @@ export function CanvasPage() {
   const { status, reset } = useAutosave({ value: doc ?? emptyDoc(), delayMs: 800, onSave });
 
   useEffect(() => {
+    // The index route (/canvas) reuses this component instance, so clear any
+    // previously loaded canvas when the id goes away; otherwise the old board
+    // and its autosave state would linger.
+    if (!canvasId) {
+      if (loadedId.current !== undefined) {
+        loadedId.current = undefined;
+        setDoc(null);
+        setTitle("");
+        setSelectedNodeIds([]);
+        reset(emptyDoc());
+      }
+      return;
+    }
     // Load the document only when the canvas identity changes so local edits
     // and autosave writes are not clobbered by react-query refetches.
     if (canvas.data && loadedId.current !== canvas.data.id) {
@@ -43,7 +56,7 @@ export function CanvasPage() {
       setSelectedNodeIds([]);
       reset(canvas.data.document);
     }
-  }, [canvas.data, reset]);
+  }, [canvasId, canvas.data, reset]);
 
   const patchNodeData = useCallback((nodeId: string, patch: Record<string, unknown>) => {
     setDoc((prev) =>
