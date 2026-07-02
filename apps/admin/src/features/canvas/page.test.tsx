@@ -86,4 +86,23 @@ describe("CanvasPage", () => {
       expect(edges.some((e) => e.source === "u1")).toBe(true);
     });
   });
+
+  it("does not create edges to source ids absent from the canvas", async () => {
+    render(<CanvasPage />);
+    await waitFor(() => expect(chatProps.onSkillNode).toBeTypeOf("function"));
+    chatProps.onSkillNode?.({
+      node: {
+        type: "ai_analyze",
+        data: { prompt: "sum", sourceNodeIds: ["ghost"] },
+      },
+      x: 0,
+      y: 0,
+    });
+    await waitFor(() => {
+      const nodes = boardProps.document?.nodes ?? [];
+      expect(nodes.length).toBe(2);
+    });
+    const edges = boardProps.document?.edges ?? [];
+    expect(edges.some((e) => e.source === "ghost")).toBe(false);
+  });
 });

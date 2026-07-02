@@ -23,6 +23,7 @@ export function CanvasPage() {
   const save = useSaveCanvas(canvasId ?? "");
   const [doc, setDoc] = useState<CanvasDocument | null>(null);
   const [title, setTitle] = useState("");
+  const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
   const loadedId = useRef<string | undefined>(undefined);
 
   const onSave = useCallback(
@@ -39,6 +40,7 @@ export function CanvasPage() {
       loadedId.current = canvas.data.id;
       setDoc(canvas.data.document);
       setTitle(canvas.data.title);
+      setSelectedNodeIds([]);
       reset(canvas.data.document);
     }
   }, [canvas.data, reset]);
@@ -137,8 +139,6 @@ export function CanvasPage() {
     [doc, patchNodeData],
   );
 
-  const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
-
   const addSkillNode = useCallback((payload: SkillNodePayload) => {
     const source = payload.node as { type: CanvasNode["type"]; data?: Record<string, unknown> };
     const id = crypto.randomUUID();
@@ -156,9 +156,10 @@ export function CanvasPage() {
         h: 160,
         data: source.data ?? {},
       };
+      const existingIds = new Set(prev.nodes.map((n) => n.id));
       const sourceIds = Array.isArray(source.data?.sourceNodeIds)
         ? (source.data?.sourceNodeIds as unknown[]).filter(
-            (s): s is string => typeof s === "string",
+            (s): s is string => typeof s === "string" && existingIds.has(s),
           )
         : [];
       const newEdges = sourceIds.map((src) => ({
