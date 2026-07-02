@@ -23,6 +23,7 @@ beforeEach(() => {
   currentParams = { canvasId: "c1" };
   canvasResult = { data: c1Data() };
   saveCanvas.mockReset();
+  saveCanvas.mockResolvedValue(undefined);
 });
 
 vi.mock("react-router-dom", () => ({ useParams: () => currentParams }));
@@ -192,6 +193,26 @@ describe("CanvasPage", () => {
     currentParams = {};
     canvasResult = { data: undefined };
     rerender(<CanvasPage />);
+
+    await waitFor(() =>
+      expect(saveCanvas).toHaveBeenCalledWith("c1", expect.objectContaining({ document: edited })),
+    );
+  });
+
+  it("flushes a pending edit when the page unmounts (leaving for another route)", async () => {
+    saveCanvas.mockResolvedValue(undefined);
+    const { unmount } = render(<CanvasPage />);
+    await waitFor(() => expect(boardProps.onChange).toBeTypeOf("function"));
+
+    // Edit c1 while inside the 800ms debounce, then leave the canvas section
+    // entirely (e.g. click a sidebar link to /projects) which unmounts the page.
+    const edited = {
+      nodes: [{ id: "u1", type: "url", x: 7, y: 8, w: 280, h: 160, data: { url: "https://x.test" } }],
+      edges: [],
+      viewport: { x: 0, y: 0, zoom: 1 },
+    };
+    act(() => boardProps.onChange?.(edited));
+    unmount();
 
     await waitFor(() =>
       expect(saveCanvas).toHaveBeenCalledWith("c1", expect.objectContaining({ document: edited })),

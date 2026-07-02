@@ -33,6 +33,25 @@ export function CanvasPage() {
 
   const { status, reset, flush } = useAutosave({ value: doc ?? emptyDoc(), delayMs: 800, onSave });
 
+  // Flush a pending edit to the currently loaded canvas's own id. `onSave` is
+  // bound to the route id, which is wrong once the route has moved on, so we
+  // save through the loaded id captured here instead.
+  const flushLoaded = useCallback(() => {
+    const staleId = loadedId.current;
+    if (!staleId) {
+      return;
+    }
+    return flush((value) => saveCanvas(staleId, { title, document: value }));
+  }, [flush, title]);
+
+  // A same-instance route change runs the load effect's clear branch; leaving
+  // the canvas section entirely unmounts this component and only runs effect
+  // cleanups. Flush on unmount too so the last in-debounce edit is not lost.
+  // The ref keeps the [] cleanup pinned to the latest loaded id/title/doc.
+  const flushLoadedRef = useRef(flushLoaded);
+  flushLoadedRef.current = flushLoaded;
+  useEffect(() => () => void flushLoadedRef.current(), []);
+
   useEffect(() => {
     // Only treat data as loaded when it matches the current route id. This
     // component instance is reused across /canvas, /canvas/c1, /canvas/c2, so
@@ -57,19 +76,18 @@ export function CanvasPage() {
     // load error, or stale data from a previous id. Drop any previous board
     // and reset autosave so a pending write cannot land under the new id.
     if (loadedId.current !== undefined) {
-      const staleId = loadedId.current;
-      loadedId.current = undefined;
       // Persist any edit still inside the autosave debounce before dropping the
       // board. reset() below cancels the timer, and onSave is bound to the new
       // route id, so without flushing to the leaving canvas's own id the last
       // edit made within the debounce window would be lost.
-      flush((value) => saveCanvas(staleId, { title, document: value }));
+      flushLoaded();
+      loadedId.current = undefined;
       setDoc(null);
       setTitle("");
       setSelectedNodeIds([]);
       reset(emptyDoc());
     }
-  }, [canvasId, canvas.data, reset, flush, title]);
+  }, [canvasId, canvas.data, reset, flushLoaded]);
 
   const patchNodeData = useCallback((nodeId: string, patch: Record<string, unknown>) => {
     setDoc((prev) =>
