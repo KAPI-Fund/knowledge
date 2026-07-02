@@ -182,7 +182,7 @@ export function CanvasPage() {
           </div>
         ) : (
           <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
-            从左侧选择或“新建画布”开始。
+            Select a canvas on the left, or create a new one.
           </div>
         )}
       </div>
@@ -193,10 +193,10 @@ export function CanvasPage() {
 
 const statusLabels: Record<SaveStatus, { text: string; className: string }> = {
   idle: { text: "", className: "text-muted-foreground" },
-  pending: { text: "待保存…", className: "text-muted-foreground" },
-  saving: { text: "保存中…", className: "text-muted-foreground" },
-  saved: { text: "已保存", className: "text-emerald-600" },
-  error: { text: "保存失败 · 重试", className: "text-destructive" },
+  pending: { text: "Unsaved…", className: "text-muted-foreground" },
+  saving: { text: "Saving…", className: "text-muted-foreground" },
+  saved: { text: "Saved", className: "text-emerald-600" },
+  error: { text: "Save failed · Retry", className: "text-destructive" },
 };
 
 interface CanvasHeaderProps {
@@ -210,7 +210,7 @@ function CanvasHeader({ title, status, onRetry, actions }: CanvasHeaderProps) {
   const label = statusLabels[status];
   return (
     <header className="flex items-center justify-between gap-2 border-b px-4 py-2">
-      <span className="truncate text-sm font-semibold">{title || "未命名画布"}</span>
+      <span className="truncate text-sm font-semibold">{title || "Untitled canvas"}</span>
       <div className="flex items-center gap-3">
         {actions}
         {label.text ? (

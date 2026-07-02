@@ -23,7 +23,7 @@ vi.mock("./stream", () => ({
 describe("ChatPanel slash menu", () => {
   it("lists the four v1 skills when input starts with /", () => {
     render(<ChatPanel canvasId="c1" selectedNodeIds={[]} onSkillNode={() => {}} />);
-    const input = screen.getByPlaceholderText("/ 或提问");
+    const input = screen.getByPlaceholderText("/ or ask");
     fireEvent.change(input, { target: { value: "/" } });
     expect(screen.getByText("/search")).toBeInTheDocument();
     expect(screen.getByText("/image")).toBeInTheDocument();
@@ -36,10 +36,10 @@ describe("ChatPanel skill submit", () => {
   it("calls onSkillNode when a search skill returns a node", async () => {
     const onSkillNode = vi.fn();
     render(<ChatPanel canvasId="c1" selectedNodeIds={[]} onSkillNode={onSkillNode} />);
-    const input = screen.getByPlaceholderText("/ 或提问");
+    const input = screen.getByPlaceholderText("/ or ask");
     fireEvent.change(input, { target: { value: "/search cats" } });
     fireEvent.submit(input.closest("form")!);
     await waitFor(() => expect(onSkillNode).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(screen.getByText("已在画布中添加节点。")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("Added a node to the canvas.")).toBeInTheDocument());
   });
 });

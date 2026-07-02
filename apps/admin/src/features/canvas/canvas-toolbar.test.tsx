@@ -9,13 +9,13 @@ describe("CanvasToolbar", () => {
   it("adds a note node", () => {
     const onAdd = vi.fn();
     render(<CanvasToolbar onAdd={onAdd} />);
-    fireEvent.click(screen.getByRole("button", { name: "笔记" }));
+    fireEvent.click(screen.getByRole("button", { name: "Note" }));
     expect(onAdd).toHaveBeenCalledWith({ node: { type: "note", data: {} }, x: 0, y: 0 });
   });
 
   it("opens the kb picker dialog", () => {
     render(<CanvasToolbar onAdd={() => {}} />);
-    fireEvent.click(screen.getByRole("button", { name: "知识库" }));
+    fireEvent.click(screen.getByRole("button", { name: "Knowledge base" }));
     expect(screen.getByText("kb-picker")).toBeInTheDocument();
   });
 });

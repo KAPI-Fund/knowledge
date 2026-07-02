@@ -79,14 +79,14 @@ export function ChatPanel({ canvasId, selectedNodeIds, onSkillNode }: ChatPanelP
           setMessages((prev) =>
             prev.map((message) =>
               message.id === assistantId
-                ? { ...message, content: "已在画布中添加节点。" }
+                ? { ...message, content: "Added a node to the canvas." }
                 : message,
             ),
           );
         },
         onDone: () => setStreaming(false),
         onError: (message) => {
-          appendAssistantDelta(assistantId, `\n\n> 出错了：${message}`);
+          appendAssistantDelta(assistantId, `\n\n> Error: ${message}`);
           setStreaming(false);
         },
       });
@@ -97,10 +97,10 @@ export function ChatPanel({ canvasId, selectedNodeIds, onSkillNode }: ChatPanelP
 
   return (
     <section className="flex h-full w-80 shrink-0 flex-col border-l bg-card">
-      <div className="border-b p-3 text-sm font-semibold">对话</div>
+      <div className="border-b p-3 text-sm font-semibold">Chat</div>
       <ScrollArea className="min-h-0 flex-1 space-y-3 p-3">
         {messages.length === 0 ? (
-          <p className="text-xs text-muted-foreground">输入问题，或以 “/” 触发技能。</p>
+          <p className="text-xs text-muted-foreground">Ask a question, or type "/" to use a skill.</p>
         ) : (
           messages.map((message) => (
             <div
@@ -142,7 +142,7 @@ export function ChatPanel({ canvasId, selectedNodeIds, onSkillNode }: ChatPanelP
           <Input
             value={input}
             onChange={(event) => setInput(event.target.value)}
-            placeholder="/ 或提问"
+            placeholder="/ or ask"
             disabled={streaming}
           />
         </form>
@@ -152,7 +152,7 @@ export function ChatPanel({ canvasId, selectedNodeIds, onSkillNode }: ChatPanelP
         <Dialog open onOpenChange={setKbOpen}>
           <DialogContent>
             <DialogHeader>
-              <DialogTitle>选择知识库</DialogTitle>
+              <DialogTitle>Select knowledge base</DialogTitle>
             </DialogHeader>
             <KbProjectPicker
               onPick={(project) => {

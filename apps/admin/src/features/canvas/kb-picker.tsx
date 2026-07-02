@@ -11,10 +11,10 @@ export function KbProjectPicker({ onPick }: KbProjectPickerProps) {
   const items = projects.data ?? [];
 
   if (projects.isLoading) {
-    return <p className="text-sm text-muted-foreground">加载项目中…</p>;
+    return <p className="text-sm text-muted-foreground">Loading projects…</p>;
   }
   if (items.length === 0) {
-    return <p className="text-sm text-muted-foreground">没有可用的知识库。</p>;
+    return <p className="text-sm text-muted-foreground">No knowledge bases available.</p>;
   }
   return (
     <div className="space-y-2">

@@ -25,7 +25,7 @@ export function HistorySidebar({ activeId }: HistorySidebarProps) {
   return (
     <aside className="flex h-full w-64 shrink-0 flex-col border-r bg-sidebar text-sidebar-foreground">
       <div className="flex items-center justify-between gap-2 p-3">
-        <span className="text-sm font-semibold">画布</span>
+        <span className="text-sm font-semibold">Canvases</span>
         <Button
           type="button"
           size="sm"
@@ -33,14 +33,14 @@ export function HistorySidebar({ activeId }: HistorySidebarProps) {
           disabled={createCanvas.isPending}
         >
           <Plus className="size-3" />
-          新建画布
+          New canvas
         </Button>
       </div>
       <ScrollArea className="min-h-0 flex-1 px-2 pb-2">
         {list.isLoading ? (
-          <p className="px-2 py-4 text-xs text-muted-foreground">加载中…</p>
+          <p className="px-2 py-4 text-xs text-muted-foreground">Loading…</p>
         ) : (list.data ?? []).length === 0 ? (
-          <p className="px-2 py-4 text-xs text-muted-foreground">还没有画布，点击“新建画布”。</p>
+          <p className="px-2 py-4 text-xs text-muted-foreground">No canvases yet — click "New canvas".</p>
         ) : (
           <ul className="space-y-1">
             {(list.data ?? []).map((canvas) => (
@@ -53,7 +53,7 @@ export function HistorySidebar({ activeId }: HistorySidebarProps) {
                     canvas.id === activeId && "bg-sidebar-accent font-medium",
                   )}
                 >
-                  {canvas.title || "未命名画布"}
+                  {canvas.title || "Untitled canvas"}
                 </button>
               </li>
             ))}

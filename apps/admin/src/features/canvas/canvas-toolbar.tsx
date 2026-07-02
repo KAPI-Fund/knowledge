@@ -22,7 +22,7 @@ export function CanvasToolbar({ onAdd }: CanvasToolbarProps) {
         onClick={() => onAdd({ node: { type: "note", data: {} }, x: 0, y: 0 })}
       >
         <FileText className="size-3" />
-        笔记
+        Note
       </Button>
       <Button
         type="button"
@@ -31,17 +31,17 @@ export function CanvasToolbar({ onAdd }: CanvasToolbarProps) {
         onClick={() => onAdd({ node: { type: "url", data: {} }, x: 0, y: 0 })}
       >
         <Globe className="size-3" />
-        网页
+        Web page
       </Button>
       <Button type="button" size="sm" variant="outline" onClick={() => setKbOpen(true)}>
         <Database className="size-3" />
-        知识库
+        Knowledge base
       </Button>
       {kbOpen ? (
         <Dialog open onOpenChange={setKbOpen}>
           <DialogContent>
             <DialogHeader>
-              <DialogTitle>选择知识库</DialogTitle>
+              <DialogTitle>Select knowledge base</DialogTitle>
             </DialogHeader>
             <KbProjectPicker
               onPick={(project) => {
