@@ -234,6 +234,11 @@ pub fn build_extractor_client() -> reqwest::Result<reqwest::Client> {
                 Err(_) => attempt.stop(),
             }
         }))
+        // Disable any system/environment proxy. A proxy would resolve the
+        // target host itself, so PublicOnlyResolver would never run and could
+        // not screen the final address -- reopening the SSRF hole this client
+        // exists to close.
+        .no_proxy()
         .dns_resolver(Arc::new(PublicOnlyResolver))
         .build()
 }
