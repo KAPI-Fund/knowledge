@@ -271,6 +271,34 @@ describe("CanvasPage", () => {
     );
   });
 
+  it("auto-retries a leave-save that fails after the page unmounts", async () => {
+    // Unmount runs the flush in an effect cleanup, so a rejected save cannot
+    // render the header Retry button. The edit must not be silently lost: a
+    // background loop retries the save under c1's own id.
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.useFakeTimers();
+    try {
+      saveCanvas.mockRejectedValue(new Error("save failed"));
+      const { unmount } = render(<CanvasPage />);
+
+      const edited = {
+        nodes: [{ id: "u1", type: "url", x: 12, y: 34, w: 280, h: 160, data: { url: "https://x.test" } }],
+        edges: [],
+        viewport: { x: 0, y: 0, zoom: 1 },
+      };
+      act(() => boardProps.onChange?.(edited));
+      unmount();
+
+      await vi.runAllTimersAsync();
+      expect(saveCanvas).toHaveBeenCalledWith("c1", expect.objectContaining({ document: edited }));
+      // The initial flush plus at least one background retry.
+      expect(saveCanvas.mock.calls.length).toBeGreaterThanOrEqual(2);
+    } finally {
+      vi.useRealTimers();
+      errorSpy.mockRestore();
+    }
+  });
+
   it("retains a failed leave-save so it can be retried under the old canvas id", async () => {
     // The save triggered by leaving c1 fails. The old content must not be
     // discarded: the snapshot is retained and retriable under c1's own id,

@@ -9,6 +9,7 @@ import { CanvasToolbar } from "./canvas-toolbar";
 import { ChatPanel, type SkillNodePayload } from "./chat-panel";
 import { HistorySidebar } from "./history-sidebar";
 import { useCanvas, useCanvasCacheSave, useSaveCanvas } from "./queries";
+import { retrySaveInBackground } from "./save-retry";
 import { runCanvasNode } from "./stream";
 import type { CanvasDocument, CanvasNode } from "./types";
 import { useAutosave, type SaveStatus } from "./use-autosave";
@@ -44,23 +45,46 @@ export function CanvasPage() {
 
   // Flush a pending edit to the currently loaded canvas's own id. `onSave` is
   // bound to the route id, which is wrong once the route has moved on, so we
-  // save through the loaded id captured here instead.
-  const flushLoaded = useCallback(() => {
-    const staleId = loadedId.current;
-    const staleTitle = title;
-    if (!staleId) {
-      return;
-    }
-    return flush((value) =>
-      cacheSave(staleId, { title: staleTitle, document: value }).catch((error: unknown) => {
-        // The board for staleId is about to be dropped, so a lost save here is
-        // unrecoverable via the current-doc Retry (that saves the new doc, not
-        // this one). Retain the snapshot under its own id so it can be retried.
-        setFailedSave({ id: staleId, title: staleTitle, document: value });
-        throw error;
-      }),
-    );
-  }, [flush, title, cacheSave]);
+  // save through the loaded id captured here instead. The failure sink differs
+  // by exit path (see the two callers below), so it is passed in.
+  const flushLoadedWith = useCallback(
+    (onFail: (snapshot: { id: string; title: string; document: CanvasDocument }) => void) => {
+      const staleId = loadedId.current;
+      const staleTitle = title;
+      if (!staleId) {
+        return;
+      }
+      return flush((value) =>
+        cacheSave(staleId, { title: staleTitle, document: value }).catch((error: unknown) => {
+          onFail({ id: staleId, title: staleTitle, document: value });
+          throw error;
+        }),
+      );
+    },
+    [flush, title, cacheSave],
+  );
+
+  // Same-instance route change (e.g. /canvas/c1 -> /canvas): the board is
+  // dropped but the page stays mounted, so a failed leave-save can retain the
+  // snapshot and surface the header Retry button.
+  const flushLoaded = useCallback(
+    () => flushLoadedWith((snapshot) => setFailedSave(snapshot)),
+    [flushLoadedWith],
+  );
+
+  // Leaving the canvas section entirely unmounts the page, so setFailedSave
+  // would target an unmounted component and render no Retry affordance. Retry
+  // the save in the background under the leaving canvas's own id instead; the
+  // cacheSave closure keeps the query cache consistent on a successful retry.
+  const flushLoadedOnUnmount = useCallback(
+    () =>
+      flushLoadedWith((snapshot) =>
+        retrySaveInBackground(() =>
+          cacheSave(snapshot.id, { title: snapshot.title, document: snapshot.document }),
+        ),
+      ),
+    [flushLoadedWith, cacheSave],
+  );
 
   const retryFailedSave = useCallback(() => {
     const pending = failedSave;
@@ -74,10 +98,11 @@ export function CanvasPage() {
 
   // A same-instance route change runs the load effect's clear branch; leaving
   // the canvas section entirely unmounts this component and only runs effect
-  // cleanups. Flush on unmount too so the last in-debounce edit is not lost.
+  // cleanups. Flush on unmount too so the last in-debounce edit is not lost --
+  // via the background-retry variant, since no Retry button can render here.
   // The ref keeps the [] cleanup pinned to the latest loaded id/title/doc.
-  const flushLoadedRef = useRef(flushLoaded);
-  flushLoadedRef.current = flushLoaded;
+  const flushLoadedRef = useRef(flushLoadedOnUnmount);
+  flushLoadedRef.current = flushLoadedOnUnmount;
   useEffect(() => () => void flushLoadedRef.current(), []);
 
   useEffect(() => {
