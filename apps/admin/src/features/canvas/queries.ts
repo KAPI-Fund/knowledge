@@ -5,16 +5,17 @@ import type { CanvasDocument } from "./types";
 
 export const canvasKeys = {
   all: ["canvases"] as const,
-  detail: (id: string) => ["canvases", id] as const,
+  list: () => ["canvases", "list"] as const,
+  detail: (id: string) => ["canvases", "detail", id] as const,
 };
 
 export function useCanvasList() {
-  return useQuery({ queryKey: canvasKeys.all, queryFn: listCanvases });
+  return useQuery({ queryKey: canvasKeys.list(), queryFn: listCanvases });
 }
 
 export function useCanvas(id: string | undefined) {
   return useQuery({
-    queryKey: id ? canvasKeys.detail(id) : canvasKeys.all,
+    queryKey: canvasKeys.detail(id ?? ""),
     queryFn: () => getCanvas(id as string),
     enabled: Boolean(id),
   });
