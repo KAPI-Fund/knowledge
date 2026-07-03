@@ -17,9 +17,10 @@ use crate::canvas::document::CanvasDocument;
 use crate::canvas::store;
 use crate::http::error::ApiError;
 use crate::providers::{
-    OpenAiCompatibleProvider, ProviderChatMessage, ProviderChatStreamRequest, ProviderImageRequest,
+    load_active_connection, load_image_config, ProviderChatMessage, ProviderChatStreamRequest,
+    ProviderImageRequest,
 };
-use crate::query::{QuerySettings, load_query_settings};
+use crate::query::load_query_settings;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -223,23 +224,6 @@ fn now_rfc3339() -> String {
     OffsetDateTime::now_utc().format(&Rfc3339).unwrap_or_default()
 }
 
-/// Build an OpenAI-compatible provider from stored settings, rejecting an
-/// incomplete configuration the same way `chat/routes.rs` does.
-fn build_provider(settings: &QuerySettings) -> Result<OpenAiCompatibleProvider, ApiError> {
-    if settings.provider_mode != "openai-compatible"
-        || settings.provider_base_url.as_deref().unwrap_or("").trim().is_empty()
-        || settings.provider_model.as_deref().unwrap_or("").trim().is_empty()
-    {
-        return Err(ApiError::bad_request("provider configuration is incomplete"));
-    }
-    Ok(OpenAiCompatibleProvider::new(
-        settings.provider_base_url.clone().unwrap_or_default(),
-        settings.provider_api_key.clone().unwrap_or_default(),
-        settings.provider_model.clone().unwrap_or_default(),
-        settings.provider_timeout_seconds.unwrap_or(30),
-    ))
-}
-
 /// A canvas-chat message is either a slash-command skill or a plain prompt.
 #[derive(Debug, PartialEq, Eq)]
 enum ChatCommand {
@@ -294,8 +278,7 @@ async fn run_node_handler(
         if node_prompt.trim().is_empty() {
             return Err(ApiError::bad_request("image node has no prompt"));
         }
-        let settings = load_query_settings(&state).await?;
-        build_provider(&settings)?; // validate config before streaming
+        load_image_config(&state).await?; // validate image config before streaming
         let user_id = principal.user_id.clone();
         let prompt = node_prompt.clone();
         let stream_state = state.clone();
@@ -361,7 +344,7 @@ async fn run_node_handler(
     let prompt = crate::canvas::service::build_analyze_prompt(&node_prompt, &blocks);
 
     let settings = load_query_settings(&state).await?;
-    let provider = build_provider(&settings)?;
+    let provider = load_active_connection(&state).await?.provider();
     let system_prompt = format!(
         "You are an analysis assistant reasoning over a knowledge canvas. Respond in {}. Use only the provided sources; if they are insufficient, say so plainly.",
         settings.language
@@ -535,8 +518,8 @@ async fn chat_handler(
                         return;
                     }
                 };
-                let provider = match build_provider(&settings) {
-                    Ok(provider) => provider,
+                let provider = match load_active_connection(&stream_state).await {
+                    Ok(connection) => connection.provider(),
                     Err(error) => {
                         yield Ok(sse_error(&error.to_string()));
                         return;
@@ -612,10 +595,10 @@ async fn run_image_skill(
     user_id: &str,
     prompt: &str,
 ) -> Result<serde_json::Value, String> {
-    let settings = load_query_settings(state).await.map_err(|error| error.to_string())?;
-    let provider = build_provider(&settings).map_err(|error| error.to_string())?;
-    let result = provider
-        .generate_image(ProviderImageRequest { prompt: prompt.to_string(), size: "1024x1024".to_string() })
+    let config = load_image_config(state).await.map_err(|error| error.to_string())?;
+    let result = config
+        .provider()
+        .generate_image(ProviderImageRequest { prompt: prompt.to_string(), size: config.size.clone() })
         .await
         .map_err(|error| error.message().to_string())?;
     let asset = crate::assets::store::NewAsset::new(user_id, &result.mime, result.bytes);

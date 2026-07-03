@@ -19,7 +19,7 @@ use crate::chat::store::{
 use crate::http::error::ApiError;
 use crate::projects::routes::{authorized_principal, validate_csrf};
 use crate::projects::service::project_root_for_id;
-use crate::providers::{OpenAiCompatibleProvider, ProviderChatMessage, ProviderChatStreamRequest};
+use crate::providers::{load_active_connection, ProviderChatMessage, ProviderChatStreamRequest};
 use crate::query::load_query_settings;
 
 pub fn router() -> Router<AppState> {
@@ -155,22 +155,7 @@ async fn send_message_handler(
         .ok_or_else(|| ApiError::not_found("conversation not found"))?;
 
     let settings = load_query_settings(&state).await?;
-    if settings.provider_mode != "openai-compatible"
-        || settings
-            .provider_base_url
-            .as_deref()
-            .unwrap_or("")
-            .trim()
-            .is_empty()
-        || settings
-            .provider_model
-            .as_deref()
-            .unwrap_or("")
-            .trim()
-            .is_empty()
-    {
-        return Err(ApiError::bad_request("provider configuration is incomplete"));
-    }
+    let connection = load_active_connection(&state).await?;
 
     let root = project_root_for_id(&state, &project_id).await?;
     let history = list_messages(&state.pool, &conversation_id).await?;
@@ -204,12 +189,7 @@ async fn send_message_handler(
         content,
     });
 
-    let provider = OpenAiCompatibleProvider::new(
-        settings.provider_base_url.clone().unwrap_or_default(),
-        settings.provider_api_key.clone().unwrap_or_default(),
-        settings.provider_model.clone().unwrap_or_default(),
-        settings.provider_timeout_seconds.unwrap_or(30),
-    );
+    let provider = connection.provider();
 
     let context_summary = assembled.context_summary;
     let stream_state = state.clone();
