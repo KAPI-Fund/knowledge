@@ -498,6 +498,16 @@ async fn update_settings(
 
   if let Some(search) = &payload.search {
       if let Some(provider) = &search.provider {
+          // Reject unknown selectors at write time so the failure surfaces here
+          // as a 400 instead of a later 500 when web-search parses the stored value.
+          if !matches!(
+              provider.as_str(),
+              "none" | "tavily" | "serpapi" | "searxng" | "ollama"
+          ) {
+              return Err(ApiError::bad_request(format!(
+                  "unknown search provider: {provider:?}"
+              )));
+          }
           sqlx::query("UPDATE system_settings SET search_provider = $1 WHERE id = 1")
               .bind(provider)
               .execute(&state.pool)

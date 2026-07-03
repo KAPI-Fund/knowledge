@@ -1,4 +1,3 @@
-use serde::Serialize;
 use sqlx::PgPool;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
@@ -73,7 +72,7 @@ fn now() -> Result<String, ApiError> {
 }
 
 /// Fields accepted when creating a connection.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 pub struct NewConnection {
     pub label: String,
     pub base_url: String,
@@ -202,14 +201,19 @@ pub async fn update_connection(
 }
 
 /// Activate one connection, clearing is_active on all others in a single UPDATE
-/// so exactly one row stays active.
+/// so exactly one row stays active. The EXISTS guard makes a missing id a no-op
+/// (rows_affected == 0 -> not_found) instead of clearing every row's is_active,
+/// which would leave the list with zero active connections.
 pub async fn activate_connection(pool: &PgPool, id: &str) -> Result<(), ApiError> {
-    let affected = sqlx::query("UPDATE provider_connections SET is_active = (id = $1)")
-        .bind(id)
-        .execute(pool)
-        .await
-        .map_err(ApiError::from)?
-        .rows_affected();
+    let affected = sqlx::query(
+        "UPDATE provider_connections SET is_active = (id = $1)
+         WHERE EXISTS (SELECT 1 FROM provider_connections WHERE id = $1)",
+    )
+    .bind(id)
+    .execute(pool)
+    .await
+    .map_err(ApiError::from)?
+    .rows_affected();
     if affected == 0 {
         return Err(ApiError::not_found("connection not found"));
     }
