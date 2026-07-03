@@ -31,6 +31,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/canvases/{id}/nodes/{node_id}/run", post(run_node_handler))
         .route("/api/canvases/{id}/chat", post(chat_handler))
         .route("/api/canvas/extract-url", post(extract_url_handler))
+        .route("/api/canvas/search", post(search_handler))
 }
 
 // ---------------------------------------------------------------------------
@@ -597,22 +598,7 @@ async fn chat_handler(
 /// `/search` skill: run web search and return a `note` node carrying the
 /// results as markdown (no URL of its own).
 async fn run_search_skill(state: &AppState, query: &str) -> Result<serde_json::Value, String> {
-    let config = crate::web_search::config::load_web_search_config(state)
-        .await
-        .map_err(|error| error.to_string())?
-        .ok_or_else(|| "web search is not configured".to_string())?;
-    let hits = crate::web_search::provider::web_search(&config, query, 5)
-        .await
-        .map_err(|error| error.to_string())?;
-    let entries: Vec<crate::canvas::service::SearchResultEntry> = hits
-        .into_iter()
-        .map(|hit| crate::canvas::service::SearchResultEntry {
-            title: hit.title,
-            url: hit.url,
-            snippet: hit.snippet,
-        })
-        .collect();
-    let markdown = crate::canvas::service::search_results_to_markdown(query, &entries);
+    let markdown = run_web_search_markdown(state, query).await?;
     Ok(json!({
         "type": "note",
         "data": { "title": format!("Search: {query}"), "markdown": markdown }
@@ -689,6 +675,59 @@ fn build_analyze_node(prompt: &str, selected_ids: &[String]) -> serde_json::Valu
 #[derive(Debug, Deserialize)]
 struct ExtractUrlRequest {
     url: String,
+}
+
+// ---------------------------------------------------------------------------
+// Web search: run a query and return results as markdown (in-place node fill)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+struct SearchRequest {
+    query: String,
+}
+
+async fn search_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<SearchRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let principal = resolve_principal(&state, &headers).await?;
+    require_csrf(&principal, &headers)?;
+
+    let query = body.query.trim();
+    if query.is_empty() {
+        return Err(ApiError::bad_request("search query must not be empty"));
+    }
+
+    match run_web_search_markdown(&state, query).await {
+        Ok(markdown) => Ok(Json(json!({
+            "status": "ok", "query": query, "markdown": markdown, "error": null
+        }))),
+        Err(error) => Ok(Json(json!({
+            "status": "error", "query": query, "markdown": "", "error": error
+        }))),
+    }
+}
+
+/// Run web search for `query` and format the hits as markdown. Shared by the
+/// REST search endpoint and the `/search` chat skill.
+async fn run_web_search_markdown(state: &AppState, query: &str) -> Result<String, String> {
+    let config = crate::web_search::config::load_web_search_config(state)
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "web search is not configured".to_string())?;
+    let hits = crate::web_search::provider::web_search(&config, query, 5)
+        .await
+        .map_err(|error| error.to_string())?;
+    let entries: Vec<crate::canvas::service::SearchResultEntry> = hits
+        .into_iter()
+        .map(|hit| crate::canvas::service::SearchResultEntry {
+            title: hit.title,
+            url: hit.url,
+            snippet: hit.snippet,
+        })
+        .collect();
+    Ok(crate::canvas::service::search_results_to_markdown(query, &entries))
 }
 
 async fn extract_url_handler(
@@ -780,6 +819,12 @@ mod tests {
         assert_eq!(node["data"]["prompt"], "summarize");
         assert_eq!(node["data"]["sourceNodeIds"][0], "a");
         assert_eq!(node["data"]["status"], "idle");
+    }
+
+    #[test]
+    fn search_request_deserializes_query() {
+        let req: SearchRequest = serde_json::from_str(r#"{"query":"cats"}"#).unwrap();
+        assert_eq!(req.query, "cats");
     }
 
     #[test]

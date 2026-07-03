@@ -1,7 +1,11 @@
-import { ImageIcon, Loader2, RefreshCw } from "lucide-react";
+import { ImageIcon, Loader2, Play } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
 
+import { ModelTag } from "./model-tag";
+import { NodeError } from "./node-error";
+import { NodeShell } from "./node-shell";
 import { VersionSwitcher } from "./version-switcher";
 
 export interface ImageVersion {
@@ -22,47 +26,71 @@ export interface AiImageNodeData {
 
 interface AiImageNodeProps {
   data: AiImageNodeData;
+  nodeId: string;
+  index?: number;
+  selected?: boolean;
+  model?: string | null;
   onRegenerate: () => void;
   onVersionChange: (id: string) => void;
+  onPromptChange?: (prompt: string) => void;
 }
 
-export function AiImageNode({ data, onRegenerate, onVersionChange }: AiImageNodeProps) {
+export function AiImageNode({
+  data,
+  nodeId,
+  index,
+  selected,
+  model,
+  onRegenerate,
+  onVersionChange,
+  onPromptChange,
+}: AiImageNodeProps) {
   const versions = data.versions ?? [];
   const active = versions.find((v) => v.id === data.activeVersionId) ?? versions[versions.length - 1];
-  const running = data.status === "running";
+  const status = data.status ?? "idle";
+  const running = status === "running";
+  const isError = status === "error";
+  const actionLabel = isError ? "Retry" : versions.length > 0 ? "Regenerate" : "Run";
+
   return (
-    <div className="flex h-full flex-col gap-2 rounded-md border bg-card p-3 text-card-foreground shadow-sm">
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-1 text-xs font-medium text-muted-foreground">
-          <ImageIcon className="size-3" />
-          AI - Image
-        </div>
-        <div className="flex items-center gap-1">
+    <NodeShell
+      icon={<ImageIcon className="size-3.5" />}
+      label="AI · IMAGE"
+      nodeId={nodeId}
+      index={index}
+      selected={selected}
+      status={status}
+      headerRight={
+        <>
           {versions.length > 0 && active ? (
             <VersionSwitcher versions={versions} activeId={active.id} onChange={onVersionChange} />
           ) : null}
           <Button
             type="button"
-            size="icon-xs"
-            variant="ghost"
+            size="xs"
+            variant={isError ? "destructive" : "default"}
             aria-label="regenerate image"
             onClick={onRegenerate}
             disabled={running}
           >
-            {running ? (
-              <Loader2 className="size-3 animate-spin" />
-            ) : (
-              <RefreshCw className="size-3" />
-            )}
+            {running ? <Loader2 className="size-3 animate-spin" /> : <Play className="size-3" />}
+            {actionLabel}
           </Button>
-        </div>
-      </div>
-      {data.status === "error" ? (
-        <div className="rounded-md bg-destructive/10 px-2 py-1 text-xs text-destructive">
-          {data.error ?? "Generation failed"}
-        </div>
+        </>
+      }
+    >
+      <ModelTag model={model} />
+      <Textarea
+        value={data.prompt ?? ""}
+        onChange={(event) => onPromptChange?.(event.target.value)}
+        readOnly={!onPromptChange}
+        placeholder="Describe the image to generate..."
+        className="nodrag h-14 resize-none text-xs"
+      />
+      {isError ? (
+        <NodeError title="Image generation failed" message={data.error ?? "Generation failed"} />
       ) : null}
-      <div className="flex min-h-0 flex-1 items-center justify-center overflow-hidden">
+      <div className="flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-md bg-muted/30">
         {active ? (
           <img
             src={active.url}
@@ -70,9 +98,11 @@ export function AiImageNode({ data, onRegenerate, onVersionChange }: AiImageNode
             className="max-h-full max-w-full rounded-md object-contain"
           />
         ) : (
-          <span className="text-xs text-muted-foreground">{data.prompt ?? "No image yet."}</span>
+          <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
+            Empty · click run
+          </span>
         )}
       </div>
-    </div>
+    </NodeShell>
   );
 }

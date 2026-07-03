@@ -1,14 +1,29 @@
+# VCS and tooling
 .git
+**/.git
+.claude
 .worktrees
+
+# Build artifacts and deps (root-anchored patterns miss nested copies such as
+# .claude/worktrees/*/target, so match at any depth as well)
 node_modules
+**/node_modules
 target
+**/target
 dist
+**/dist
 coverage
 playwright-report
 test-results
 .e2e
+
+# Vendored/large trees not needed by any image build
 pdfium
 upstream_llm_wiki
+docs
+
+# Local secrets, logs, stray files
 *.log
 .env
 .env.*
+*.png

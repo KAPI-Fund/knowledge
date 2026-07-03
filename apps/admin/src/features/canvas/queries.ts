@@ -79,6 +79,13 @@ export function useDeleteCanvas() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => deleteCanvas(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: canvasKeys.all }),
+    onSuccess: (_data, id) => {
+      // Drop the deleted canvas's detail query outright. Invalidating the broad
+      // ["canvases"] prefix would instead refetch that now-missing id, and the
+      // 404 gets retried 3x with backoff (~7s) -- which is what made delete feel
+      // slow whenever the open canvas was removed. Only the list needs a refresh.
+      qc.removeQueries({ queryKey: canvasKeys.detail(id) });
+      void qc.invalidateQueries({ queryKey: canvasKeys.list() });
+    },
   });
 }

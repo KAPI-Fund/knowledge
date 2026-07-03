@@ -1,7 +1,11 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { pendingSaveStore } from "./pending-save-store";
+import type { CanvasDocument } from "./types";
+
 const extractUrl = vi.fn();
+const searchWeb = vi.fn();
 const saveCanvas = vi.fn();
 const runCanvasNode = vi.fn();
 
@@ -21,8 +25,11 @@ let currentParams: { canvasId?: string } = { canvasId: "c1" };
 let canvasResult: { data: ReturnType<typeof c1Data> | undefined } = { data: c1Data() };
 
 beforeEach(() => {
+  pendingSaveStore.clear();
   currentParams = { canvasId: "c1" };
   canvasResult = { data: c1Data() };
+  extractUrl.mockReset();
+  searchWeb.mockReset();
   saveCanvas.mockReset();
   saveCanvas.mockResolvedValue(undefined);
   runCanvasNode.mockReset();
@@ -32,6 +39,7 @@ beforeEach(() => {
 vi.mock("react-router-dom", () => ({ useParams: () => currentParams }));
 vi.mock("./api", () => ({
   extractUrl: (url: string) => extractUrl(url),
+  searchWeb: (query: string) => searchWeb(query),
   saveCanvas: (id: string, body: unknown) => saveCanvas(id, body),
 }));
 vi.mock("./stream", () => ({
@@ -59,10 +67,11 @@ vi.mock("./chat-panel", () => ({
 
 let boardProps: {
   onFetchUrl?: (id: string) => void;
+  onSearchNode?: (id: string) => void;
   onRunNode?: (id: string) => void;
   onSelectionChange?: (ids: string[]) => void;
   document?: {
-    nodes: { id: string; x: number; y: number }[];
+    nodes: { id: string; x: number; y: number; data?: Record<string, unknown> }[];
     edges: { source: string; target: string }[];
   };
   onChange?: (doc: unknown) => void;
@@ -91,6 +100,35 @@ describe("CanvasPage", () => {
     expect(screen.getByText("history")).toBeInTheDocument();
     expect(screen.getByText("board")).toBeInTheDocument();
     expect(screen.getByText("chat")).toBeInTheDocument();
+  });
+
+  it("renames the canvas through the cache-synced save", async () => {
+    render(<CanvasPage />);
+    await waitFor(() => expect(screen.getByText("board")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: "Rename canvas" }));
+    const input = screen.getByLabelText("Canvas title");
+    fireEvent.change(input, { target: { value: "Renamed" } });
+    fireEvent.blur(input);
+
+    await waitFor(() =>
+      expect(saveCanvas).toHaveBeenCalledWith("c1", expect.objectContaining({ title: "Renamed" })),
+    );
+    expect(screen.getByText("Renamed")).toBeInTheDocument();
+  });
+
+  it("does not save when the rename is unchanged", async () => {
+    render(<CanvasPage />);
+    await waitFor(() => expect(screen.getByText("board")).toBeInTheDocument());
+    saveCanvas.mockClear();
+
+    fireEvent.click(screen.getByRole("button", { name: "Rename canvas" }));
+    const input = screen.getByLabelText("Canvas title");
+    fireEvent.blur(input);
+
+    // Commit with the same title must not write.
+    await Promise.resolve();
+    expect(saveCanvas).not.toHaveBeenCalled();
   });
 
   it("clears the loaded canvas when navigating to the index route", async () => {
@@ -145,6 +183,26 @@ describe("CanvasPage", () => {
     await waitFor(() => expect(extractUrl).toHaveBeenCalledWith("https://x.test"));
   });
 
+  it("runs a search node through the search endpoint", async () => {
+    canvasResult = {
+      data: {
+        ...c1Data(),
+        document: {
+          nodes: [
+            { id: "s1", type: "search", x: 0, y: 0, w: 280, h: 160, data: { query: "cats" } } as unknown as ReturnType<typeof c1Data>["document"]["nodes"][number],
+          ],
+          edges: [],
+          viewport: { x: 0, y: 0, zoom: 1 },
+        },
+      },
+    };
+    searchWeb.mockResolvedValue({ status: "ok", query: "cats", markdown: "# results", error: null });
+    render(<CanvasPage />);
+    await waitFor(() => expect(boardProps.onSearchNode).toBeTypeOf("function"));
+    boardProps.onSearchNode?.("s1");
+    await waitFor(() => expect(searchWeb).toHaveBeenCalledWith("cats"));
+  });
+
   it("creates reference edges when an analyze skill node references selected nodes", async () => {
     render(<CanvasPage />);
     await waitFor(() => expect(chatProps.onSkillNode).toBeTypeOf("function"));
@@ -170,18 +228,25 @@ describe("CanvasPage", () => {
     await waitFor(() => expect(chatProps.placementOrigin).toEqual({ x: 280, y: 180 }));
   });
 
-  it("places a skill node at non-zero payload coordinates", async () => {
+  it("chains a new node to the right of the latest node, links them, and numbers it", async () => {
     render(<CanvasPage />);
     await waitFor(() => expect(chatProps.onSkillNode).toBeTypeOf("function"));
+    // Payload coordinates are ignored once a node exists: the new node chains to
+    // the right of u1 (x:0, w:280) with a 40px gap, top-aligned at u1's y.
     chatProps.onSkillNode?.({
       node: { type: "note", data: {} },
       x: 321,
       y: 654,
     });
-    await waitFor(() => {
-      const nodes = boardProps.document?.nodes ?? [];
-      expect(nodes.some((n) => n.x === 321 && n.y === 654)).toBe(true);
-    });
+    await waitFor(() => expect((boardProps.document?.nodes ?? []).length).toBe(2));
+    const nodes = boardProps.document?.nodes ?? [];
+    const added = nodes.find((n) => n.id !== "u1");
+    expect(added?.x).toBe(320);
+    expect(added?.y).toBe(0);
+    // u1 has no stored index (legacy); the new node gets the next stable number.
+    expect(added?.data?.index).toBe(2);
+    const edges = boardProps.document?.edges ?? [];
+    expect(edges.some((e) => e.source === "u1" && e.target === added?.id)).toBe(true);
   });
 
   it("flushes a pending edit to its own canvas id when navigating away", async () => {
@@ -271,32 +336,46 @@ describe("CanvasPage", () => {
     );
   });
 
-  it("auto-retries a leave-save that fails after the page unmounts", async () => {
+  it("queues a failed leave-save for recovery after the page unmounts", async () => {
     // Unmount runs the flush in an effect cleanup, so a rejected save cannot
-    // render the header Retry button. The edit must not be silently lost: a
-    // background loop retries the save under c1's own id.
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    vi.useFakeTimers();
-    try {
-      saveCanvas.mockRejectedValue(new Error("save failed"));
-      const { unmount } = render(<CanvasPage />);
+    // render the header Retry button. The edit must not be silently lost: it is
+    // enqueued in the persistent pending-save store, keyed by c1's own id, for
+    // the App-level banner (mounted outside this page) to retry.
+    saveCanvas.mockRejectedValue(new Error("save failed"));
+    const { unmount } = render(<CanvasPage />);
+    await waitFor(() => expect(boardProps.onChange).toBeTypeOf("function"));
 
-      const edited = {
-        nodes: [{ id: "u1", type: "url", x: 12, y: 34, w: 280, h: 160, data: { url: "https://x.test" } }],
-        edges: [],
-        viewport: { x: 0, y: 0, zoom: 1 },
-      };
-      act(() => boardProps.onChange?.(edited));
-      unmount();
+    const edited = {
+      nodes: [{ id: "u1", type: "url", x: 12, y: 34, w: 280, h: 160, data: { url: "https://x.test" } }],
+      edges: [],
+      viewport: { x: 0, y: 0, zoom: 1 },
+    };
+    act(() => boardProps.onChange?.(edited));
+    unmount();
 
-      await vi.runAllTimersAsync();
-      expect(saveCanvas).toHaveBeenCalledWith("c1", expect.objectContaining({ document: edited }));
-      // The initial flush plus at least one background retry.
-      expect(saveCanvas.mock.calls.length).toBeGreaterThanOrEqual(2);
-    } finally {
-      vi.useRealTimers();
-      errorSpy.mockRestore();
-    }
+    await waitFor(() =>
+      expect(saveCanvas).toHaveBeenCalledWith("c1", expect.objectContaining({ document: edited })),
+    );
+    await waitFor(() => {
+      const queued = pendingSaveStore.list().find((e) => e.id === "c1");
+      expect(queued?.document).toEqual(edited);
+    });
+  });
+
+  it("cancels a queued leave-retry once the canvas is reopened", async () => {
+    // P1: a stale leave-retry must not overwrite fresh edits. Reopening the
+    // canvas (the load effect running for c1) resolves any queued entry for it.
+    pendingSaveStore.enqueue({
+      id: "c1",
+      title: "B",
+      document: c1Data().document as CanvasDocument,
+      seq: pendingSaveStore.allocateSeq(),
+    });
+    render(<CanvasPage />);
+    await waitFor(() => expect(boardProps.onChange).toBeTypeOf("function"));
+    await waitFor(() =>
+      expect(pendingSaveStore.list().some((e) => e.id === "c1")).toBe(false),
+    );
   });
 
   it("retains a failed leave-save so it can be retried under the old canvas id", async () => {

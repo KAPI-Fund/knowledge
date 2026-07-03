@@ -1,8 +1,12 @@
-import { Loader2, RefreshCw, Sparkles } from "lucide-react";
+import { Loader2, Play, Sparkles } from "lucide-react";
 
 import { MarkdownMessage } from "@/components/shared/markdown-message";
 import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
 
+import { ModelTag } from "./model-tag";
+import { NodeError } from "./node-error";
+import { NodeShell } from "./node-shell";
 import { VersionSwitcher } from "./version-switcher";
 
 export interface AnalyzeVersion {
@@ -23,53 +27,79 @@ export interface AiAnalyzeNodeData {
 
 interface AiAnalyzeNodeProps {
   data: AiAnalyzeNodeData;
+  nodeId: string;
+  index?: number;
+  selected?: boolean;
+  model?: string | null;
   onRerun: () => void;
   onVersionChange: (id: string) => void;
+  onPromptChange?: (prompt: string) => void;
 }
 
-export function AiAnalyzeNode({ data, onRerun, onVersionChange }: AiAnalyzeNodeProps) {
+export function AiAnalyzeNode({
+  data,
+  nodeId,
+  index,
+  selected,
+  model,
+  onRerun,
+  onVersionChange,
+  onPromptChange,
+}: AiAnalyzeNodeProps) {
   const versions = data.versions ?? [];
   const active = versions.find((v) => v.id === data.activeVersionId) ?? versions[versions.length - 1];
-  const running = data.status === "running";
+  const status = data.status ?? "idle";
+  const running = status === "running";
+  const isError = status === "error";
+  const actionLabel = isError ? "Retry" : versions.length > 0 ? "Rerun" : "Run";
+
   return (
-    <div className="flex h-full flex-col gap-2 rounded-md border bg-card p-3 text-card-foreground shadow-sm">
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-1 text-xs font-medium text-muted-foreground">
-          <Sparkles className="size-3" />
-          AI - Analyze
-        </div>
-        <div className="flex items-center gap-1">
+    <NodeShell
+      icon={<Sparkles className="size-3.5" />}
+      label="AI · ANALYZE"
+      nodeId={nodeId}
+      index={index}
+      selected={selected}
+      status={status}
+      headerRight={
+        <>
           {versions.length > 0 && active ? (
             <VersionSwitcher versions={versions} activeId={active.id} onChange={onVersionChange} />
           ) : null}
           <Button
             type="button"
-            size="icon-xs"
-            variant="ghost"
+            size="xs"
+            variant={isError ? "destructive" : "default"}
             aria-label="rerun analysis"
             onClick={onRerun}
             disabled={running}
           >
-            {running ? (
-              <Loader2 className="size-3 animate-spin" />
-            ) : (
-              <RefreshCw className="size-3" />
-            )}
+            {running ? <Loader2 className="size-3 animate-spin" /> : <Play className="size-3" />}
+            {actionLabel}
           </Button>
-        </div>
-      </div>
-      {data.status === "error" ? (
-        <div className="rounded-md bg-destructive/10 px-2 py-1 text-xs text-destructive">
-          {data.error ?? "Analysis failed"}
-        </div>
+        </>
+      }
+    >
+      <ModelTag model={model} />
+      <Textarea
+        value={data.prompt ?? ""}
+        onChange={(event) => onPromptChange?.(event.target.value)}
+        readOnly={!onPromptChange}
+        placeholder="Describe what to analyze..."
+        className="nodrag h-14 resize-none text-xs"
+      />
+      {isError ? (
+        <NodeError title="Analysis failed" message={data.error ?? "Analysis failed"} />
       ) : null}
       <div className="min-h-0 flex-1 overflow-auto text-sm">
         {active ? (
           <MarkdownMessage content={active.content} />
         ) : (
-          <span className="text-muted-foreground">{data.prompt ?? "No analysis yet."}</span>
+          <div className="flex h-full items-center justify-center text-[11px] uppercase tracking-wider text-muted-foreground">
+            Empty · click run
+          </div>
         )}
       </div>
-    </div>
+    </NodeShell>
   );
 }

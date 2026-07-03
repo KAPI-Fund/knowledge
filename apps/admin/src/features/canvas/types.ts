@@ -2,7 +2,7 @@ import { z } from "zod";
 
 export const canvasNodeSchema = z.object({
   id: z.string(),
-  type: z.enum(["note", "url", "kb", "ai_analyze", "ai_image"]),
+  type: z.enum(["note", "url", "kb", "ai_analyze", "ai_image", "search"]),
   x: z.number(),
   y: z.number(),
   w: z.number().default(280),

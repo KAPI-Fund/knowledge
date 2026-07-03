@@ -75,3 +75,22 @@ export function extractUrl(url: string) {
     extractResultSchema,
   );
 }
+
+const searchResultSchema = z.object({
+  status: z.enum(["ok", "error"]),
+  query: z.string(),
+  markdown: z.string(),
+  error: z.string().nullable(),
+});
+
+export function searchWeb(query: string) {
+  return apiFetch(
+    "/api/canvas/search",
+    {
+      method: "POST",
+      headers: csrfHeaders(),
+      body: JSON.stringify({ query }),
+    },
+    searchResultSchema,
+  );
+}

@@ -1,4 +1,4 @@
-import { Download, Globe, Loader2 } from "lucide-react";
+import { Loader2, Search } from "lucide-react";
 
 import { MarkdownMessage } from "@/components/shared/markdown-message";
 import { Button } from "@/components/ui/button";
@@ -7,33 +7,32 @@ import { Input } from "@/components/ui/input";
 import { NodeError } from "./node-error";
 import { NodeShell } from "./node-shell";
 
-export type UrlNodeStatus = "idle" | "loading" | "error";
+export type SearchNodeStatus = "idle" | "loading" | "error";
 
-export interface UrlNodeData {
-  url?: string;
-  title?: string;
+export interface SearchNodeData {
+  query?: string;
   markdown?: string;
-  status?: UrlNodeStatus;
+  status?: SearchNodeStatus;
   error?: string | null;
 }
 
-interface UrlNodeProps {
-  data: UrlNodeData;
+interface SearchNodeProps {
+  data: SearchNodeData;
   nodeId: string;
   index?: number;
   selected?: boolean;
-  onUrlChange: (url: string) => void;
-  onFetch: () => void;
+  onQueryChange: (query: string) => void;
+  onSearch: () => void;
 }
 
-export function UrlNode({ data, nodeId, index, selected, onUrlChange, onFetch }: UrlNodeProps) {
+export function SearchNode({ data, nodeId, index, selected, onQueryChange, onSearch }: SearchNodeProps) {
   const status = data.status ?? "idle";
   const loading = status === "loading";
   const isError = status === "error";
   return (
     <NodeShell
-      icon={<Globe className="size-3.5" />}
-      label="URL · WEB"
+      icon={<Search className="size-3.5" />}
+      label="SEARCH · WEB"
       nodeId={nodeId}
       index={index}
       selected={selected}
@@ -44,35 +43,34 @@ export function UrlNode({ data, nodeId, index, selected, onUrlChange, onFetch }:
           type="button"
           size="xs"
           variant={isError ? "destructive" : "default"}
-          onClick={onFetch}
-          disabled={loading || !data.url}
+          onClick={onSearch}
+          disabled={loading || !data.query}
         >
           {loading ? (
             <Loader2 className="size-3 animate-spin" />
           ) : (
-            <Download className="size-3" />
+            <Search className="size-3" />
           )}
-          {isError ? "Retry" : "Fetch"}
+          {isError ? "Retry" : "Search"}
         </Button>
       }
     >
       <Input
-        value={data.url ?? ""}
-        onChange={(event) => onUrlChange(event.target.value)}
-        placeholder="https://..."
-        className="nodrag h-8 font-mono text-xs"
+        value={data.query ?? ""}
+        onChange={(event) => onQueryChange(event.target.value)}
+        placeholder="Search the web..."
+        className="nodrag h-8 text-xs"
       />
       {isError ? (
-        <NodeError title="Fetch failed" message={data.error ?? "Failed to fetch"} />
+        <NodeError title="Search failed" message={data.error ?? "Search failed"} />
       ) : null}
-      {data.title ? <div className="text-sm font-medium">{data.title}</div> : null}
       {data.markdown ? (
         <div className="min-h-0 flex-1 overflow-auto text-sm">
           <MarkdownMessage content={data.markdown} />
         </div>
       ) : (
         <div className="flex min-h-0 flex-1 items-center justify-center text-[11px] uppercase tracking-wider text-muted-foreground">
-          Empty · click fetch
+          Empty · click search
         </div>
       )}
     </NodeShell>

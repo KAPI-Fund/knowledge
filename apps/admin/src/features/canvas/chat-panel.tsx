@@ -1,20 +1,12 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 
 import { MarkdownMessage } from "@/components/shared/markdown-message";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
+import { uuid } from "@/lib/uuid";
 
 import { streamCanvasChat } from "./stream";
-import { KbProjectPicker } from "./kb-picker";
-
-export const CANVAS_SKILLS = [
-  { name: "/search", description: "Web search -> result node" },
-  { name: "/image", description: "Text to image -> image node" },
-  { name: "/analyze", description: "Analyze selected/connected nodes" },
-  { name: "/kb", description: "Add a knowledge-base node" },
-] as const;
 
 interface ChatMessage {
   id: string;
@@ -49,14 +41,6 @@ export function ChatPanel({
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streaming, setStreaming] = useState(false);
-  const [kbOpen, setKbOpen] = useState(false);
-
-  const skillMatches = useMemo(() => {
-    if (!input.startsWith("/")) {
-      return [];
-    }
-    return CANVAS_SKILLS.filter((skill) => skill.name.startsWith(input.split(" ")[0]));
-  }, [input]);
 
   const appendAssistantDelta = (id: string, text: string) => {
     setMessages((prev) =>
@@ -71,14 +55,9 @@ export function ChatPanel({
     if (!text || streaming || !canvasId) {
       return;
     }
-    if (text === "/kb" || text.startsWith("/kb ")) {
-      setKbOpen(true);
-      setInput("");
-      return;
-    }
 
-    const userMessage: ChatMessage = { id: crypto.randomUUID(), role: "user", content: text };
-    const assistantId = crypto.randomUUID();
+    const userMessage: ChatMessage = { id: uuid(), role: "user", content: text };
+    const assistantId = uuid();
     setMessages((prev) => [...prev, userMessage, { id: assistantId, role: "assistant", content: "" }]);
     setInput("");
     setStreaming(true);
@@ -129,7 +108,7 @@ export function ChatPanel({
       <div className="border-b p-3 text-sm font-semibold">Chat</div>
       <ScrollArea className="min-h-0 flex-1 space-y-3 p-3">
         {messages.length === 0 ? (
-          <p className="text-xs text-muted-foreground">Ask a question, or type "/" to use a skill.</p>
+          <p className="text-xs text-muted-foreground">Ask a question about this canvas.</p>
         ) : (
           messages.map((message) => (
             <div
@@ -145,23 +124,7 @@ export function ChatPanel({
         )}
       </ScrollArea>
 
-      <div className="relative border-t p-3">
-        {skillMatches.length > 0 ? (
-          <ul className="absolute bottom-full left-3 right-3 mb-1 overflow-hidden rounded-md border bg-popover shadow-md">
-            {skillMatches.map((skill) => (
-              <li key={skill.name}>
-                <button
-                  type="button"
-                  onClick={() => setInput(`${skill.name} `)}
-                  className="flex w-full flex-col items-start px-3 py-1.5 text-left hover:bg-accent"
-                >
-                  <span className="font-mono text-sm">{skill.name}</span>
-                  <span className="text-xs text-muted-foreground">{skill.description}</span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        ) : null}
+      <div className="border-t p-3">
         <form
           onSubmit={(event) => {
             event.preventDefault();
@@ -171,31 +134,11 @@ export function ChatPanel({
           <Input
             value={input}
             onChange={(event) => setInput(event.target.value)}
-            placeholder="/ or ask"
+            placeholder="Ask a question"
             disabled={streaming}
           />
         </form>
       </div>
-
-      {kbOpen ? (
-        <Dialog open onOpenChange={setKbOpen}>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Select knowledge base</DialogTitle>
-            </DialogHeader>
-            <KbProjectPicker
-              onPick={(project) => {
-                onSkillNode({
-                  node: { type: "kb", data: { projectId: project.id, projectName: project.name } },
-                  x: placementOrigin.x,
-                  y: placementOrigin.y,
-                });
-                setKbOpen(false);
-              }}
-            />
-          </DialogContent>
-        </Dialog>
-      ) : null}
     </section>
   );
 }

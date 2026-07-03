@@ -21,9 +21,18 @@ vi.mock("@xyflow/react", () => ({
   applyNodeChanges: (_c: unknown, nodes: unknown[]) => nodes,
 }));
 
-import { CanvasBoard } from "./canvas-board";
+vi.mock("../settings/queries", () => ({
+  useSystemSettingsQuery: () => ({ data: { providerModel: "gpt-test" } }),
+}));
+
+import { CanvasBoard, pruneDanglingEdges } from "./canvas-board";
+import type { CanvasDocument } from "./types";
 
 const emptyDoc = { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } };
+
+function node(id: string): CanvasDocument["nodes"][number] {
+  return { id, type: "note", x: 0, y: 0, w: 280, h: 160, data: {} };
+}
 
 describe("CanvasBoard", () => {
   it("renders the flow", () => {
@@ -33,12 +42,13 @@ describe("CanvasBoard", () => {
         onChange={() => {}}
         onRunNode={() => {}}
         onFetchUrl={() => {}}
+        onSearchNode={() => {}}
       />,
     );
     expect(screen.getByText("flow")).toBeInTheDocument();
   });
 
-  it("persists viewport on move end", () => {
+  it("does not persist on viewport move (pan/zoom is not saved)", () => {
     const onChange = vi.fn();
     render(
       <CanvasBoard
@@ -46,11 +56,29 @@ describe("CanvasBoard", () => {
         onChange={onChange}
         onRunNode={() => {}}
         onFetchUrl={() => {}}
+        onSearchNode={() => {}}
       />,
     );
+    // The board no longer wires onMoveEnd, so panning/zooming never triggers a
+    // save -- only substantive node/edge changes should.
     fireEvent.click(screen.getByText("move"));
-    expect(onChange).toHaveBeenCalledWith(
-      expect.objectContaining({ viewport: { x: 5, y: 6, zoom: 2 } }),
-    );
+    expect(onChange).not.toHaveBeenCalled();
+  });
+});
+
+describe("pruneDanglingEdges", () => {
+  const edges = [
+    { id: "e1", source: "a", target: "b" },
+    { id: "e2", source: "b", target: "c" },
+  ];
+
+  it("keeps edges whose endpoints both survive", () => {
+    const kept = pruneDanglingEdges([node("a"), node("b"), node("c")], edges);
+    expect(kept.map((e) => e.id)).toEqual(["e1", "e2"]);
+  });
+
+  it("drops edges that reference a removed node", () => {
+    const kept = pruneDanglingEdges([node("a"), node("b")], edges);
+    expect(kept.map((e) => e.id)).toEqual(["e1"]);
   });
 });

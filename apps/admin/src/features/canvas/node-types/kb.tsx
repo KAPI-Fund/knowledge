@@ -1,6 +1,6 @@
 import { Database } from "lucide-react";
 
-import { Badge } from "@/components/ui/badge";
+import { NodeShell } from "./node-shell";
 
 export interface KbNodeData {
   projectId?: string;
@@ -10,21 +10,24 @@ export interface KbNodeData {
 
 interface KbNodeProps {
   data: KbNodeData;
+  nodeId: string;
+  index?: number;
+  selected?: boolean;
 }
 
-export function KbNode({ data }: KbNodeProps) {
+export function KbNode({ data, nodeId, index, selected }: KbNodeProps) {
   return (
-    <div className="flex h-full flex-col gap-2 rounded-md border bg-card p-3 text-card-foreground shadow-sm">
-      <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
-        <Database className="size-3" />
-        Knowledge base
+    <NodeShell
+      icon={<Database className="size-3.5" />}
+      label="KNOWLEDGE BASE"
+      nodeId={nodeId}
+      index={index}
+      selected={selected}
+      status={data.noAccess ? "no-access" : "idle"}
+    >
+      <div className="text-sm font-medium">
+        {data.projectName ?? data.projectId ?? "Untitled"}
       </div>
-      <div className="text-sm font-medium">{data.projectName ?? data.projectId ?? "Untitled"}</div>
-      {data.noAccess ? (
-        <Badge variant="destructive" className="w-fit">
-          No access
-        </Badge>
-      ) : null}
-    </div>
+    </NodeShell>
   );
 }

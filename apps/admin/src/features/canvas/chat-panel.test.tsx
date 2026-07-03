@@ -28,7 +28,7 @@ beforeEach(() => {
 });
 
 describe("ChatPanel slash menu", () => {
-  it("lists the four v1 skills when input starts with /", () => {
+  it("shows no slash-command menu (skills are invoked from the toolbar)", () => {
     render(
       <ChatPanel
         canvasId="c1"
@@ -38,12 +38,12 @@ describe("ChatPanel slash menu", () => {
         onBeforeSend={async () => true}
       />,
     );
-    const input = screen.getByPlaceholderText("/ or ask");
+    const input = screen.getByPlaceholderText("Ask a question");
     fireEvent.change(input, { target: { value: "/" } });
-    expect(screen.getByText("/search")).toBeInTheDocument();
-    expect(screen.getByText("/image")).toBeInTheDocument();
-    expect(screen.getByText("/analyze")).toBeInTheDocument();
-    expect(screen.getByText("/kb")).toBeInTheDocument();
+    expect(screen.queryByText("/kb")).not.toBeInTheDocument();
+    expect(screen.queryByText("/search")).not.toBeInTheDocument();
+    expect(screen.queryByText("/image")).not.toBeInTheDocument();
+    expect(screen.queryByText("/analyze")).not.toBeInTheDocument();
   });
 });
 
@@ -59,7 +59,7 @@ describe("ChatPanel skill submit", () => {
         onBeforeSend={async () => true}
       />,
     );
-    const input = screen.getByPlaceholderText("/ or ask");
+    const input = screen.getByPlaceholderText("Ask a question");
     fireEvent.change(input, { target: { value: "/search cats" } });
     fireEvent.submit(input.closest("form")!);
     await waitFor(() => expect(onSkillNode).toHaveBeenCalledTimes(1));
@@ -76,7 +76,7 @@ describe("ChatPanel skill submit", () => {
         onBeforeSend={async () => true}
       />,
     );
-    const input = screen.getByPlaceholderText("/ or ask");
+    const input = screen.getByPlaceholderText("Ask a question");
     fireEvent.change(input, { target: { value: "hello" } });
     fireEvent.submit(input.closest("form")!);
     await waitFor(() => expect(streamCanvasChat).toHaveBeenCalled());
@@ -96,7 +96,7 @@ describe("ChatPanel skill submit", () => {
         onBeforeSend={onBeforeSend}
       />,
     );
-    const input = screen.getByPlaceholderText("/ or ask");
+    const input = screen.getByPlaceholderText("Ask a question");
     fireEvent.change(input, { target: { value: "hello" } });
     fireEvent.submit(input.closest("form")!);
 
@@ -119,7 +119,7 @@ describe("ChatPanel skill submit", () => {
         onBeforeSend={onBeforeSend}
       />,
     );
-    const input = screen.getByPlaceholderText("/ or ask");
+    const input = screen.getByPlaceholderText("Ask a question");
     fireEvent.change(input, { target: { value: "hello" } });
     fireEvent.submit(input.closest("form")!);
 

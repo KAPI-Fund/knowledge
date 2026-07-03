@@ -1,4 +1,4 @@
-import { Database, FileText, Globe } from "lucide-react";
+import { Database, FileText, Globe, ImageIcon, Search, Sparkles } from "lucide-react";
 import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -33,9 +33,36 @@ export function CanvasToolbar({ onAdd }: CanvasToolbarProps) {
         <Globe className="size-3" />
         Web page
       </Button>
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        onClick={() => onAdd({ node: { type: "search", data: {} }, x: 0, y: 0 })}
+      >
+        <Search className="size-3" />
+        Search
+      </Button>
       <Button type="button" size="sm" variant="outline" onClick={() => setKbOpen(true)}>
         <Database className="size-3" />
         Knowledge base
+      </Button>
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        onClick={() => onAdd({ node: { type: "ai_image", data: {} }, x: 0, y: 0 })}
+      >
+        <ImageIcon className="size-3" />
+        Image
+      </Button>
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        onClick={() => onAdd({ node: { type: "ai_analyze", data: {} }, x: 0, y: 0 })}
+      >
+        <Sparkles className="size-3" />
+        Analyze
       </Button>
       {kbOpen ? (
         <Dialog open onOpenChange={setKbOpen}>

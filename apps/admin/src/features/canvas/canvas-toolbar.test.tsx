@@ -18,4 +18,25 @@ describe("CanvasToolbar", () => {
     fireEvent.click(screen.getByRole("button", { name: "Knowledge base" }));
     expect(screen.getByText("kb-picker")).toBeInTheDocument();
   });
+
+  it("adds a search node", () => {
+    const onAdd = vi.fn();
+    render(<CanvasToolbar onAdd={onAdd} />);
+    fireEvent.click(screen.getByRole("button", { name: "Search" }));
+    expect(onAdd).toHaveBeenCalledWith({ node: { type: "search", data: {} }, x: 0, y: 0 });
+  });
+
+  it("adds an image node", () => {
+    const onAdd = vi.fn();
+    render(<CanvasToolbar onAdd={onAdd} />);
+    fireEvent.click(screen.getByRole("button", { name: "Image" }));
+    expect(onAdd).toHaveBeenCalledWith({ node: { type: "ai_image", data: {} }, x: 0, y: 0 });
+  });
+
+  it("adds an analyze node", () => {
+    const onAdd = vi.fn();
+    render(<CanvasToolbar onAdd={onAdd} />);
+    fireEvent.click(screen.getByRole("button", { name: "Analyze" }));
+    expect(onAdd).toHaveBeenCalledWith({ node: { type: "ai_analyze", data: {} }, x: 0, y: 0 });
+  });
 });
