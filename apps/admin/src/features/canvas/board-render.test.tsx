@@ -2,7 +2,15 @@ import { render } from "@testing-library/react";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 vi.mock("../settings/queries", () => ({
-  useSystemSettingsQuery: () => ({ data: { providerModel: "gpt-test" } }),
+  useSystemSettingsQuery: () => ({
+    data: {
+      providerMode: "openai-compatible",
+      connections: [
+        { id: "c1", label: "Active", baseUrl: "u", model: "analyze-model", timeoutSeconds: null, isActive: true, apiKeyConfigured: true },
+      ],
+      image: { baseUrl: "u", model: "image-model", size: "1024x1024", timeoutSeconds: null, apiKeyConfigured: true },
+    },
+  }),
 }));
 
 import { CanvasBoard } from "./canvas-board";
@@ -107,5 +115,21 @@ describe("CanvasBoard rendering", () => {
       />,
     );
     expect(container.querySelectorAll(".react-flow__node").length).toBe(2);
+  });
+
+  it("shows the active-connection model on ai_analyze and image model on ai_image", () => {
+    const doc: CanvasDocument = {
+      nodes: [
+        { id: "a1", type: "ai_analyze", x: 0, y: 0, w: 360, h: 320, data: {} },
+        { id: "i1", type: "ai_image", x: 0, y: 0, w: 320, h: 400, data: {} },
+      ],
+      edges: [],
+      viewport: { x: 0, y: 0, zoom: 1 },
+    };
+    const { getByText } = render(
+      <CanvasBoard document={doc} onChange={vi.fn()} onRunNode={vi.fn()} onFetchUrl={vi.fn()} onSearchNode={vi.fn()} />,
+    );
+    expect(getByText("analyze-model")).toBeInTheDocument();
+    expect(getByText("image-model")).toBeInTheDocument();
   });
 });

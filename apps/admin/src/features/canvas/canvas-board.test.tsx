@@ -22,7 +22,15 @@ vi.mock("@xyflow/react", () => ({
 }));
 
 vi.mock("../settings/queries", () => ({
-  useSystemSettingsQuery: () => ({ data: { providerModel: "gpt-test" } }),
+  useSystemSettingsQuery: () => ({
+    data: {
+      providerMode: "openai-compatible",
+      connections: [
+        { id: "c1", label: "Active", baseUrl: "u", model: "analyze-model", timeoutSeconds: null, isActive: true, apiKeyConfigured: true },
+      ],
+      image: { baseUrl: "u", model: "image-model", size: "1024x1024", timeoutSeconds: null, apiKeyConfigured: true },
+    },
+  }),
 }));
 
 import { CanvasBoard, pruneDanglingEdges } from "./canvas-board";

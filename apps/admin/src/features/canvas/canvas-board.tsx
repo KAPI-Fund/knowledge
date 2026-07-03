@@ -163,7 +163,9 @@ export function pruneDanglingEdges(
 }
 
 export function CanvasBoard({ document, onChange, onRunNode, onFetchUrl, onSearchNode, onSelectionChange }: CanvasBoardProps) {
-  const model = useSystemSettingsQuery().data?.providerModel ?? null;
+  const settings = useSystemSettingsQuery().data;
+  const analyzeModel = settings?.connections?.find((c) => c.isActive)?.model ?? null;
+  const imageModel = settings?.image?.model ?? null;
   // We rebuild rfNodes from the document on every change, which discards React
   // Flow's internal `selected` flag. Track the selection here and re-stamp it so
   // the selected node keeps its outline; a pane click clears it (deselect).
@@ -204,7 +206,7 @@ export function CanvasBoard({ document, onChange, onRunNode, onFetchUrl, onSearc
           // Stable creation number when present; array position is only a
           // fallback for legacy nodes saved before numbering existed.
           __index: typeof n.data.index === "number" ? n.data.index : i + 1,
-          __model: model,
+          __model: n.type === "ai_image" ? imageModel : analyzeModel,
           __cb: {
             onPatch: (patch: Record<string, unknown>) => patchNode(n.id, patch),
             onRun: () => onRunNode(n.id),
@@ -213,7 +215,7 @@ export function CanvasBoard({ document, onChange, onRunNode, onFetchUrl, onSearc
           } satisfies NodeCallbacks,
         },
       })),
-    [document.nodes, patchNode, onRunNode, onFetchUrl, onSearchNode, model, selectedIds],
+    [document.nodes, patchNode, onRunNode, onFetchUrl, onSearchNode, analyzeModel, imageModel, selectedIds],
   );
 
   // React Flow's live node state. It owns positions during a drag so nodes follow
