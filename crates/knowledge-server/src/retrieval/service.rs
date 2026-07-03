@@ -39,43 +39,48 @@ struct PageVectorResult {
   heading_path: String,
 }
 
-pub async fn load_embedding_config(state: &AppState) -> Result<Option<EmbeddingConfig>, ApiError> {
-  let (
-    provider_mode,
-    provider_base_url,
-    provider_api_key,
-    provider_embedding_model,
-    provider_timeout_seconds,
-  ) = sqlx::query_as::<_, (String, Option<String>, Option<String>, Option<String>, Option<i64>)>(
-    "SELECT
-       provider_mode,
-       provider_base_url,
-       provider_api_key,
-       provider_embedding_model,
-       provider_timeout_seconds
-     FROM system_settings
-     WHERE id = 1",
-  )
-  .fetch_one(&state.pool)
-  .await
-  .map_err(ApiError::from)?;
-
-  if provider_mode != "openai-compatible" {
-    return Ok(None);
+/// Pure: build an embedding config from the raw embedding_* columns. Returns
+/// None when disabled or incomplete (matching the loader's Option contract).
+pub fn embedding_config_from_row(
+  enabled: bool,
+  base_url: Option<String>,
+  api_key: Option<String>,
+  model: Option<String>,
+  timeout_seconds: Option<i64>,
+) -> Option<EmbeddingConfig> {
+  if !enabled {
+    return None;
   }
-
-  let base_url = provider_base_url.unwrap_or_default();
-  let model = provider_embedding_model.unwrap_or_default();
+  let base_url = base_url.unwrap_or_default();
+  let model = model.unwrap_or_default();
   if base_url.trim().is_empty() || model.trim().is_empty() {
-    return Ok(None);
+    return None;
   }
-
-  Ok(Some(EmbeddingConfig {
+  Some(EmbeddingConfig {
     base_url,
-    api_key: provider_api_key.unwrap_or_default(),
+    api_key: api_key.unwrap_or_default(),
     model,
-    timeout_seconds: provider_timeout_seconds.unwrap_or(30),
-  }))
+    timeout_seconds: timeout_seconds.unwrap_or(30),
+  })
+}
+
+pub async fn load_embedding_config(state: &AppState) -> Result<Option<EmbeddingConfig>, ApiError> {
+  let (enabled, base_url, api_key, model, timeout_seconds) =
+    sqlx::query_as::<_, (bool, Option<String>, Option<String>, Option<String>, Option<i64>)>(
+      "SELECT
+         embedding_enabled,
+         embedding_base_url,
+         embedding_api_key,
+         embedding_model,
+         embedding_timeout_seconds
+       FROM system_settings
+       WHERE id = 1",
+    )
+    .fetch_one(&state.pool)
+    .await
+    .map_err(ApiError::from)?;
+
+  Ok(embedding_config_from_row(enabled, base_url, api_key, model, timeout_seconds))
 }
 
 pub async fn search_project_hybrid(
@@ -516,4 +521,35 @@ fn map_provider_error(error: ProviderError) -> ApiError {
   } else {
     ApiError::bad_request(error.message().to_string())
   }
+}
+
+#[cfg(test)]
+mod embedding_config_tests {
+    use super::embedding_config_from_row;
+
+    #[test]
+    fn disabled_returns_none() {
+        assert!(embedding_config_from_row(false, Some("u".into()), None, Some("m".into()), None).is_none());
+    }
+
+    #[test]
+    fn enabled_but_incomplete_returns_none() {
+        assert!(embedding_config_from_row(true, None, None, Some("m".into()), None).is_none());
+        assert!(embedding_config_from_row(true, Some("u".into()), None, None, None).is_none());
+    }
+
+    #[test]
+    fn enabled_and_complete_returns_config() {
+        let cfg = embedding_config_from_row(
+            true,
+            Some("https://api.example.com".into()),
+            Some("k".into()),
+            Some("text-embedding-3-small".into()),
+            Some(45),
+        )
+        .expect("config");
+        assert_eq!(cfg.model, "text-embedding-3-small");
+        assert_eq!(cfg.timeout_seconds, 45);
+        assert_eq!(cfg.api_key, "k");
+    }
 }
