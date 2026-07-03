@@ -337,6 +337,7 @@ impl OpenAiCompatibleProvider {
         let body = ImageGenerationRequest {
             model: self.model.clone(),
             prompt: request.prompt,
+            size: request.size,
             n: 1,
             response_format: "b64_json".to_string(),
         };
@@ -605,6 +606,7 @@ struct EmbeddingRequest {
 struct ImageGenerationRequest {
     model: String,
     prompt: String,
+    size: String,
     n: u8,
     response_format: String,
 }
@@ -731,6 +733,7 @@ mod image_tests {
     let body = ImageGenerationRequest {
       model: "gpt-image-1".to_string(),
       prompt: "a red fox".to_string(),
+      size: "1024x1024".to_string(),
       n: 1,
       response_format: "b64_json".to_string(),
     };
@@ -765,13 +768,27 @@ mod image_tests {
     let provider =
       OpenAiCompatibleProvider::new(base, "key".to_string(), "gpt-image-1".to_string(), 30);
     let result = provider
-      .generate_image(ProviderImageRequest { prompt: "x".to_string() })
+      .generate_image(ProviderImageRequest { prompt: "x".to_string(), size: "1024x1024".to_string() })
       .await
       .expect("image generated");
 
     assert_eq!(result.mime, "image/png");
     assert_eq!(result.bytes, raw);
     handle.abort();
+  }
+
+  #[test]
+  fn image_generation_request_serializes_size() {
+    let body = ImageGenerationRequest {
+      model: "gpt-image-1".to_string(),
+      prompt: "a fox".to_string(),
+      size: "512x512".to_string(),
+      n: 1,
+      response_format: "b64_json".to_string(),
+    };
+    let json = serde_json::to_value(&body).unwrap();
+    assert_eq!(json["size"], "512x512");
+    assert_eq!(json["model"], "gpt-image-1");
   }
 
   async fn spawn_mock_images_server(json_body: String) -> (tokio::task::JoinHandle<()>, String) {

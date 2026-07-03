@@ -615,7 +615,7 @@ async fn run_image_skill(
     let settings = load_query_settings(state).await.map_err(|error| error.to_string())?;
     let provider = build_provider(&settings).map_err(|error| error.to_string())?;
     let result = provider
-        .generate_image(ProviderImageRequest { prompt: prompt.to_string() })
+        .generate_image(ProviderImageRequest { prompt: prompt.to_string(), size: "1024x1024".to_string() })
         .await
         .map_err(|error| error.message().to_string())?;
     let asset = crate::assets::store::NewAsset::new(user_id, &result.mime, result.bytes);

@@ -71,6 +71,7 @@ pub struct ProviderUsage {
 #[derive(Debug, Clone)]
 pub struct ProviderImageRequest {
     pub prompt: String,
+    pub size: String,
 }
 
 #[derive(Debug, Clone)]
@@ -126,9 +127,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn provider_image_request_holds_prompt() {
-        let req = ProviderImageRequest { prompt: "a red fox".to_string() };
+    fn provider_image_request_holds_prompt_and_size() {
+        let req = ProviderImageRequest {
+            prompt: "a red fox".to_string(),
+            size: "512x512".to_string(),
+        };
         assert_eq!(req.prompt, "a red fox");
+        assert_eq!(req.size, "512x512");
     }
 
     #[test]
