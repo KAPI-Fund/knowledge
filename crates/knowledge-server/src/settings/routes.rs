@@ -9,7 +9,20 @@ use crate::app::state::AppState;
 use crate::http::error::ApiError;
 
 pub fn router() -> Router<AppState> {
-  Router::new().route("/api/system/settings", get(get_settings).patch(update_settings))
+    Router::new()
+        .route("/api/system/settings", get(get_settings).patch(update_settings))
+        .route(
+            "/api/system/provider-connections",
+            axum::routing::post(create_connection_handler),
+        )
+        .route(
+            "/api/system/provider-connections/{id}",
+            axum::routing::patch(update_connection_handler).delete(delete_connection_handler),
+        )
+        .route(
+            "/api/system/provider-connections/{id}/activate",
+            axum::routing::post(activate_connection_handler),
+        )
 }
 
 #[derive(Debug, Deserialize)]
@@ -184,6 +197,110 @@ async fn build_settings_response(state: &AppState) -> Result<serde_json::Value, 
     }))
 }
 
+async fn require_operator_csrf(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<crate::auth::session::SessionRecord, ApiError> {
+    let session = crate::auth::operator::require_operator(state, headers).await?;
+    let supplied = headers
+        .get("x-csrf-token")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    if supplied.is_empty() || supplied != session.csrf_token {
+        return Err(ApiError::unauthorized("invalid csrf token"));
+    }
+    Ok(session)
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateConnectionRequest {
+    pub label: String,
+    pub base_url: String,
+    #[serde(default)]
+    pub api_key: Option<String>,
+    pub model: String,
+    #[serde(default)]
+    pub timeout_seconds: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateConnectionRequest {
+    pub label: String,
+    pub base_url: String,
+    #[serde(default)]
+    pub api_key: Option<String>,
+    #[serde(default)]
+    pub clear_api_key: bool,
+    pub model: String,
+    #[serde(default)]
+    pub timeout_seconds: Option<i64>,
+}
+
+async fn create_connection_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<CreateConnectionRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_operator_csrf(&state, &headers).await?;
+    crate::providers::create_connection(
+        &state.pool,
+        &crate::providers::NewConnection {
+            label: payload.label,
+            base_url: payload.base_url,
+            api_key: payload.api_key,
+            model: payload.model,
+            timeout_seconds: payload.timeout_seconds,
+        },
+    )
+    .await?;
+    Ok(Json(build_settings_response(&state).await?))
+}
+
+async fn update_connection_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(payload): Json<UpdateConnectionRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_operator_csrf(&state, &headers).await?;
+    crate::providers::update_connection(
+        &state.pool,
+        &id,
+        &crate::providers::UpdateConnection {
+            label: payload.label,
+            base_url: payload.base_url,
+            api_key: payload.api_key,
+            clear_api_key: payload.clear_api_key,
+            model: payload.model,
+            timeout_seconds: payload.timeout_seconds,
+        },
+    )
+    .await?;
+    Ok(Json(build_settings_response(&state).await?))
+}
+
+async fn delete_connection_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_operator_csrf(&state, &headers).await?;
+    crate::providers::delete_connection(&state.pool, &id).await?;
+    Ok(Json(build_settings_response(&state).await?))
+}
+
+async fn activate_connection_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_operator_csrf(&state, &headers).await?;
+    crate::providers::activate_connection(&state.pool, &id).await?;
+    Ok(Json(build_settings_response(&state).await?))
+}
+
 async fn get_settings(
   State(state): State<AppState>,
   headers: HeaderMap,
@@ -197,14 +314,7 @@ async fn update_settings(
   headers: HeaderMap,
   Json(payload): Json<UpdateSettingsRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-  let session = crate::auth::operator::require_operator(&state, &headers).await?;
-  let supplied = headers
-    .get("x-csrf-token")
-    .and_then(|value| value.to_str().ok())
-    .unwrap_or_default();
-  if supplied.is_empty() || supplied != session.csrf_token {
-    return Err(ApiError::unauthorized("invalid csrf token"));
-  }
+  require_operator_csrf(&state, &headers).await?;
   let searxng_categories_value = payload
     .searxng_categories
     .as_ref()
@@ -290,5 +400,29 @@ mod tests {
         let mut c = sample();
         c.api_key = None;
         assert_eq!(connection_to_json(&c)["apiKeyConfigured"], false);
+    }
+
+    use super::{CreateConnectionRequest, UpdateConnectionRequest};
+
+    #[test]
+    fn create_connection_request_parses_camel_case() {
+        let req: CreateConnectionRequest = serde_json::from_str(
+            r#"{"label":"OpenAI","baseUrl":"https://api.openai.com","apiKey":"sk","model":"gpt-4o","timeoutSeconds":30}"#,
+        )
+        .unwrap();
+        assert_eq!(req.label, "OpenAI");
+        assert_eq!(req.base_url, "https://api.openai.com");
+        assert_eq!(req.model, "gpt-4o");
+        assert_eq!(req.timeout_seconds, Some(30));
+    }
+
+    #[test]
+    fn update_connection_request_defaults_clear_flag_false() {
+        let req: UpdateConnectionRequest = serde_json::from_str(
+            r#"{"label":"L","baseUrl":"u","model":"m"}"#,
+        )
+        .unwrap();
+        assert_eq!(req.clear_api_key, false);
+        assert!(req.api_key.is_none());
     }
 }
