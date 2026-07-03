@@ -178,10 +178,45 @@ const auditSchema = z.object({
   ),
 });
 
+const connectionSchema = z.object({
+  id: z.string(),
+  label: z.string(),
+  baseUrl: z.string(),
+  model: z.string(),
+  timeoutSeconds: z.number().nullable().optional(),
+  isActive: z.boolean(),
+  apiKeyConfigured: z.boolean(),
+});
+
+const searchProviderConfigsSchema = z.object({
+  tavily: z
+    .object({ apiKeyConfigured: z.boolean().optional(), baseUrl: z.string().optional() })
+    .partial()
+    .optional(),
+  serpapi: z
+    .object({
+      apiKeyConfigured: z.boolean().optional(),
+      engine: z.string().optional(),
+      baseUrl: z.string().optional(),
+    })
+    .partial()
+    .optional(),
+  searxng: z
+    .object({ url: z.string().optional(), categories: z.array(z.string()).optional() })
+    .partial()
+    .optional(),
+  ollama: z
+    .object({ apiKeyConfigured: z.boolean().optional(), url: z.string().optional() })
+    .partial()
+    .optional(),
+});
+
 const settingsSchema = z.object({
+  // Retained legacy flat fields (backward compat during migration). Now optional
+  // because the redesigned GET nests language/defaultQueryLimit under `defaults`.
   providerMode: z.string(),
-  language: z.string(),
-  defaultQueryLimit: z.number(),
+  language: z.string().optional(),
+  defaultQueryLimit: z.number().optional(),
   providerBaseUrl: z.string().nullable().optional(),
   providerApiKeyConfigured: z.boolean().optional(),
   providerModel: z.string().nullable().optional(),
@@ -195,7 +230,42 @@ const settingsSchema = z.object({
   ollamaSearchUrl: z.string().nullable().optional(),
   tavilyBaseUrl: z.string().nullable().optional(),
   serpapiBaseUrl: z.string().nullable().optional(),
+  // New structured capability blocks.
+  connections: z.array(connectionSchema).optional(),
+  embedding: z
+    .object({
+      enabled: z.boolean(),
+      baseUrl: z.string().nullable().optional(),
+      model: z.string().nullable().optional(),
+      timeoutSeconds: z.number().nullable().optional(),
+      apiKeyConfigured: z.boolean(),
+    })
+    .optional(),
+  image: z
+    .object({
+      baseUrl: z.string().nullable().optional(),
+      model: z.string().nullable().optional(),
+      size: z.string().nullable().optional(),
+      timeoutSeconds: z.number().nullable().optional(),
+      apiKeyConfigured: z.boolean(),
+    })
+    .optional(),
+  search: z
+    .object({
+      provider: z.string().nullable().optional(),
+      providers: searchProviderConfigsSchema,
+    })
+    .optional(),
+  defaults: z
+    .object({
+      language: z.string(),
+      defaultQueryLimit: z.number(),
+    })
+    .optional(),
 });
+
+export type SystemSettings = z.infer<typeof settingsSchema>;
+export type ProviderConnection = z.infer<typeof connectionSchema>;
 
 const webSearchResultSchema = z.object({
   title: z.string(),
