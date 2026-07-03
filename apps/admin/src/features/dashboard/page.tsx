@@ -56,13 +56,13 @@ export function DashboardPage() {
         <Card>
           <CardHeader>
             <CardDescription>Language</CardDescription>
-            <CardTitle className="text-2xl font-semibold">{settings.data?.language ?? "unknown"}</CardTitle>
+            <CardTitle className="text-2xl font-semibold">{settings.data?.defaults?.language ?? "unknown"}</CardTitle>
           </CardHeader>
         </Card>
         <Card>
           <CardHeader>
             <CardDescription>Default Query Limit</CardDescription>
-            <CardTitle className="text-2xl font-semibold">{settings.data?.defaultQueryLimit ?? 0}</CardTitle>
+            <CardTitle className="text-2xl font-semibold">{settings.data?.defaults?.defaultQueryLimit ?? 0}</CardTitle>
           </CardHeader>
         </Card>
       </div>
@@ -92,8 +92,8 @@ export function DashboardPage() {
           </CardHeader>
           <CardContent className="grid gap-2 text-sm text-muted-foreground">
             <p>{settings.data?.providerMode ?? "unknown"}</p>
-            <p>{settings.data?.language ?? "unknown"}</p>
-            <p>{settings.data?.defaultQueryLimit ?? 0}</p>
+            <p>{settings.data?.defaults?.language ?? "unknown"}</p>
+            <p>{settings.data?.defaults?.defaultQueryLimit ?? 0}</p>
             <Link className="inline-link" to="/settings">
               Settings
             </Link>

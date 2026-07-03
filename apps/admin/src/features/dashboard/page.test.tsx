@@ -29,8 +29,7 @@ vi.mock("../settings/queries", () => ({
   useSystemSettingsQuery: () => ({
     data: {
       providerMode: "openai-compatible",
-      language: "en",
-      defaultQueryLimit: 5,
+      defaults: { language: "en", defaultQueryLimit: 5 },
     },
     isLoading: false,
   }),
@@ -54,5 +53,7 @@ describe("dashboard page", () => {
     expect(screen.getByRole("link", { name: "demo-project" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "research-notes" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Projects" })).toBeInTheDocument();
+    expect(screen.getAllByText("en")).toHaveLength(2);
+    expect(screen.getAllByText("5")).toHaveLength(2);
   });
 });
