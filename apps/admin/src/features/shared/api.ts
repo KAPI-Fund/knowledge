@@ -819,6 +819,75 @@ export async function getSystemSettings() {
   return apiFetch("/api/system/settings", { method: "GET" }, settingsSchema);
 }
 
+export async function createProviderConnection(input: {
+  label: string;
+  baseUrl: string;
+  apiKey?: string;
+  model: string;
+  timeoutSeconds?: number;
+}) {
+  return apiFetch(
+    "/api/system/provider-connections",
+    {
+      method: "POST",
+      headers: csrfHeader(),
+      body: JSON.stringify({
+        label: input.label,
+        baseUrl: input.baseUrl,
+        model: input.model,
+        timeoutSeconds: input.timeoutSeconds,
+        ...(input.apiKey?.trim() ? { apiKey: input.apiKey.trim() } : {}),
+      }),
+    },
+    settingsSchema,
+  );
+}
+
+export async function updateProviderConnection(
+  id: string,
+  input: {
+    label: string;
+    baseUrl: string;
+    model: string;
+    apiKey?: string;
+    clearApiKey?: boolean;
+    timeoutSeconds?: number;
+  },
+) {
+  return apiFetch(
+    `/api/system/provider-connections/${id}`,
+    {
+      method: "PATCH",
+      headers: csrfHeader(),
+      body: JSON.stringify({
+        label: input.label,
+        baseUrl: input.baseUrl,
+        model: input.model,
+        timeoutSeconds: input.timeoutSeconds,
+        ...(input.apiKey?.trim() ? { apiKey: input.apiKey.trim() } : {}),
+        ...(input.clearApiKey && !input.apiKey?.trim() ? { clearApiKey: true } : {}),
+      }),
+    },
+    settingsSchema,
+  );
+}
+
+export async function deleteProviderConnection(id: string) {
+  return apiFetch(
+    `/api/system/provider-connections/${id}`,
+    { method: "DELETE", headers: csrfHeader() },
+    settingsSchema,
+  );
+}
+
+export async function activateProviderConnection(id: string) {
+  return apiFetch(
+    `/api/system/provider-connections/${id}/activate`,
+    { method: "POST", headers: csrfHeader() },
+    settingsSchema,
+  );
+}
+
 export async function createLintTask(input: {
   projectId: string;
   mode: string;
@@ -1063,6 +1132,30 @@ export async function updateSystemSettings(input: {
   serpapiBaseUrl?: string;
   clearProviderApiKey?: boolean;
   clearSearchApiKey?: boolean;
+  image?: {
+    baseUrl?: string;
+    model?: string;
+    size?: string;
+    timeoutSeconds?: number;
+    apiKey?: string;
+    clearApiKey?: boolean;
+  };
+  embedding?: {
+    enabled?: boolean;
+    baseUrl?: string;
+    model?: string;
+    timeoutSeconds?: number;
+    apiKey?: string;
+    clearApiKey?: boolean;
+  };
+  search?: {
+    provider?: string;
+    providers?: Record<string, Record<string, unknown>>;
+  };
+  defaults?: {
+    language?: string;
+    defaultQueryLimit?: number;
+  };
 }) {
   const payload = {
     providerMode: input.providerMode,
@@ -1089,8 +1182,58 @@ export async function updateSystemSettings(input: {
           searchApiKey: input.searchApiKey.trim(),
         }
       : {}),
-    ...(input.clearProviderApiKey ? { clearProviderApiKey: true } : {}),
-    ...(input.clearSearchApiKey ? { clearSearchApiKey: true } : {}),
+    ...(input.clearProviderApiKey && !input.providerApiKey?.trim()
+      ? { clearProviderApiKey: true }
+      : {}),
+    ...(input.clearSearchApiKey && !input.searchApiKey?.trim() ? { clearSearchApiKey: true } : {}),
+    ...(input.image
+      ? {
+          image: {
+            baseUrl: input.image.baseUrl,
+            model: input.image.model,
+            size: input.image.size,
+            timeoutSeconds: input.image.timeoutSeconds,
+            ...(input.image.apiKey?.trim() ? { apiKey: input.image.apiKey.trim() } : {}),
+            ...(input.image.clearApiKey && !input.image.apiKey?.trim()
+              ? { clearApiKey: true }
+              : {}),
+          },
+        }
+      : {}),
+    ...(input.embedding
+      ? {
+          embedding: {
+            enabled: input.embedding.enabled,
+            baseUrl: input.embedding.baseUrl,
+            model: input.embedding.model,
+            timeoutSeconds: input.embedding.timeoutSeconds,
+            ...(input.embedding.apiKey?.trim() ? { apiKey: input.embedding.apiKey.trim() } : {}),
+            ...(input.embedding.clearApiKey && !input.embedding.apiKey?.trim()
+              ? { clearApiKey: true }
+              : {}),
+          },
+        }
+      : {}),
+    ...(input.search
+      ? {
+          search: {
+            provider: input.search.provider,
+            ...(input.search.providers
+              ? {
+                  providers: Object.fromEntries(
+                    Object.entries(input.search.providers).map(([name, fields]) => [
+                      name,
+                      Object.fromEntries(
+                        Object.entries(fields).filter(([, v]) => v !== ""),
+                      ),
+                    ]),
+                  ),
+                }
+              : {}),
+          },
+        }
+      : {}),
+    ...(input.defaults ? { defaults: input.defaults } : {}),
   };
 
   return apiFetch(
