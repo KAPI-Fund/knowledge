@@ -186,6 +186,10 @@ vi.mock("../settings/queries", () => ({
     isPending: false,
     data: undefined,
   }),
+  useCreateConnectionMutation: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useUpdateConnectionMutation: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useDeleteConnectionMutation: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useActivateConnectionMutation: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }));
 
 vi.mock("../search/queries", () => ({
@@ -328,6 +332,6 @@ describe("project operation pages", () => {
     await user.click(screen.getByRole("button", { name: /account/i }));
     await user.click(await screen.findByRole("menuitem", { name: "Settings" }));
     expect(await screen.findByRole("heading", { name: "Settings" })).toBeInTheDocument();
-    expect(screen.getByDisplayValue("deterministic")).toBeInTheDocument();
+    expect(screen.getByText("LLM Connections")).toBeInTheDocument();
   });
 });

@@ -117,6 +117,7 @@ vi.mock("../settings/queries", () => ({
       providerModel: "",
       providerEmbeddingModel: "",
       providerTimeoutSeconds: 60,
+      defaults: { language: "en", defaultQueryLimit: 3 },
     },
     isLoading: false,
   }),
@@ -129,6 +130,10 @@ vi.mock("../settings/queries", () => ({
     isPending: false,
     data: undefined,
   }),
+  useCreateConnectionMutation: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useUpdateConnectionMutation: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useDeleteConnectionMutation: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useActivateConnectionMutation: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }));
 
 vi.mock("../sources/queries", () => ({
@@ -351,24 +356,15 @@ describe("operations actions", () => {
       </QueryClientProvider>,
     );
 
+    await user.click(screen.getByRole("button", { name: "Defaults" }));
     await user.clear(screen.getByLabelText("Default Query Limit"));
     await user.type(screen.getByLabelText("Default Query Limit"), "5");
-    await user.click(screen.getByRole("button", { name: "Save Settings" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
     expect(updateSettings).toHaveBeenCalledWith({
       providerMode: "deterministic",
       language: "en",
       defaultQueryLimit: 5,
-      providerBaseUrl: "",
-      providerModel: "",
-      providerEmbeddingModel: "",
-      providerTimeoutSeconds: 60,
-      searchProvider: "none",
-      serpapiEngine: "google",
-      searxngUrl: "",
-      searxngCategories: ["general"],
-      ollamaSearchUrl: "",
-      tavilyBaseUrl: "",
-      serpapiBaseUrl: "",
+      defaults: { language: "en", defaultQueryLimit: 5 },
     });
   });
 
