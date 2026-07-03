@@ -56,6 +56,68 @@ pub struct UpdateSettingsRequest {
   pub clear_provider_api_key: Option<bool>,
   #[serde(default)]
   pub clear_search_api_key: Option<bool>,
+  #[serde(default)]
+  pub image: Option<ImageSettingsBlock>,
+  #[serde(default)]
+  pub embedding: Option<EmbeddingSettingsBlock>,
+  #[serde(default)]
+  pub search: Option<SearchSettingsBlock>,
+  #[serde(default)]
+  pub defaults: Option<DefaultsBlock>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageSettingsBlock {
+    #[serde(default)]
+    pub base_url: Option<String>,
+    #[serde(default)]
+    pub api_key: Option<String>,
+    #[serde(default)]
+    pub clear_api_key: bool,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub size: Option<String>,
+    #[serde(default)]
+    pub timeout_seconds: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddingSettingsBlock {
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub base_url: Option<String>,
+    #[serde(default)]
+    pub api_key: Option<String>,
+    #[serde(default)]
+    pub clear_api_key: bool,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub timeout_seconds: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchSettingsBlock {
+    #[serde(default)]
+    pub provider: Option<String>,
+    /// Full per-provider config map (already merged client-side so switching
+    /// providers retains each key). Stored verbatim into search_provider_configs.
+    #[serde(default)]
+    pub providers: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DefaultsBlock {
+    #[serde(default)]
+    pub language: Option<String>,
+    #[serde(default)]
+    pub default_query_limit: Option<i64>,
 }
 
 fn configured(value: Option<&str>) -> bool {
@@ -309,6 +371,37 @@ async fn get_settings(
   Ok(Json(build_settings_response(&state).await?))
 }
 
+/// Deep-merge an incoming per-provider search-config map onto the stored one.
+/// For each provider present in `incoming`, overlay its fields onto the stored
+/// provider block, but SKIP any incoming field whose value is an empty string so
+/// a blank apiKey box keeps the stored key (the client never sees stored keys —
+/// GET redacts them). Providers absent from `incoming` are left untouched.
+pub(crate) fn merge_search_provider_configs(
+    stored: &serde_json::Value,
+    incoming: &serde_json::Value,
+) -> serde_json::Value {
+    let mut out = stored.as_object().cloned().unwrap_or_default();
+    if let Some(incoming_obj) = incoming.as_object() {
+        for (provider, fields) in incoming_obj {
+            let mut block = out
+                .get(provider)
+                .and_then(|v| v.as_object().cloned())
+                .unwrap_or_default();
+            if let Some(field_obj) = fields.as_object() {
+                for (key, value) in field_obj {
+                    // Blank string = "keep whatever is stored" (do not overwrite).
+                    if value.as_str() == Some("") {
+                        continue;
+                    }
+                    block.insert(key.clone(), value.clone());
+                }
+            }
+            out.insert(provider.clone(), serde_json::Value::Object(block));
+        }
+    }
+    serde_json::Value::Object(out)
+}
+
 async fn update_settings(
   State(state): State<AppState>,
   headers: HeaderMap,
@@ -360,6 +453,90 @@ async fn update_settings(
   .execute(&state.pool)
   .await
   .map_err(ApiError::from)?;
+
+  if let Some(image) = &payload.image {
+      sqlx::query(
+          "UPDATE system_settings
+           SET image_base_url = COALESCE($1, image_base_url),
+               image_api_key = COALESCE(NULLIF($2, ''), CASE WHEN $3 THEN NULL ELSE image_api_key END),
+               image_model = COALESCE($4, image_model),
+               image_size = COALESCE($5, image_size),
+               image_timeout_seconds = COALESCE($6, image_timeout_seconds)
+           WHERE id = 1",
+      )
+      .bind(image.base_url.as_deref())
+      .bind(image.api_key.as_deref())
+      .bind(image.clear_api_key)
+      .bind(image.model.as_deref())
+      .bind(image.size.as_deref())
+      .bind(image.timeout_seconds)
+      .execute(&state.pool)
+      .await
+      .map_err(ApiError::from)?;
+  }
+
+  if let Some(embedding) = &payload.embedding {
+      sqlx::query(
+          "UPDATE system_settings
+           SET embedding_enabled = COALESCE($1, embedding_enabled),
+               embedding_base_url = COALESCE($2, embedding_base_url),
+               embedding_api_key = COALESCE(NULLIF($3, ''), CASE WHEN $4 THEN NULL ELSE embedding_api_key END),
+               embedding_model = COALESCE($5, embedding_model),
+               embedding_timeout_seconds = COALESCE($6, embedding_timeout_seconds)
+           WHERE id = 1",
+      )
+      .bind(embedding.enabled)
+      .bind(embedding.base_url.as_deref())
+      .bind(embedding.api_key.as_deref())
+      .bind(embedding.clear_api_key)
+      .bind(embedding.model.as_deref())
+      .bind(embedding.timeout_seconds)
+      .execute(&state.pool)
+      .await
+      .map_err(ApiError::from)?;
+  }
+
+  if let Some(search) = &payload.search {
+      if let Some(provider) = &search.provider {
+          sqlx::query("UPDATE system_settings SET search_provider = $1 WHERE id = 1")
+              .bind(provider)
+              .execute(&state.pool)
+              .await
+              .map_err(ApiError::from)?;
+      }
+      // Deep-merge the incoming per-provider map into the stored one so fields
+      // the client omits (notably a configured apiKey it never sees, because
+      // GET redacts it) are preserved. Whole-object replacement would destroy
+      // stored keys whenever any field is edited or the provider is switched.
+      if let Some(incoming) = &search.providers {
+          let existing: serde_json::Value = sqlx::query_scalar(
+              "SELECT search_provider_configs FROM system_settings WHERE id = 1",
+          )
+          .fetch_one(&state.pool)
+          .await
+          .map_err(ApiError::from)?;
+          let merged = merge_search_provider_configs(&existing, incoming);
+          sqlx::query("UPDATE system_settings SET search_provider_configs = $1 WHERE id = 1")
+              .bind(merged)
+              .execute(&state.pool)
+              .await
+              .map_err(ApiError::from)?;
+      }
+  }
+
+  if let Some(defaults) = &payload.defaults {
+      sqlx::query(
+          "UPDATE system_settings
+           SET language = COALESCE($1, language),
+               default_query_limit = COALESCE($2, default_query_limit)
+           WHERE id = 1",
+      )
+      .bind(defaults.language.as_deref())
+      .bind(defaults.default_query_limit)
+      .execute(&state.pool)
+      .await
+      .map_err(ApiError::from)?;
+  }
 
   Ok(Json(build_settings_response(&state).await?))
 }
@@ -424,5 +601,67 @@ mod tests {
         .unwrap();
         assert_eq!(req.clear_api_key, false);
         assert!(req.api_key.is_none());
+    }
+
+    use super::UpdateSettingsRequest;
+
+    #[test]
+    fn update_settings_request_parses_capability_blocks() {
+        let req: UpdateSettingsRequest = serde_json::from_str(
+            r#"{
+              "providerMode":"openai-compatible","language":"en","defaultQueryLimit":8,
+              "image":{"baseUrl":"https://img.example.com","model":"gpt-image-1","size":"512x512","timeoutSeconds":60},
+              "embedding":{"enabled":true,"baseUrl":"https://emb.example.com","model":"text-embedding-3-small"},
+              "search":{"provider":"tavily","providers":{"tavily":{"apiKey":"tav","baseUrl":"https://api.tavily.com"}}}
+            }"#,
+        )
+        .unwrap();
+        let image = req.image.expect("image block");
+        assert_eq!(image.model.as_deref(), Some("gpt-image-1"));
+        assert_eq!(image.size.as_deref(), Some("512x512"));
+        let embedding = req.embedding.expect("embedding block");
+        assert_eq!(embedding.enabled, Some(true));
+        let search = req.search.expect("search block");
+        assert_eq!(search.provider.as_deref(), Some("tavily"));
+    }
+
+    use super::merge_search_provider_configs;
+
+    #[test]
+    fn merge_overlays_incoming_fields_and_preserves_stored_key() {
+        use serde_json::json;
+        let stored = json!({
+            "tavily": { "apiKey": "stored-key", "baseUrl": "https://api.tavily.com" }
+        });
+        // The client resends the redacted-then-edited block: no apiKey (it never
+        // saw it) but a changed baseUrl.
+        let incoming = json!({
+            "tavily": { "baseUrl": "https://tavily.local" }
+        });
+        let merged = merge_search_provider_configs(&stored, &incoming);
+        assert_eq!(merged["tavily"]["apiKey"], "stored-key");
+        assert_eq!(merged["tavily"]["baseUrl"], "https://tavily.local");
+    }
+
+    #[test]
+    fn merge_blank_apikey_keeps_stored_and_nonblank_replaces() {
+        use serde_json::json;
+        let stored = json!({ "tavily": { "apiKey": "old" } });
+        // Blank string means "keep": stored key survives.
+        let kept = merge_search_provider_configs(&stored, &json!({ "tavily": { "apiKey": "" } }));
+        assert_eq!(kept["tavily"]["apiKey"], "old");
+        // Non-blank string replaces.
+        let replaced = merge_search_provider_configs(&stored, &json!({ "tavily": { "apiKey": "new" } }));
+        assert_eq!(replaced["tavily"]["apiKey"], "new");
+    }
+
+    #[test]
+    fn merge_adds_provider_absent_from_stored() {
+        use serde_json::json;
+        let merged = merge_search_provider_configs(
+            &json!({}),
+            &json!({ "searxng": { "url": "https://searx.local" } }),
+        );
+        assert_eq!(merged["searxng"]["url"], "https://searx.local");
     }
 }
