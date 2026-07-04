@@ -30,9 +30,6 @@ export function DefaultsSection() {
   async function save() {
     const limit = Number(defaultQueryLimit);
     await update.mutateAsync({
-      providerMode: settings.data?.providerMode ?? "openai-compatible",
-      language,
-      defaultQueryLimit: limit,
       defaults: { language, defaultQueryLimit: limit },
     });
   }

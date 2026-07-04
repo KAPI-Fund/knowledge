@@ -182,24 +182,9 @@ async fn configure_mock_provider(
     state: &knowledge_server::app::state::AppState,
     mock: &MockOpenAiServer,
 ) {
-    sqlx::query(
-        "UPDATE system_settings
-     SET provider_mode = $1,
-         provider_base_url = $2,
-         provider_api_key = $3,
-         provider_model = $4,
-         provider_embedding_model = $5,
-         provider_timeout_seconds = $6",
-    )
-    .bind("openai-compatible")
-    .bind(mock.base_url())
-    .bind("test-key")
-    .bind("mock-model")
-    .bind("mock-embedding")
-    .bind(30_i64)
-    .execute(&state.pool)
-    .await
-    .unwrap();
+    support::seed_provider_connection(&state.pool, &mock.base_url(), "test-key", "mock-model", 30)
+        .await;
+    support::seed_embedding(&state.pool, &mock.base_url(), "test-key", "mock-embedding", 30).await;
 }
 
 fn write_dedup_fixture_pages(project_root: &std::path::Path) {

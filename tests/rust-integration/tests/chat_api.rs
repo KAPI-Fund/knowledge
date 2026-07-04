@@ -184,19 +184,8 @@ async fn chat_message_streams_response_and_persists_assistant_message() {
 
     // Point provider at the mock; leave embedding model NULL so hybrid search
     // stays keyword-only (no embeddings round trip in this test).
-    sqlx::query(
-        "UPDATE system_settings
-         SET provider_mode = 'openai-compatible',
-             provider_base_url = $1,
-             provider_api_key = 'test-key',
-             provider_model = 'mock-model',
-             provider_embedding_model = NULL
-         WHERE id = 1",
-    )
-    .bind(mock.base_url())
-    .execute(&state.pool)
-    .await
-    .unwrap();
+    support::seed_provider_connection(&state.pool, &mock.base_url(), "test-key", "mock-model", 30)
+        .await;
 
     fs::write(
         project_root.join("wiki/concepts/attention.md"),
@@ -301,19 +290,8 @@ async fn chat_failure_emits_error_event_and_keeps_user_message() {
     let project_id =
         support::create_project_with_alias(state.clone(), &cookie, &csrf, project_root).await;
 
-    sqlx::query(
-        "UPDATE system_settings
-         SET provider_mode = 'openai-compatible',
-             provider_base_url = $1,
-             provider_api_key = 'test-key',
-             provider_model = 'mock-model',
-             provider_embedding_model = NULL
-         WHERE id = 1",
-    )
-    .bind(mock.base_url())
-    .execute(&state.pool)
-    .await
-    .unwrap();
+    support::seed_provider_connection(&state.pool, &mock.base_url(), "test-key", "mock-model", 30)
+        .await;
 
     let created = build_app(state.clone())
         .oneshot(

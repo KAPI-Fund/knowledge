@@ -150,22 +150,8 @@ async fn semantic_lint_task_uses_provider_and_parses_lint_blocks() {
     let project_root = temp.path().join("semantic-lint-project");
     let project_id = create_project(state.clone(), &cookie, &csrf, project_root.clone()).await;
 
-    sqlx::query(
-        "UPDATE system_settings
-     SET provider_mode = $1,
-         provider_base_url = $2,
-         provider_api_key = $3,
-         provider_model = $4,
-         provider_timeout_seconds = $5",
-    )
-    .bind("openai-compatible")
-    .bind(mock.base_url())
-    .bind("test-key")
-    .bind("mock-model")
-    .bind(30_i64)
-    .execute(&state.pool)
-    .await
-    .unwrap();
+    support::seed_provider_connection(&state.pool, &mock.base_url(), "test-key", "mock-model", 30)
+        .await;
 
     fs::write(
     project_root.join("wiki/concepts/attention.md"),

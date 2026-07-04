@@ -6,9 +6,11 @@ import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { useSystemSettingsQuery, useUpdateSystemSettingsMutation } from "../queries";
 import { parseTimeoutSeconds } from "./parse-timeout";
-import { useSettingsTopLevel } from "./use-settings-top-level";
 
-const SIZES = [
+const GPT_IMAGE_SIZES = ["1024x1024", "1024x1536", "1536x1024"];
+const DALLE3_SIZES = ["1024x1024", "1024x1792", "1792x1024"];
+const DALLE2_SIZES = ["256x256", "512x512", "1024x1024"];
+const ALL_SIZES = [
   "256x256",
   "512x512",
   "1024x1024",
@@ -18,10 +20,20 @@ const SIZES = [
   "1792x1024",
 ];
 
+// Each OpenAI image model family only accepts a fixed set of sizes; offering an
+// out-of-family size just produces a 400 at call time. Unknown models fall back
+// to the full list so custom endpoints aren't blocked.
+export function allowedSizesForModel(model: string): string[] {
+  const m = model.trim().toLowerCase();
+  if (m.startsWith("gpt-image")) return GPT_IMAGE_SIZES;
+  if (m.startsWith("dall-e-3") || m.startsWith("dalle-3")) return DALLE3_SIZES;
+  if (m.startsWith("dall-e-2") || m.startsWith("dalle-2")) return DALLE2_SIZES;
+  return ALL_SIZES;
+}
+
 export function ImageSection() {
   const settings = useSystemSettingsQuery();
   const update = useUpdateSystemSettingsMutation();
-  const topLevel = useSettingsTopLevel(settings.data);
 
   const [baseUrl, setBaseUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
@@ -46,9 +58,13 @@ export function ImageSection() {
     setTimeoutSeconds(String(img.timeoutSeconds ?? 60));
   }, [settings.data?.image]);
 
+  useEffect(() => {
+    const allowed = allowedSizesForModel(model);
+    setSize((cur) => (allowed.includes(cur) ? cur : allowed[0]));
+  }, [model]);
+
   async function save() {
     await update.mutateAsync({
-      ...topLevel,
       image: {
         baseUrl,
         model,
@@ -95,7 +111,7 @@ export function ImageSection() {
         <label className="grid gap-1.5 text-sm font-medium">
           Image Size
           <Select aria-label="Image Size" value={size} onChange={(e) => setSize(e.target.value)}>
-            {SIZES.map((s) => (
+            {allowedSizesForModel(model).map((s) => (
               <option key={s} value={s}>
                 {s}
               </option>

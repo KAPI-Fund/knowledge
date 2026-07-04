@@ -22,7 +22,6 @@ vi.mock("../queries", () => ({
 
 function tavilyActive() {
   return {
-    providerMode: "openai-compatible",
     defaults: { language: "en", defaultQueryLimit: 8 },
     search: {
       provider: "tavily",
@@ -59,7 +58,7 @@ describe("WebSearchSection", () => {
     expect(payload.search.providers.tavily.baseUrl).toBe("https://tavily.local");
     // Blank key box → empty string means "keep the stored key" server-side.
     expect(payload.search.providers.tavily.apiKey).toBe("");
-    expect(payload).toMatchObject({ providerMode: "openai-compatible", language: "en", defaultQueryLimit: 8 });
+    expect(Object.keys(payload)).toEqual(["search"]);
   });
 
   it("switching provider keeps each provider's fields in the payload", async () => {

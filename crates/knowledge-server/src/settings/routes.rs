@@ -28,34 +28,6 @@ pub fn router() -> Router<AppState> {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateSettingsRequest {
-  pub provider_mode: String,
-  pub language: String,
-  pub default_query_limit: i64,
-  pub provider_base_url: Option<String>,
-  pub provider_api_key: Option<String>,
-  pub provider_model: Option<String>,
-  pub provider_embedding_model: Option<String>,
-  pub provider_timeout_seconds: Option<i64>,
-  #[serde(default)]
-  pub search_provider: Option<String>,
-  #[serde(default)]
-  pub search_api_key: Option<String>,
-  #[serde(default)]
-  pub serpapi_engine: Option<String>,
-  #[serde(default)]
-  pub searxng_url: Option<String>,
-  #[serde(default)]
-  pub searxng_categories: Option<Vec<String>>,
-  #[serde(default)]
-  pub ollama_search_url: Option<String>,
-  #[serde(default)]
-  pub tavily_base_url: Option<String>,
-  #[serde(default)]
-  pub serpapi_base_url: Option<String>,
-  #[serde(default)]
-  pub clear_provider_api_key: Option<bool>,
-  #[serde(default)]
-  pub clear_search_api_key: Option<bool>,
   #[serde(default)]
   pub image: Option<ImageSettingsBlock>,
   #[serde(default)]
@@ -164,29 +136,14 @@ fn redact_search_configs(configs: &serde_json::Value) -> serde_json::Value {
 }
 
 async fn build_settings_response(state: &AppState) -> Result<serde_json::Value, ApiError> {
-    let (
-        provider_mode,
-        language,
-        default_query_limit,
-        provider_base_url,
-        provider_api_key,
-        provider_model,
-        provider_embedding_model,
-        provider_timeout_seconds,
-        search_provider,
-    ) = sqlx::query_as::<_, (
-        String, String, i64,
-        Option<String>, Option<String>, Option<String>, Option<String>, Option<i64>,
-        String,
-    )>(
-        "SELECT provider_mode, language, default_query_limit,
-                provider_base_url, provider_api_key, provider_model,
-                provider_embedding_model, provider_timeout_seconds, search_provider
-         FROM system_settings WHERE id = 1",
-    )
-    .fetch_one(&state.pool)
-    .await
-    .map_err(ApiError::from)?;
+    let (language, default_query_limit, search_provider) =
+        sqlx::query_as::<_, (String, i64, String)>(
+            "SELECT language, default_query_limit, search_provider
+             FROM system_settings WHERE id = 1",
+        )
+        .fetch_one(&state.pool)
+        .await
+        .map_err(ApiError::from)?;
 
     let (
         embedding_enabled,
@@ -225,14 +182,6 @@ async fn build_settings_response(state: &AppState) -> Result<serde_json::Value, 
     let search_providers = redact_search_configs(&search_provider_configs);
 
     Ok(json!({
-        // Legacy flat fields retained for backward compatibility during migration.
-        "providerMode": provider_mode,
-        "providerBaseUrl": provider_base_url,
-        "providerApiKeyConfigured": configured(provider_api_key.as_deref()),
-        "providerModel": provider_model,
-        "providerEmbeddingModel": provider_embedding_model,
-        "providerTimeoutSeconds": provider_timeout_seconds,
-        // New structured blocks.
         "connections": connections,
         "embedding": {
             "enabled": embedding_enabled,
@@ -441,60 +390,9 @@ async fn update_settings(
       validate_search_provider(provider)?;
   }
 
-  let searxng_categories_value = payload
-    .searxng_categories
-    .as_ref()
-    .map(|values| serde_json::to_value(values).unwrap_or(serde_json::Value::Null));
-
   // All writes share one transaction: any failure rolls the whole PATCH back
   // instead of leaving some capability blocks updated and others not.
   let mut tx = state.pool.begin().await.map_err(ApiError::from)?;
-
-  // Legacy flat fields are COALESCE-preserving: a section that only edits a
-  // capability block omits these, and omission must KEEP the stored value
-  // (binding NULL unconditionally would wipe provider_base_url/model/etc, which
-  // the ingest tasks and the seeded connection still depend on).
-  sqlx::query(
-    "UPDATE system_settings
-     SET provider_mode = $1,
-         language = $2,
-         default_query_limit = $3,
-         provider_base_url = COALESCE($4, provider_base_url),
-         provider_api_key = COALESCE(NULLIF($5, ''), CASE WHEN $17 THEN NULL ELSE provider_api_key END),
-         provider_model = COALESCE($6, provider_model),
-         provider_embedding_model = COALESCE($7, provider_embedding_model),
-         provider_timeout_seconds = COALESCE($8, provider_timeout_seconds),
-         search_provider = COALESCE($9, search_provider),
-         search_api_key = COALESCE(NULLIF($10, ''), CASE WHEN $18 THEN NULL ELSE search_api_key END),
-         serpapi_engine = COALESCE($11, serpapi_engine),
-         searxng_url = COALESCE($12, searxng_url),
-         searxng_categories = COALESCE($13, searxng_categories),
-         ollama_search_url = COALESCE($14, ollama_search_url),
-         tavily_base_url = COALESCE(NULLIF($15, ''), tavily_base_url),
-         serpapi_base_url = COALESCE(NULLIF($16, ''), serpapi_base_url)
-     WHERE id = 1",
-  )
-  .bind(&payload.provider_mode)
-  .bind(&payload.language)
-  .bind(payload.default_query_limit)
-  .bind(&payload.provider_base_url)
-  .bind(payload.provider_api_key.as_deref())
-  .bind(&payload.provider_model)
-  .bind(&payload.provider_embedding_model)
-  .bind(payload.provider_timeout_seconds)
-  .bind(payload.search_provider.as_deref())
-  .bind(payload.search_api_key.as_deref())
-  .bind(payload.serpapi_engine.as_deref())
-  .bind(payload.searxng_url.as_deref())
-  .bind(searxng_categories_value)
-  .bind(payload.ollama_search_url.as_deref())
-  .bind(payload.tavily_base_url.as_deref())
-  .bind(payload.serpapi_base_url.as_deref())
-  .bind(payload.clear_provider_api_key.unwrap_or(false))
-  .bind(payload.clear_search_api_key.unwrap_or(false))
-  .execute(&mut *tx)
-  .await
-  .map_err(ApiError::from)?;
 
   if let Some(image) = &payload.image {
       sqlx::query(
@@ -506,10 +404,10 @@ async fn update_settings(
                image_timeout_seconds = COALESCE($6, image_timeout_seconds)
            WHERE id = 1",
       )
-      .bind(image.base_url.as_deref())
+      .bind(image.base_url.as_deref().map(str::trim))
       .bind(image.api_key.as_deref())
       .bind(image.clear_api_key)
-      .bind(image.model.as_deref())
+      .bind(image.model.as_deref().map(str::trim))
       .bind(image.size.as_deref())
       .bind(image.timeout_seconds)
       .execute(&mut *tx)
@@ -528,10 +426,10 @@ async fn update_settings(
            WHERE id = 1",
       )
       .bind(embedding.enabled)
-      .bind(embedding.base_url.as_deref())
+      .bind(embedding.base_url.as_deref().map(str::trim))
       .bind(embedding.api_key.as_deref())
       .bind(embedding.clear_api_key)
-      .bind(embedding.model.as_deref())
+      .bind(embedding.model.as_deref().map(str::trim))
       .bind(embedding.timeout_seconds)
       .execute(&mut *tx)
       .await
@@ -653,7 +551,6 @@ mod tests {
     fn update_settings_request_parses_capability_blocks() {
         let req: UpdateSettingsRequest = serde_json::from_str(
             r#"{
-              "providerMode":"openai-compatible","language":"en","defaultQueryLimit":8,
               "image":{"baseUrl":"https://img.example.com","model":"gpt-image-1","size":"512x512","timeoutSeconds":60},
               "embedding":{"enabled":true,"baseUrl":"https://emb.example.com","model":"text-embedding-3-small"},
               "search":{"provider":"tavily","providers":{"tavily":{"apiKey":"tav","baseUrl":"https://api.tavily.com"}}}

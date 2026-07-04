@@ -87,6 +87,12 @@ fn validate_connection_fields(label: &str, base_url: &str, model: &str) -> Resul
     Ok(())
 }
 
+/// Trim surrounding whitespace off the stored identity fields so a padded base_url
+/// or model can't silently break request URLs / model routing at call time.
+fn normalize_connection_fields(label: &str, base_url: &str, model: &str) -> (String, String, String) {
+    (label.trim().to_string(), base_url.trim().to_string(), model.trim().to_string())
+}
+
 /// Fields accepted when creating a connection.
 #[derive(Debug, Clone)]
 pub struct NewConnection {
@@ -131,7 +137,9 @@ pub async fn create_connection(
     pool: &PgPool,
     input: &NewConnection,
 ) -> Result<ProviderConnection, ApiError> {
-    validate_connection_fields(&input.label, &input.base_url, &input.model)?;
+    let (label, base_url, model) =
+        normalize_connection_fields(&input.label, &input.base_url, &input.model);
+    validate_connection_fields(&label, &base_url, &model)?;
     let id = Uuid::new_v4().to_string();
     let ts = now()?;
     // First connection becomes active; new ones append after the current max.
@@ -153,10 +161,10 @@ pub async fn create_connection(
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$9)"
     ))
     .bind(&id)
-    .bind(&input.label)
-    .bind(&input.base_url)
+    .bind(&label)
+    .bind(&base_url)
     .bind(input.api_key.as_deref())
-    .bind(&input.model)
+    .bind(&model)
     .bind(input.timeout_seconds)
     .bind(is_active)
     .bind(next_sort)
@@ -185,7 +193,9 @@ pub async fn update_connection(
     id: &str,
     input: &UpdateConnection,
 ) -> Result<ProviderConnection, ApiError> {
-    validate_connection_fields(&input.label, &input.base_url, &input.model)?;
+    let (label, base_url, model) =
+        normalize_connection_fields(&input.label, &input.base_url, &input.model);
+    validate_connection_fields(&label, &base_url, &model)?;
     let ts = now()?;
     let affected = sqlx::query(
         "UPDATE provider_connections
@@ -197,11 +207,11 @@ pub async fn update_connection(
              updated_at = $7
          WHERE id = $8",
     )
-    .bind(&input.label)
-    .bind(&input.base_url)
+    .bind(&label)
+    .bind(&base_url)
     .bind(input.api_key.as_deref())
     .bind(input.clear_api_key)
-    .bind(&input.model)
+    .bind(&model)
     .bind(input.timeout_seconds)
     .bind(&ts)
     .bind(id)
@@ -321,5 +331,14 @@ mod tests {
         assert!(validate_connection_fields("L", "  ", "m").is_err());
         assert!(validate_connection_fields("L", "https://x", "").is_err());
         assert!(validate_connection_fields("L", "https://x", "m").is_ok());
+    }
+
+    #[test]
+    fn normalize_connection_fields_trims_surrounding_whitespace() {
+        let (label, base_url, model) =
+            normalize_connection_fields("  My LLM  ", " https://api.x/v1 ", "  gpt-4o  ");
+        assert_eq!(label, "My LLM");
+        assert_eq!(base_url, "https://api.x/v1");
+        assert_eq!(model, "gpt-4o");
     }
 }

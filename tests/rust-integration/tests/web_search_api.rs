@@ -29,12 +29,10 @@ async fn web_search_against_mock_searxng_returns_results() {
                 .header("x-csrf-token", &csrf)
                 .body(Body::from(
                     json!({
-                      "providerMode": "openai-compatible",
-                      "language": "en",
-                      "defaultQueryLimit": 25,
-                      "searchProvider": "searxng",
-                      "searxngUrl": searxng_base,
-                      "searxngCategories": ["general"]
+                      "search": {
+                        "provider": "searxng",
+                        "providers": { "searxng": { "url": searxng_base, "categories": ["general"] } }
+                      }
                     })
                     .to_string(),
                 ))
@@ -254,10 +252,12 @@ async fn patch_settings_response_reflects_db_state() {
                 .header("x-csrf-token", &csrf)
                 .body(Body::from(
                     json!({
-                      "providerMode": "openai-compatible",
-                      "language": "en",
-                      "defaultQueryLimit": 25,
-                      "providerApiKey": "first-secret"
+                      "embedding": {
+                        "enabled": true,
+                        "baseUrl": "https://emb.local/v1",
+                        "model": "text-embedding-3-small",
+                        "apiKey": "first-secret"
+                      }
                     })
                     .to_string(),
                 ))
@@ -267,7 +267,7 @@ async fn patch_settings_response_reflects_db_state() {
         .unwrap();
     assert_eq!(initial.status(), StatusCode::OK);
     let body = read_json(initial.into_body()).await;
-    assert_eq!(body["providerApiKeyConfigured"], json!(true));
+    assert_eq!(body["embedding"]["apiKeyConfigured"], json!(true));
 
     let preserve = build_app(state)
         .oneshot(
@@ -279,9 +279,7 @@ async fn patch_settings_response_reflects_db_state() {
                 .header("x-csrf-token", &csrf)
                 .body(Body::from(
                     json!({
-                      "providerMode": "openai-compatible",
-                      "language": "en",
-                      "defaultQueryLimit": 25
+                      "embedding": { "model": "text-embedding-3-large" }
                     })
                     .to_string(),
                 ))
@@ -292,9 +290,9 @@ async fn patch_settings_response_reflects_db_state() {
     assert_eq!(preserve.status(), StatusCode::OK);
     let body = read_json(preserve.into_body()).await;
     assert_eq!(
-        body["providerApiKeyConfigured"],
+        body["embedding"]["apiKeyConfigured"],
         json!(true),
-        "providerApiKeyConfigured must reflect DB state, not request payload"
+        "apiKeyConfigured must reflect DB state, not request payload"
     );
 }
 
@@ -316,12 +314,10 @@ async fn web_search_via_bearer_token() {
                 .header("x-csrf-token", &csrf)
                 .body(Body::from(
                     json!({
-                      "providerMode": "openai-compatible",
-                      "language": "en",
-                      "defaultQueryLimit": 25,
-                      "searchProvider": "searxng",
-                      "searxngUrl": searxng_base,
-                      "searxngCategories": ["general"]
+                      "search": {
+                        "provider": "searxng",
+                        "providers": { "searxng": { "url": searxng_base, "categories": ["general"] } }
+                      }
                     })
                     .to_string(),
                 ))
@@ -444,14 +440,7 @@ async fn settings_patch_rejects_bearer_token() {
                 .header(header::CONTENT_TYPE, "application/json")
                 .header("authorization", format!("Bearer {token}"))
                 .body(Body::from(
-                    json!({
-                      "providerMode": "openai-compatible",
-                      "language": "en",
-                      "defaultQueryLimit": 25,
-                      "searchProvider": "tavily",
-                      "searchApiKey": "stolen-key"
-                    })
-                    .to_string(),
+                    json!({ "search": { "provider": "tavily" } }).to_string(),
                 ))
                 .unwrap(),
         )
@@ -482,12 +471,10 @@ async fn web_search_tavily_uses_persisted_base_url() {
                 .header("x-csrf-token", &csrf)
                 .body(Body::from(
                     json!({
-                      "providerMode": "openai-compatible",
-                      "language": "en",
-                      "defaultQueryLimit": 25,
-                      "searchProvider": "tavily",
-                      "searchApiKey": "test-key",
-                      "tavilyBaseUrl": base
+                      "search": {
+                        "provider": "tavily",
+                        "providers": { "tavily": { "apiKey": "test-key", "baseUrl": base } }
+                      }
                     })
                     .to_string(),
                 ))
@@ -540,13 +527,10 @@ async fn web_search_serpapi_uses_persisted_base_url() {
                 .header("x-csrf-token", &csrf)
                 .body(Body::from(
                     json!({
-                      "providerMode": "openai-compatible",
-                      "language": "en",
-                      "defaultQueryLimit": 25,
-                      "searchProvider": "serpapi",
-                      "searchApiKey": "test-key",
-                      "serpapiEngine": "google",
-                      "serpapiBaseUrl": base
+                      "search": {
+                        "provider": "serpapi",
+                        "providers": { "serpapi": { "apiKey": "test-key", "engine": "google", "baseUrl": base } }
+                      }
                     })
                     .to_string(),
                 ))
@@ -599,12 +583,10 @@ async fn web_search_ollama_uses_persisted_url() {
                 .header("x-csrf-token", &csrf)
                 .body(Body::from(
                     json!({
-                      "providerMode": "openai-compatible",
-                      "language": "en",
-                      "defaultQueryLimit": 25,
-                      "searchProvider": "ollama",
-                      "searchApiKey": "test-key",
-                      "ollamaSearchUrl": base
+                      "search": {
+                        "provider": "ollama",
+                        "providers": { "ollama": { "apiKey": "test-key", "url": base } }
+                      }
                     })
                     .to_string(),
                 ))
@@ -656,11 +638,10 @@ async fn patch_settings_search_api_key_configured_reflects_db_state() {
                 .header("x-csrf-token", &csrf)
                 .body(Body::from(
                     json!({
-                      "providerMode": "openai-compatible",
-                      "language": "en",
-                      "defaultQueryLimit": 25,
-                      "searchProvider": "tavily",
-                      "searchApiKey": "first-search-secret"
+                      "search": {
+                        "provider": "tavily",
+                        "providers": { "tavily": { "apiKey": "first-search-secret" } }
+                      }
                     })
                     .to_string(),
                 ))
@@ -670,7 +651,7 @@ async fn patch_settings_search_api_key_configured_reflects_db_state() {
         .unwrap();
     assert_eq!(initial.status(), StatusCode::OK);
     let body = read_json(initial.into_body()).await;
-    assert_eq!(body["searchApiKeyConfigured"], json!(true));
+    assert_eq!(body["search"]["providers"]["tavily"]["apiKeyConfigured"], json!(true));
 
     let preserve = build_app(state)
         .oneshot(
@@ -681,13 +662,7 @@ async fn patch_settings_search_api_key_configured_reflects_db_state() {
                 .header(header::COOKIE, &cookie)
                 .header("x-csrf-token", &csrf)
                 .body(Body::from(
-                    json!({
-                      "providerMode": "openai-compatible",
-                      "language": "en",
-                      "defaultQueryLimit": 25,
-                      "searchProvider": "tavily"
-                    })
-                    .to_string(),
+                    json!({ "search": { "provider": "tavily" } }).to_string(),
                 ))
                 .unwrap(),
         )
@@ -696,9 +671,9 @@ async fn patch_settings_search_api_key_configured_reflects_db_state() {
     assert_eq!(preserve.status(), StatusCode::OK);
     let body = read_json(preserve.into_body()).await;
     assert_eq!(
-        body["searchApiKeyConfigured"],
+        body["search"]["providers"]["tavily"]["apiKeyConfigured"],
         json!(true),
-        "searchApiKeyConfigured must reflect DB state, not request payload"
+        "apiKeyConfigured must reflect DB state, not request payload"
     );
 }
 
@@ -719,10 +694,12 @@ async fn patch_settings_can_clear_provider_api_key() {
                 .header("x-csrf-token", &csrf)
                 .body(Body::from(
                     json!({
-                      "providerMode": "openai-compatible",
-                      "language": "en",
-                      "defaultQueryLimit": 25,
-                      "providerApiKey": "my-secret"
+                      "embedding": {
+                        "enabled": true,
+                        "baseUrl": "https://emb.local/v1",
+                        "model": "text-embedding-3-small",
+                        "apiKey": "my-secret"
+                      }
                     })
                     .to_string(),
                 ))
@@ -731,7 +708,10 @@ async fn patch_settings_can_clear_provider_api_key() {
         .await
         .unwrap();
     assert_eq!(set_key.status(), StatusCode::OK);
-    assert_eq!(read_json(set_key.into_body()).await["providerApiKeyConfigured"], json!(true));
+    assert_eq!(
+        read_json(set_key.into_body()).await["embedding"]["apiKeyConfigured"],
+        json!(true)
+    );
 
     let clear_key = build_app(state)
         .oneshot(
@@ -743,10 +723,9 @@ async fn patch_settings_can_clear_provider_api_key() {
                 .header("x-csrf-token", &csrf)
                 .body(Body::from(
                     json!({
-                      "providerMode": "openai-compatible",
-                      "language": "en",
-                      "defaultQueryLimit": 25,
-                      "clearProviderApiKey": true
+                      "embedding": {
+                        "clearApiKey": true
+                      }
                     })
                     .to_string(),
                 ))
@@ -756,9 +735,9 @@ async fn patch_settings_can_clear_provider_api_key() {
         .unwrap();
     assert_eq!(clear_key.status(), StatusCode::OK);
     assert_eq!(
-        read_json(clear_key.into_body()).await["providerApiKeyConfigured"],
+        read_json(clear_key.into_body()).await["embedding"]["apiKeyConfigured"],
         json!(false),
-        "clearProviderApiKey:true must set providerApiKeyConfigured to false"
+        "embedding.clearApiKey:true must set embedding.apiKeyConfigured to false"
     );
 }
 
@@ -779,10 +758,12 @@ async fn patch_settings_replacement_key_wins_over_clear() {
                 .header("x-csrf-token", &csrf)
                 .body(Body::from(
                     json!({
-                      "providerMode": "openai-compatible",
-                      "language": "en",
-                      "defaultQueryLimit": 25,
-                      "providerApiKey": "old-secret"
+                      "embedding": {
+                        "enabled": true,
+                        "baseUrl": "https://emb.local/v1",
+                        "model": "text-embedding-3-small",
+                        "apiKey": "old-secret"
+                      }
                     })
                     .to_string(),
                 ))
@@ -802,11 +783,10 @@ async fn patch_settings_replacement_key_wins_over_clear() {
                 .header("x-csrf-token", &csrf)
                 .body(Body::from(
                     json!({
-                      "providerMode": "openai-compatible",
-                      "language": "en",
-                      "defaultQueryLimit": 25,
-                      "providerApiKey": "new-secret",
-                      "clearProviderApiKey": true
+                      "embedding": {
+                        "apiKey": "new-secret",
+                        "clearApiKey": true
+                      }
                     })
                     .to_string(),
                 ))
@@ -816,13 +796,13 @@ async fn patch_settings_replacement_key_wins_over_clear() {
         .unwrap();
     assert_eq!(replace.status(), StatusCode::OK);
     assert_eq!(
-        read_json(replace.into_body()).await["providerApiKeyConfigured"],
+        read_json(replace.into_body()).await["embedding"]["apiKeyConfigured"],
         json!(true),
-        "a supplied replacement key must take precedence over clearProviderApiKey"
+        "a supplied replacement key must take precedence over clearApiKey"
     );
 
     let stored: Option<String> =
-        sqlx::query_scalar("SELECT provider_api_key FROM system_settings WHERE id = 1")
+        sqlx::query_scalar("SELECT embedding_api_key FROM system_settings WHERE id = 1")
             .fetch_one(&state.pool)
             .await
             .unwrap();
@@ -846,11 +826,10 @@ async fn patch_settings_can_clear_search_api_key() {
                 .header("x-csrf-token", &csrf)
                 .body(Body::from(
                     json!({
-                      "providerMode": "openai-compatible",
-                      "language": "en",
-                      "defaultQueryLimit": 25,
-                      "searchProvider": "tavily",
-                      "searchApiKey": "my-search-secret"
+                      "search": {
+                        "provider": "tavily",
+                        "providers": { "tavily": { "apiKey": "my-search-secret" } }
+                      }
                     })
                     .to_string(),
                 ))
@@ -859,7 +838,10 @@ async fn patch_settings_can_clear_search_api_key() {
         .await
         .unwrap();
     assert_eq!(set_key.status(), StatusCode::OK);
-    assert_eq!(read_json(set_key.into_body()).await["searchApiKeyConfigured"], json!(true));
+    assert_eq!(
+        read_json(set_key.into_body()).await["search"]["providers"]["tavily"]["apiKeyConfigured"],
+        json!(true)
+    );
 
     let clear_key = build_app(state)
         .oneshot(
@@ -871,11 +853,10 @@ async fn patch_settings_can_clear_search_api_key() {
                 .header("x-csrf-token", &csrf)
                 .body(Body::from(
                     json!({
-                      "providerMode": "openai-compatible",
-                      "language": "en",
-                      "defaultQueryLimit": 25,
-                      "searchProvider": "tavily",
-                      "clearSearchApiKey": true
+                      "search": {
+                        "provider": "tavily",
+                        "providers": { "tavily": { "apiKey": null } }
+                      }
                     })
                     .to_string(),
                 ))
@@ -885,8 +866,8 @@ async fn patch_settings_can_clear_search_api_key() {
         .unwrap();
     assert_eq!(clear_key.status(), StatusCode::OK);
     assert_eq!(
-        read_json(clear_key.into_body()).await["searchApiKeyConfigured"],
+        read_json(clear_key.into_body()).await["search"]["providers"]["tavily"]["apiKeyConfigured"],
         json!(false),
-        "clearSearchApiKey:true must set searchApiKeyConfigured to false"
+        "explicit null apiKey must set search.providers.tavily.apiKeyConfigured to false"
     );
 }

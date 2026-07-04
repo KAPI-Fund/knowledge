@@ -12,10 +12,6 @@ import {
 afterEach(() => vi.restoreAllMocks());
 
 const NEW_SHAPE = {
-  providerMode: "openai-compatible",
-  providerBaseUrl: "https://api.openai.com",
-  providerApiKeyConfigured: true,
-  providerModel: "gpt-4o",
   connections: [
     {
       id: "c1",
@@ -71,7 +67,7 @@ describe("getSystemSettings", () => {
 });
 
 function okResponse() {
-  return new Response(JSON.stringify({ providerMode: "openai-compatible" }), { status: 200 });
+  return new Response(JSON.stringify({}), { status: 200 });
 }
 
 describe("provider connection CRUD", () => {
@@ -148,10 +144,7 @@ describe("updateSystemSettings capability blocks", () => {
   it("sends image/embedding/search/defaults blocks and omits blank keys", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(okResponse());
     await updateSystemSettings({
-      providerMode: "openai-compatible",
-      language: "en",
-      defaultQueryLimit: 8,
-      image: { baseUrl: "https://img", model: "gpt-image-1", size: "512x512", apiKey: "" },
+      image: { baseUrl: "https://img", model: "gpt-image-1", size: "1024x1024", apiKey: "" },
       embedding: { enabled: true, baseUrl: "https://emb", model: "e", apiKey: "sk-e" },
       search: {
         provider: "tavily",
@@ -160,7 +153,7 @@ describe("updateSystemSettings capability blocks", () => {
       defaults: { language: "fr", defaultQueryLimit: 12 },
     });
     const body = JSON.parse(fetchMock.mock.calls[0][1]?.body as string);
-    expect(body.image).toMatchObject({ baseUrl: "https://img", model: "gpt-image-1", size: "512x512" });
+    expect(body.image).toMatchObject({ baseUrl: "https://img", model: "gpt-image-1", size: "1024x1024" });
     expect(body.image).not.toHaveProperty("apiKey");
     expect(body.embedding).toMatchObject({ enabled: true, apiKey: "sk-e" });
     expect(body.search.providers.tavily.baseUrl).toBe("https://api.tavily.com");
@@ -171,9 +164,6 @@ describe("updateSystemSettings capability blocks", () => {
   it("sends image.clearApiKey when flagged and key blank", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(okResponse());
     await updateSystemSettings({
-      providerMode: "openai-compatible",
-      language: "en",
-      defaultQueryLimit: 8,
       image: { baseUrl: "https://img", model: "m", apiKey: "", clearApiKey: true },
     });
     const body = JSON.parse(fetchMock.mock.calls[0][1]?.body as string);

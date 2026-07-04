@@ -212,25 +212,6 @@ const searchProviderConfigsSchema = z.object({
 });
 
 const settingsSchema = z.object({
-  // Retained legacy flat fields (backward compat during migration). Now optional
-  // because the redesigned GET nests language/defaultQueryLimit under `defaults`.
-  providerMode: z.string(),
-  language: z.string().optional(),
-  defaultQueryLimit: z.number().optional(),
-  providerBaseUrl: z.string().nullable().optional(),
-  providerApiKeyConfigured: z.boolean().optional(),
-  providerModel: z.string().nullable().optional(),
-  providerEmbeddingModel: z.string().nullable().optional(),
-  providerTimeoutSeconds: z.number().nullable().optional(),
-  searchProvider: z.string().nullable().optional(),
-  searchApiKeyConfigured: z.boolean().optional(),
-  serpapiEngine: z.string().nullable().optional(),
-  searxngUrl: z.string().nullable().optional(),
-  searxngCategories: z.array(z.string()).nullable().optional(),
-  ollamaSearchUrl: z.string().nullable().optional(),
-  tavilyBaseUrl: z.string().nullable().optional(),
-  serpapiBaseUrl: z.string().nullable().optional(),
-  // New structured capability blocks.
   connections: z.array(connectionSchema).optional(),
   embedding: z
     .object({
@@ -1114,24 +1095,6 @@ export async function revokeApiToken(input: { tokenId: string }) {
 }
 
 export async function updateSystemSettings(input: {
-  providerMode: string;
-  language: string;
-  defaultQueryLimit: number;
-  providerBaseUrl?: string;
-  providerApiKey?: string;
-  providerModel?: string;
-  providerEmbeddingModel?: string;
-  providerTimeoutSeconds?: number;
-  searchProvider?: string;
-  searchApiKey?: string;
-  serpapiEngine?: string;
-  searxngUrl?: string;
-  searxngCategories?: string[];
-  ollamaSearchUrl?: string;
-  tavilyBaseUrl?: string;
-  serpapiBaseUrl?: string;
-  clearProviderApiKey?: boolean;
-  clearSearchApiKey?: boolean;
   image?: {
     baseUrl?: string;
     model?: string;
@@ -1158,34 +1121,6 @@ export async function updateSystemSettings(input: {
   };
 }) {
   const payload = {
-    providerMode: input.providerMode,
-    language: input.language,
-    defaultQueryLimit: input.defaultQueryLimit,
-    providerBaseUrl: input.providerBaseUrl,
-    providerModel: input.providerModel,
-    providerEmbeddingModel: input.providerEmbeddingModel,
-    providerTimeoutSeconds: input.providerTimeoutSeconds,
-    searchProvider: input.searchProvider,
-    serpapiEngine: input.serpapiEngine,
-    searxngUrl: input.searxngUrl,
-    searxngCategories: input.searxngCategories,
-    ollamaSearchUrl: input.ollamaSearchUrl,
-    tavilyBaseUrl: input.tavilyBaseUrl,
-    serpapiBaseUrl: input.serpapiBaseUrl,
-    ...(input.providerApiKey?.trim()
-      ? {
-          providerApiKey: input.providerApiKey.trim(),
-        }
-      : {}),
-    ...(input.searchApiKey?.trim()
-      ? {
-          searchApiKey: input.searchApiKey.trim(),
-        }
-      : {}),
-    ...(input.clearProviderApiKey && !input.providerApiKey?.trim()
-      ? { clearProviderApiKey: true }
-      : {}),
-    ...(input.clearSearchApiKey && !input.searchApiKey?.trim() ? { clearSearchApiKey: true } : {}),
     ...(input.image
       ? {
           image: {

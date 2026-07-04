@@ -361,9 +361,6 @@ describe("operations actions", () => {
     await user.type(screen.getByLabelText("Default Query Limit"), "5");
     await user.click(screen.getByRole("button", { name: "Save" }));
     expect(updateSettings).toHaveBeenCalledWith({
-      providerMode: "deterministic",
-      language: "en",
-      defaultQueryLimit: 5,
       defaults: { language: "en", defaultQueryLimit: 5 },
     });
   });

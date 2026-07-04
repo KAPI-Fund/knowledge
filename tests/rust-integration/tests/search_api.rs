@@ -289,24 +289,9 @@ async fn search_uses_provider_embeddings_for_vector_only_retrieval() {
   )
   .unwrap();
 
-    sqlx::query(
-        "UPDATE system_settings
-     SET provider_mode = $1,
-         provider_base_url = $2,
-         provider_api_key = $3,
-         provider_model = $4,
-         provider_embedding_model = $5,
-         provider_timeout_seconds = $6",
-    )
-    .bind("openai-compatible")
-    .bind(mock.base_url())
-    .bind("test-key")
-    .bind("mock-model")
-    .bind("mock-embedding")
-    .bind(30_i64)
-    .execute(&state.pool)
-    .await
-    .unwrap();
+    support::seed_provider_connection(&state.pool, &mock.base_url(), "test-key", "mock-model", 30)
+        .await;
+    support::seed_embedding(&state.pool, &mock.base_url(), "test-key", "mock-embedding", 30).await;
 
     let response = build_app(state)
         .oneshot(
@@ -436,24 +421,9 @@ async fn same_stem_wiki_pages_index_and_delete_independently() {
   )
   .unwrap();
 
-    sqlx::query(
-        "UPDATE system_settings
-     SET provider_mode = $1,
-         provider_base_url = $2,
-         provider_api_key = $3,
-         provider_model = $4,
-         provider_embedding_model = $5,
-         provider_timeout_seconds = $6",
-    )
-    .bind("openai-compatible")
-    .bind(mock.base_url())
-    .bind("test-key")
-    .bind("mock-model")
-    .bind("mock-embedding")
-    .bind(30_i64)
-    .execute(&state.pool)
-    .await
-    .unwrap();
+    support::seed_provider_connection(&state.pool, &mock.base_url(), "test-key", "mock-model", 30)
+        .await;
+    support::seed_embedding(&state.pool, &mock.base_url(), "test-key", "mock-embedding", 30).await;
 
     // Hybrid search triggers the embedding index refresh.
     let response = build_app(state.clone())

@@ -44,11 +44,6 @@ services:
       KNOWLEDGE_DATABASE_URL: postgres://postgres:postgres@postgres:5432/knowledge?sslmode=disable
       KNOWLEDGE_REDIS_URL: redis://redis:6379/
       KNOWLEDGE_PROJECT_ROOT: /data/projects
-      KNOWLEDGE_PROVIDER_MODE: openai-compatible
-      KNOWLEDGE_PROVIDER_BASE_URL: ${KNOWLEDGE_PROVIDER_BASE_URL:-https://backend.intelalloc.com}
-      KNOWLEDGE_PROVIDER_API_KEY: ${KNOWLEDGE_PROVIDER_API_KEY:-}
-      KNOWLEDGE_PROVIDER_MODEL: ${KNOWLEDGE_PROVIDER_MODEL:-gpt-5.4}
-      KNOWLEDGE_PROVIDER_TIMEOUT_SECONDS: ${KNOWLEDGE_PROVIDER_TIMEOUT_SECONDS:-180}
     ports:
       - "4001:4001"
     volumes:

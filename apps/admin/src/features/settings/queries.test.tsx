@@ -24,7 +24,7 @@ describe("connection mutations", () => {
   it("create calls createProviderConnection", async () => {
     const spy = vi
       .spyOn(api, "createProviderConnection")
-      .mockResolvedValue({ providerMode: "x" } as never);
+      .mockResolvedValue({} as never);
     const { result } = renderHook(() => useCreateConnectionMutation(), { wrapper: wrapper() });
     await act(async () => {
       await result.current.mutateAsync({ label: "L", baseUrl: "u", model: "m" });
@@ -35,7 +35,7 @@ describe("connection mutations", () => {
   it("update calls updateProviderConnection with id + body", async () => {
     const spy = vi
       .spyOn(api, "updateProviderConnection")
-      .mockResolvedValue({ providerMode: "x" } as never);
+      .mockResolvedValue({} as never);
     const { result } = renderHook(() => useUpdateConnectionMutation(), { wrapper: wrapper() });
     await act(async () => {
       await result.current.mutateAsync({ id: "c1", label: "L", baseUrl: "u", model: "m" });
@@ -46,7 +46,7 @@ describe("connection mutations", () => {
   it("delete calls deleteProviderConnection", async () => {
     const spy = vi
       .spyOn(api, "deleteProviderConnection")
-      .mockResolvedValue({ providerMode: "x" } as never);
+      .mockResolvedValue({} as never);
     const { result } = renderHook(() => useDeleteConnectionMutation(), { wrapper: wrapper() });
     await act(async () => {
       await result.current.mutateAsync("c1");
@@ -57,7 +57,7 @@ describe("connection mutations", () => {
   it("activate calls activateProviderConnection", async () => {
     const spy = vi
       .spyOn(api, "activateProviderConnection")
-      .mockResolvedValue({ providerMode: "x" } as never);
+      .mockResolvedValue({} as never);
     const { result } = renderHook(() => useActivateConnectionMutation(), { wrapper: wrapper() });
     await act(async () => {
       await result.current.mutateAsync("c1");

@@ -6,12 +6,10 @@ import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { useSystemSettingsQuery, useUpdateSystemSettingsMutation } from "../queries";
 import { parseTimeoutSeconds } from "./parse-timeout";
-import { useSettingsTopLevel } from "./use-settings-top-level";
 
 export function EmbeddingSection() {
   const settings = useSystemSettingsQuery();
   const update = useUpdateSystemSettingsMutation();
-  const topLevel = useSettingsTopLevel(settings.data);
 
   const [enabled, setEnabled] = useState(false);
   const [baseUrl, setBaseUrl] = useState("");
@@ -38,7 +36,6 @@ export function EmbeddingSection() {
 
   async function save() {
     await update.mutateAsync({
-      ...topLevel,
       embedding: {
         enabled,
         baseUrl,

@@ -11,7 +11,6 @@ import {
   useSystemSettingsQuery,
   useUpdateSystemSettingsMutation,
 } from "../queries";
-import { useSettingsTopLevel } from "./use-settings-top-level";
 
 // Editable per-provider fields. apiKey is always a plain editable string; blank
 // means "keep the stored key" (backend deep-merge skips empty-string fields).
@@ -45,7 +44,6 @@ export function WebSearchSection() {
   const settings = useSystemSettingsQuery();
   const update = useUpdateSystemSettingsMutation();
   const runWebSearch = useRunWebSearchMutation();
-  const topLevel = useSettingsTopLevel(settings.data);
 
   const [fields, setFields] = useState<SearchFields>(EMPTY);
   // Per-provider "remove the stored api key" toggles. Separate from `fields`
@@ -102,7 +100,6 @@ export function WebSearchSection() {
     // Send every provider block so switching providers never drops a stored
     // field.
     await update.mutateAsync({
-      ...topLevel,
       search: {
         provider: fields.provider,
         providers: {

@@ -91,7 +91,7 @@ export function DashboardPage() {
             <CardDescription>Current provider and query defaults.</CardDescription>
           </CardHeader>
           <CardContent className="grid gap-2 text-sm text-muted-foreground">
-            <p>{settings.data?.providerMode ?? "unknown"}</p>
+            <p>{settings.data?.connections?.find((c) => c.isActive)?.label ?? "No LLM connection"}</p>
             <p>{settings.data?.defaults?.language ?? "unknown"}</p>
             <p>{settings.data?.defaults?.defaultQueryLimit ?? 0}</p>
             <Link className="inline-link" to="/settings">

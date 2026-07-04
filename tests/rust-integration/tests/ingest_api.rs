@@ -629,22 +629,7 @@ async fn configure_provider(
     base_url: &str,
     model: &str,
 ) {
-    sqlx::query(
-        "UPDATE system_settings
-     SET provider_mode = $1,
-         provider_base_url = $2,
-         provider_api_key = $3,
-         provider_model = $4,
-         provider_timeout_seconds = $5",
-    )
-    .bind("openai-compatible")
-    .bind(base_url)
-    .bind("test-key")
-    .bind(model)
-    .bind(30_i64)
-    .execute(&state.pool)
-    .await
-    .unwrap();
+    support::seed_provider_connection(&state.pool, base_url, "test-key", model, 30).await;
 }
 
 async fn wait_for_task_terminal(state: &knowledge_server::app::state::AppState, task_id: &str) {

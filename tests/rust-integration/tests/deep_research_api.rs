@@ -76,25 +76,15 @@ async fn configure_settings(
     mock: &MockOpenAiServer,
     searxng_base: &str,
 ) {
+    support::seed_provider_connection(&state.pool, &mock.base_url(), "test-key", "mock-model", 30)
+        .await;
     sqlx::query(
         "UPDATE system_settings
-     SET provider_mode = $1,
-         provider_base_url = $2,
-         provider_api_key = $3,
-         provider_model = $4,
-         provider_timeout_seconds = $5,
-         search_provider = $6,
-         searxng_url = $7,
-         searxng_categories = $8",
+         SET search_provider = 'searxng',
+             search_provider_configs = $1
+         WHERE id = 1",
     )
-    .bind("openai-compatible")
-    .bind(mock.base_url())
-    .bind("test-key")
-    .bind("mock-model")
-    .bind(30_i64)
-    .bind("searxng")
-    .bind(searxng_base)
-    .bind(serde_json::json!(["general"]))
+    .bind(serde_json::json!({ "searxng": { "url": searxng_base, "categories": ["general"] } }))
     .execute(&state.pool)
     .await
     .unwrap();

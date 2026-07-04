@@ -28,7 +28,17 @@ vi.mock("../projects/queries", () => ({
 vi.mock("../settings/queries", () => ({
   useSystemSettingsQuery: () => ({
     data: {
-      providerMode: "openai-compatible",
+      connections: [
+        {
+          id: "c1",
+          label: "OpenAI GPT",
+          baseUrl: "u",
+          model: "m",
+          timeoutSeconds: 30,
+          isActive: true,
+          apiKeyConfigured: true,
+        },
+      ],
       defaults: { language: "en", defaultQueryLimit: 5 },
     },
     isLoading: false,
@@ -49,7 +59,7 @@ describe("dashboard page", () => {
 
     expect(screen.getByRole("heading", { name: "Dashboard" })).toBeInTheDocument();
     expect(screen.getByText("2")).toBeInTheDocument();
-    expect(screen.getByText("openai-compatible")).toBeInTheDocument();
+    expect(screen.getByText("OpenAI GPT")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "demo-project" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "research-notes" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Projects" })).toBeInTheDocument();

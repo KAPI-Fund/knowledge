@@ -17,7 +17,6 @@ describe("EmbeddingSection", () => {
     const user = userEvent.setup();
     updateSettings.mockResolvedValue({});
     settingsData.mockReturnValue({
-      providerMode: "openai-compatible",
       defaults: { language: "en", defaultQueryLimit: 8 },
       embedding: {
         enabled: true,
@@ -42,15 +41,13 @@ describe("EmbeddingSection", () => {
       model: "text-embedding-3-large",
     });
     expect(payload.embedding).not.toHaveProperty("apiKey");
-    // Top-level required fields still present.
-    expect(payload).toMatchObject({ providerMode: "openai-compatible", language: "en", defaultQueryLimit: 8 });
+    expect(Object.keys(payload)).toEqual(["embedding"]);
   });
 
   it("toggles enabled off and includes it in the block", async () => {
     const user = userEvent.setup();
     updateSettings.mockResolvedValue({});
     settingsData.mockReturnValue({
-      providerMode: "openai-compatible",
       defaults: { language: "en", defaultQueryLimit: 8 },
       embedding: { enabled: true, baseUrl: "", model: "", timeoutSeconds: null, apiKeyConfigured: false },
     });
