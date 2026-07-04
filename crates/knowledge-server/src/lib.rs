@@ -39,6 +39,7 @@ pub async fn bootstrap_state(config: &AppConfig) -> anyhow::Result<AppState> {
     let pool = db::pool::connect_pool(&config.database_url).await?;
     db::migrate::run(&pool).await?;
     seed_runtime_settings(&pool, config).await?;
+    ensure_seed_provider_connection(&pool).await?;
     seed_admin_user(&pool, config).await?;
     let cache = CacheStore::connect(&config.redis_url).await?;
     let state = AppState {
@@ -125,6 +126,56 @@ async fn seed_runtime_settings(pool: &PgPool, config: &AppConfig) -> anyhow::Res
     .bind(config.provider_api_key.clone().or(current_api_key))
     .bind(provider_model)
     .bind(timeout_seconds)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+/// Seed the first provider_connections row from the legacy flat columns when the
+/// table is empty. Migration 0015 runs before env seeding, so on a fresh DB it
+/// finds the legacy columns blank and seeds nothing; this step runs *after*
+/// seed_runtime_settings has populated them from the environment, so the active
+/// connection the ingest tasks resolve against actually exists.
+async fn ensure_seed_provider_connection(pool: &PgPool) -> anyhow::Result<()> {
+    let existing: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM provider_connections")
+        .fetch_one(pool)
+        .await?;
+    if existing > 0 {
+        return Ok(());
+    }
+
+    let row = sqlx::query_as::<_, (Option<String>, Option<String>, Option<String>, Option<i64>)>(
+        "SELECT provider_base_url, provider_api_key, provider_model, provider_timeout_seconds
+         FROM system_settings
+         WHERE id = 1",
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    let Some((base_url, api_key, model, timeout_seconds)) = row else {
+        return Ok(());
+    };
+
+    let base_url = base_url.unwrap_or_default();
+    let model = model.unwrap_or_default();
+    if base_url.trim().is_empty() || model.trim().is_empty() {
+        return Ok(());
+    }
+
+    let id = Uuid::new_v4().to_string();
+    let ts = OffsetDateTime::now_utc().format(&Rfc3339)?;
+    sqlx::query(
+        "INSERT INTO provider_connections
+           (id, label, base_url, api_key, model, timeout_seconds, is_active, sort_order, created_at, updated_at)
+         VALUES ($1, 'Default', $2, $3, $4, $5, true, 0, $6, $6)",
+    )
+    .bind(&id)
+    .bind(base_url)
+    .bind(api_key)
+    .bind(model)
+    .bind(timeout_seconds)
+    .bind(&ts)
     .execute(pool)
     .await?;
 

@@ -334,12 +334,19 @@ impl OpenAiCompatibleProvider {
     ) -> Result<ProviderImageResult, ProviderError> {
         use base64::Engine;
 
+        // gpt-image-* returns b64_json unconditionally and 400s if response_format
+        // is present; other backends (DALL·E, compatible servers) still need it.
+        let response_format = if self.model.starts_with("gpt-image") {
+            None
+        } else {
+            Some("b64_json".to_string())
+        };
         let body = ImageGenerationRequest {
             model: self.model.clone(),
             prompt: request.prompt,
             size: request.size,
             n: 1,
-            response_format: "b64_json".to_string(),
+            response_format,
         };
 
         let response = self
@@ -608,7 +615,10 @@ struct ImageGenerationRequest {
     prompt: String,
     size: String,
     n: u8,
-    response_format: String,
+    // gpt-image-* models always return b64_json and reject an explicit
+    // response_format, so it is omitted for them (None -> not serialized).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_format: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -731,17 +741,33 @@ mod image_tests {
   #[test]
   fn image_generation_request_serializes_expected_values() {
     let body = ImageGenerationRequest {
+      model: "dall-e-3".to_string(),
+      prompt: "a red fox".to_string(),
+      size: "1024x1024".to_string(),
+      n: 1,
+      response_format: Some("b64_json".to_string()),
+    };
+    let json = serde_json::to_value(&body).unwrap();
+    assert_eq!(json["model"], "dall-e-3");
+    assert_eq!(json["prompt"], "a red fox");
+    assert_eq!(json["n"], 1);
+    assert_eq!(json["response_format"], "b64_json");
+  }
+
+  #[test]
+  fn image_generation_request_omits_none_response_format() {
+    let body = ImageGenerationRequest {
       model: "gpt-image-1".to_string(),
       prompt: "a red fox".to_string(),
       size: "1024x1024".to_string(),
       n: 1,
-      response_format: "b64_json".to_string(),
+      response_format: None,
     };
     let json = serde_json::to_value(&body).unwrap();
-    assert_eq!(json["model"], "gpt-image-1");
-    assert_eq!(json["prompt"], "a red fox");
-    assert_eq!(json["n"], 1);
-    assert_eq!(json["response_format"], "b64_json");
+    assert!(
+      json.get("response_format").is_none(),
+      "response_format must be omitted for gpt-image models"
+    );
   }
 
   #[test]
@@ -784,7 +810,7 @@ mod image_tests {
       prompt: "a fox".to_string(),
       size: "512x512".to_string(),
       n: 1,
-      response_format: "b64_json".to_string(),
+      response_format: None,
     };
     let json = serde_json::to_value(&body).unwrap();
     assert_eq!(json["size"], "512x512");

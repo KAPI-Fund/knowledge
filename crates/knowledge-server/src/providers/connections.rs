@@ -71,6 +71,22 @@ fn now() -> Result<String, ApiError> {
         .map_err(|_| ApiError::internal("failed to format timestamp"))
 }
 
+/// Reject blank label/base_url/model before writing. A connection with an empty
+/// base_url or model can never resolve into a usable provider, so it must fail as
+/// a 400 rather than being stored as a broken active connection.
+fn validate_connection_fields(label: &str, base_url: &str, model: &str) -> Result<(), ApiError> {
+    if label.trim().is_empty() {
+        return Err(ApiError::bad_request("label is required"));
+    }
+    if base_url.trim().is_empty() {
+        return Err(ApiError::bad_request("base_url is required"));
+    }
+    if model.trim().is_empty() {
+        return Err(ApiError::bad_request("model is required"));
+    }
+    Ok(())
+}
+
 /// Fields accepted when creating a connection.
 #[derive(Debug, Clone)]
 pub struct NewConnection {
@@ -115,6 +131,7 @@ pub async fn create_connection(
     pool: &PgPool,
     input: &NewConnection,
 ) -> Result<ProviderConnection, ApiError> {
+    validate_connection_fields(&input.label, &input.base_url, &input.model)?;
     let id = Uuid::new_v4().to_string();
     let ts = now()?;
     // First connection becomes active; new ones append after the current max.
@@ -168,6 +185,7 @@ pub async fn update_connection(
     id: &str,
     input: &UpdateConnection,
 ) -> Result<ProviderConnection, ApiError> {
+    validate_connection_fields(&input.label, &input.base_url, &input.model)?;
     let ts = now()?;
     let affected = sqlx::query(
         "UPDATE provider_connections
@@ -220,8 +238,10 @@ pub async fn activate_connection(pool: &PgPool, id: &str) -> Result<(), ApiError
     Ok(())
 }
 
-/// Delete a connection. If it was the active one, auto-activate the next by
-/// sort_order so the list is never left without an active connection.
+/// Delete a connection. If it was the active one, auto-activate the next
+/// surviving connection by sort_order. When the deleted connection was the last
+/// one, the table is simply left empty (an unconfigured state, same as a fresh
+/// install) — there is nothing to promote.
 pub async fn delete_connection(pool: &PgPool, id: &str) -> Result<(), ApiError> {
     let mut tx = pool.begin().await.map_err(ApiError::from)?;
 
@@ -293,5 +313,13 @@ mod tests {
         let active = ActiveConnection::from(&c);
         assert_eq!(active.timeout_seconds, 30);
         assert_eq!(active.api_key, "");
+    }
+
+    #[test]
+    fn validate_connection_fields_rejects_blank_required_fields() {
+        assert!(validate_connection_fields("", "https://x", "m").is_err());
+        assert!(validate_connection_fields("L", "  ", "m").is_err());
+        assert!(validate_connection_fields("L", "https://x", "").is_err());
+        assert!(validate_connection_fields("L", "https://x", "m").is_ok());
     }
 }

@@ -79,6 +79,32 @@ describe("WebSearchSection", () => {
     expect(payload.search.providers.tavily.baseUrl).toBe("https://api.tavily.com");
   });
 
+  it("toggling clear-key sends apiKey null to remove the stored key", async () => {
+    const user = userEvent.setup();
+    updateSettings.mockResolvedValue({});
+    settingsData.mockReturnValue(tavilyActive());
+    render(<WebSearchSection />);
+
+    await user.click(screen.getByLabelText(/Clear stored Tavily key/i));
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+
+    const payload = updateSettings.mock.calls[0][0];
+    expect(payload.search.providers.tavily.apiKey).toBeNull();
+  });
+
+  it("blanking a base URL sends null to revert it to the default", async () => {
+    const user = userEvent.setup();
+    updateSettings.mockResolvedValue({});
+    settingsData.mockReturnValue(tavilyActive());
+    render(<WebSearchSection />);
+
+    await user.clear(screen.getByLabelText(/Tavily Base URL/i));
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+
+    const payload = updateSettings.mock.calls[0][0];
+    expect(payload.search.providers.tavily.baseUrl).toBeNull();
+  });
+
   it("runs a test search with the typed query", async () => {
     const user = userEvent.setup();
     runWebSearch.mockResolvedValue({ results: [] });

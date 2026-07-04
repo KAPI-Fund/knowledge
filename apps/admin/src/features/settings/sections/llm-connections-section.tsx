@@ -12,6 +12,7 @@ import {
   useSystemSettingsQuery,
   useUpdateConnectionMutation,
 } from "../queries";
+import { parseTimeoutSeconds } from "./parse-timeout";
 
 interface DraftFields {
   label: string;
@@ -22,6 +23,16 @@ interface DraftFields {
 }
 
 const EMPTY_DRAFT: DraftFields = { label: "", baseUrl: "", apiKey: "", model: "", timeoutSeconds: "60" };
+
+/// Backend rejects blank label/base_url/model with a 400; mirror that here so the
+/// Create/Save buttons stay disabled until the required fields are filled.
+function draftIsComplete(fields: DraftFields): boolean {
+  return (
+    fields.label.trim() !== "" &&
+    fields.baseUrl.trim() !== "" &&
+    fields.model.trim() !== ""
+  );
+}
 
 function ConnectionForm({
   fields,
@@ -58,6 +69,8 @@ function ConnectionForm({
       <label className="grid gap-1.5 text-sm font-medium">
         Timeout Seconds
         <Input
+          type="number"
+          min={1}
           value={fields.timeoutSeconds}
           onChange={(e) => onChange({ ...fields, timeoutSeconds: e.target.value })}
         />
@@ -85,7 +98,7 @@ function ConnectionRow({ connection }: { connection: ProviderConnection }) {
       label: fields.label,
       baseUrl: fields.baseUrl,
       model: fields.model,
-      timeoutSeconds: Number(fields.timeoutSeconds),
+      timeoutSeconds: parseTimeoutSeconds(fields.timeoutSeconds, 60),
       ...(fields.apiKey.trim() ? { apiKey: fields.apiKey.trim() } : {}),
     });
     setFields((f) => ({ ...f, apiKey: "" }));
@@ -142,7 +155,7 @@ function ConnectionRow({ connection }: { connection: ProviderConnection }) {
             <Button size="sm" variant="ghost" onClick={() => setEditing(false)}>
               Cancel
             </Button>
-            <Button size="sm" onClick={save} disabled={update.isPending}>
+            <Button size="sm" onClick={save} disabled={update.isPending || !draftIsComplete(fields)}>
               Save
             </Button>
           </div>
@@ -166,7 +179,7 @@ export function LlmConnectionsSection() {
       label: draft.label,
       baseUrl: draft.baseUrl,
       model: draft.model,
-      timeoutSeconds: Number(draft.timeoutSeconds),
+      timeoutSeconds: parseTimeoutSeconds(draft.timeoutSeconds, 60),
       ...(draft.apiKey.trim() ? { apiKey: draft.apiKey.trim() } : {}),
     });
     setDraft(null);
@@ -199,7 +212,7 @@ export function LlmConnectionsSection() {
               <Button size="sm" variant="ghost" onClick={() => setDraft(null)}>
                 Cancel
               </Button>
-              <Button size="sm" onClick={createDraft} disabled={create.isPending}>
+              <Button size="sm" onClick={createDraft} disabled={create.isPending || !draftIsComplete(draft)}>
                 Create
               </Button>
             </div>

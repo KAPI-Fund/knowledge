@@ -956,29 +956,36 @@ async fn should_run_review_sweep(
 }
 
 async fn load_ingest_provider(state: &AppState) -> Result<Option<OpenAiCompatibleProvider>, ApiError> {
-  let (
-    provider_mode,
-    provider_base_url,
-    provider_api_key,
-    provider_model,
-    provider_timeout_seconds,
-  ) = sqlx::query_as::<_, (
-    String,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<i64>,
-  )>(
-    "SELECT provider_mode, provider_base_url, provider_api_key, provider_model, provider_timeout_seconds
-     FROM system_settings
-     WHERE id = 1",
+  let provider_mode = sqlx::query_scalar::<_, String>(
+    "SELECT provider_mode FROM system_settings WHERE id = 1",
   )
   .fetch_one(&state.pool)
   .await
   .map_err(ApiError::from)?;
 
-  if provider_mode != "openai-compatible"
-    || provider_base_url.as_deref().unwrap_or("").trim().is_empty()
+  // Deterministic mode uses no real LLM (test/offline fixture path).
+  if provider_mode != "openai-compatible" {
+    return Ok(None);
+  }
+
+  // The active provider connection is the source of truth now; the legacy flat
+  // columns are only a fallback for a DB that predates the seed step.
+  let connections = crate::providers::list_connections(&state.pool).await?;
+  if let Some(active) = crate::providers::resolve_active(&connections) {
+    return Ok(Some(crate::providers::ActiveConnection::from(active).provider()));
+  }
+
+  let (provider_base_url, provider_api_key, provider_model, provider_timeout_seconds) =
+    sqlx::query_as::<_, (Option<String>, Option<String>, Option<String>, Option<i64>)>(
+      "SELECT provider_base_url, provider_api_key, provider_model, provider_timeout_seconds
+       FROM system_settings
+       WHERE id = 1",
+    )
+    .fetch_one(&state.pool)
+    .await
+    .map_err(ApiError::from)?;
+
+  if provider_base_url.as_deref().unwrap_or("").trim().is_empty()
     || provider_model.as_deref().unwrap_or("").trim().is_empty()
   {
     return Ok(None);

@@ -5,9 +5,18 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { useSystemSettingsQuery, useUpdateSystemSettingsMutation } from "../queries";
+import { parseTimeoutSeconds } from "./parse-timeout";
 import { useSettingsTopLevel } from "./use-settings-top-level";
 
-const SIZES = ["256x256", "512x512", "1024x1024", "1024x1792", "1792x1024"];
+const SIZES = [
+  "256x256",
+  "512x512",
+  "1024x1024",
+  "1024x1536",
+  "1536x1024",
+  "1024x1792",
+  "1792x1024",
+];
 
 export function ImageSection() {
   const settings = useSystemSettingsQuery();
@@ -44,7 +53,7 @@ export function ImageSection() {
         baseUrl,
         model,
         size,
-        timeoutSeconds: Number(timeoutSeconds),
+        timeoutSeconds: parseTimeoutSeconds(timeoutSeconds, 60),
         ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
       },
     });
@@ -95,7 +104,12 @@ export function ImageSection() {
         </label>
         <label className="grid gap-1.5 text-sm font-medium">
           Timeout Seconds
-          <Input value={timeoutSeconds} onChange={(e) => setTimeoutSeconds(e.target.value)} />
+          <Input
+            type="number"
+            min={1}
+            value={timeoutSeconds}
+            onChange={(e) => setTimeoutSeconds(e.target.value)}
+          />
         </label>
         <div className="flex justify-end">
           <Button onClick={save} disabled={update.isPending}>

@@ -373,9 +373,13 @@ async fn get_settings(
 
 /// Deep-merge an incoming per-provider search-config map onto the stored one.
 /// For each provider present in `incoming`, overlay its fields onto the stored
-/// provider block, but SKIP any incoming field whose value is an empty string so
-/// a blank apiKey box keeps the stored key (the client never sees stored keys —
-/// GET redacts them). Providers absent from `incoming` are left untouched.
+/// provider block, per-field:
+/// - blank string (`""`) = KEEP the stored value (a blank apiKey box must not
+///   wipe the stored key the client can't see — GET redacts stored keys),
+/// - explicit `null` = CLEAR the field (drops it so the provider default / unset
+///   applies; this is the only way to remove a stored key or custom base URL),
+/// - any other value = SET it.
+/// Providers absent from `incoming` are left untouched.
 pub(crate) fn merge_search_provider_configs(
     stored: &serde_json::Value,
     incoming: &serde_json::Value,
@@ -389,11 +393,17 @@ pub(crate) fn merge_search_provider_configs(
                 .unwrap_or_default();
             if let Some(field_obj) = fields.as_object() {
                 for (key, value) in field_obj {
-                    // Blank string = "keep whatever is stored" (do not overwrite).
-                    if value.as_str() == Some("") {
-                        continue;
+                    match value {
+                        // Explicit null = clear this field.
+                        serde_json::Value::Null => {
+                            block.remove(key);
+                        }
+                        // Blank string = keep whatever is stored (do not overwrite).
+                        serde_json::Value::String(s) if s.is_empty() => {}
+                        other => {
+                            block.insert(key.clone(), other.clone());
+                        }
                     }
-                    block.insert(key.clone(), value.clone());
                 }
             }
             out.insert(provider.clone(), serde_json::Value::Object(block));
@@ -402,32 +412,64 @@ pub(crate) fn merge_search_provider_configs(
     serde_json::Value::Object(out)
 }
 
+/// Accept only the search selectors the web-search layer can parse. Validated
+/// before any write so an unknown value fails as a 400 up front instead of
+/// leaving a partial update behind (and a later 500 when web-search parses it).
+fn validate_search_provider(provider: &str) -> Result<(), ApiError> {
+    if matches!(
+        provider,
+        "none" | "tavily" | "serpapi" | "searxng" | "ollama"
+    ) {
+        Ok(())
+    } else {
+        Err(ApiError::bad_request(format!(
+            "unknown search provider: {provider:?}"
+        )))
+    }
+}
+
 async fn update_settings(
   State(state): State<AppState>,
   headers: HeaderMap,
   Json(payload): Json<UpdateSettingsRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
   require_operator_csrf(&state, &headers).await?;
+
+  // Validate everything that can be rejected BEFORE opening the transaction, so
+  // an invalid request never produces a partial write.
+  if let Some(provider) = payload.search.as_ref().and_then(|s| s.provider.as_ref()) {
+      validate_search_provider(provider)?;
+  }
+
   let searxng_categories_value = payload
     .searxng_categories
     .as_ref()
     .map(|values| serde_json::to_value(values).unwrap_or(serde_json::Value::Null));
+
+  // All writes share one transaction: any failure rolls the whole PATCH back
+  // instead of leaving some capability blocks updated and others not.
+  let mut tx = state.pool.begin().await.map_err(ApiError::from)?;
+
+  // Legacy flat fields are COALESCE-preserving: a section that only edits a
+  // capability block omits these, and omission must KEEP the stored value
+  // (binding NULL unconditionally would wipe provider_base_url/model/etc, which
+  // the ingest tasks and the seeded connection still depend on).
   sqlx::query(
     "UPDATE system_settings
      SET provider_mode = $1,
          language = $2,
          default_query_limit = $3,
-         provider_base_url = $4,
+         provider_base_url = COALESCE($4, provider_base_url),
          provider_api_key = COALESCE(NULLIF($5, ''), CASE WHEN $17 THEN NULL ELSE provider_api_key END),
-         provider_model = $6,
-         provider_embedding_model = $7,
-         provider_timeout_seconds = $8,
+         provider_model = COALESCE($6, provider_model),
+         provider_embedding_model = COALESCE($7, provider_embedding_model),
+         provider_timeout_seconds = COALESCE($8, provider_timeout_seconds),
          search_provider = COALESCE($9, search_provider),
          search_api_key = COALESCE(NULLIF($10, ''), CASE WHEN $18 THEN NULL ELSE search_api_key END),
          serpapi_engine = COALESCE($11, serpapi_engine),
-         searxng_url = $12,
+         searxng_url = COALESCE($12, searxng_url),
          searxng_categories = COALESCE($13, searxng_categories),
-         ollama_search_url = $14,
+         ollama_search_url = COALESCE($14, ollama_search_url),
          tavily_base_url = COALESCE(NULLIF($15, ''), tavily_base_url),
          serpapi_base_url = COALESCE(NULLIF($16, ''), serpapi_base_url)
      WHERE id = 1",
@@ -450,7 +492,7 @@ async fn update_settings(
   .bind(payload.serpapi_base_url.as_deref())
   .bind(payload.clear_provider_api_key.unwrap_or(false))
   .bind(payload.clear_search_api_key.unwrap_or(false))
-  .execute(&state.pool)
+  .execute(&mut *tx)
   .await
   .map_err(ApiError::from)?;
 
@@ -470,7 +512,7 @@ async fn update_settings(
       .bind(image.model.as_deref())
       .bind(image.size.as_deref())
       .bind(image.timeout_seconds)
-      .execute(&state.pool)
+      .execute(&mut *tx)
       .await
       .map_err(ApiError::from)?;
   }
@@ -491,26 +533,16 @@ async fn update_settings(
       .bind(embedding.clear_api_key)
       .bind(embedding.model.as_deref())
       .bind(embedding.timeout_seconds)
-      .execute(&state.pool)
+      .execute(&mut *tx)
       .await
       .map_err(ApiError::from)?;
   }
 
   if let Some(search) = &payload.search {
       if let Some(provider) = &search.provider {
-          // Reject unknown selectors at write time so the failure surfaces here
-          // as a 400 instead of a later 500 when web-search parses the stored value.
-          if !matches!(
-              provider.as_str(),
-              "none" | "tavily" | "serpapi" | "searxng" | "ollama"
-          ) {
-              return Err(ApiError::bad_request(format!(
-                  "unknown search provider: {provider:?}"
-              )));
-          }
           sqlx::query("UPDATE system_settings SET search_provider = $1 WHERE id = 1")
               .bind(provider)
-              .execute(&state.pool)
+              .execute(&mut *tx)
               .await
               .map_err(ApiError::from)?;
       }
@@ -522,13 +554,13 @@ async fn update_settings(
           let existing: serde_json::Value = sqlx::query_scalar(
               "SELECT search_provider_configs FROM system_settings WHERE id = 1",
           )
-          .fetch_one(&state.pool)
+          .fetch_one(&mut *tx)
           .await
           .map_err(ApiError::from)?;
           let merged = merge_search_provider_configs(&existing, incoming);
           sqlx::query("UPDATE system_settings SET search_provider_configs = $1 WHERE id = 1")
               .bind(merged)
-              .execute(&state.pool)
+              .execute(&mut *tx)
               .await
               .map_err(ApiError::from)?;
       }
@@ -543,10 +575,12 @@ async fn update_settings(
       )
       .bind(defaults.language.as_deref())
       .bind(defaults.default_query_limit)
-      .execute(&state.pool)
+      .execute(&mut *tx)
       .await
       .map_err(ApiError::from)?;
   }
+
+  tx.commit().await.map_err(ApiError::from)?;
 
   Ok(Json(build_settings_response(&state).await?))
 }
@@ -673,5 +707,32 @@ mod tests {
             &json!({ "searxng": { "url": "https://searx.local" } }),
         );
         assert_eq!(merged["searxng"]["url"], "https://searx.local");
+    }
+
+    #[test]
+    fn merge_null_clears_field() {
+        use serde_json::json;
+        let stored = json!({ "tavily": { "apiKey": "old", "baseUrl": "https://api.tavily.com" } });
+        // Explicit null drops just that field; siblings untouched.
+        let merged = merge_search_provider_configs(
+            &stored,
+            &json!({ "tavily": { "apiKey": null } }),
+        );
+        assert!(
+            merged["tavily"].get("apiKey").is_none(),
+            "null must remove the stored apiKey"
+        );
+        assert_eq!(merged["tavily"]["baseUrl"], "https://api.tavily.com");
+    }
+
+    use super::validate_search_provider;
+
+    #[test]
+    fn validate_search_provider_accepts_known_and_rejects_unknown() {
+        for ok in ["none", "tavily", "serpapi", "searxng", "ollama"] {
+            assert!(validate_search_provider(ok).is_ok(), "{ok} should be valid");
+        }
+        assert!(validate_search_provider("google").is_err());
+        assert!(validate_search_provider("").is_err());
     }
 }

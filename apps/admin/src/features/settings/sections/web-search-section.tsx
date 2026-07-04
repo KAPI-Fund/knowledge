@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import {
   useRunWebSearchMutation,
   useSystemSettingsQuery,
@@ -47,6 +48,10 @@ export function WebSearchSection() {
   const topLevel = useSettingsTopLevel(settings.data);
 
   const [fields, setFields] = useState<SearchFields>(EMPTY);
+  // Per-provider "remove the stored api key" toggles. Separate from `fields`
+  // because a key can only ever be kept, replaced, or cleared — never edited in
+  // place (GET redacts it). When on, save sends apiKey=null (backend clears it).
+  const [clearKeys, setClearKeys] = useState({ tavily: false, serpapi: false, ollama: false });
   const [testQuery, setTestQuery] = useState("");
   const [testError, setTestError] = useState("");
   const hydratedFrom = useRef<string>("");
@@ -74,6 +79,7 @@ export function WebSearchSection() {
       ollamaApiKey: "",
       ollamaUrl: p.ollama?.url ?? "",
     });
+    setClearKeys({ tavily: false, serpapi: false, ollama: false });
   }, [settings.data?.search]);
 
   function set<K extends keyof SearchFields>(key: K, value: SearchFields[K]) {
@@ -85,25 +91,40 @@ export function WebSearchSection() {
       .split(",")
       .map((v) => v.trim())
       .filter((v) => v.length > 0);
+    // Visible URL fields: a blank box means "clear it" (revert to the provider
+    // default) -> send null. A typed value sets it. api.ts passes null through
+    // and the backend merge drops the stored field.
+    const urlOrClear = (v: string): string | null => (v.trim() === "" ? null : v.trim());
+    // api key: clear toggle wins (null = remove stored key); otherwise "" keeps
+    // the stored key and a typed value replaces it.
+    const keyValue = (cleared: boolean, typed: string): string | null =>
+      cleared ? null : typed.trim();
     // Send every provider block so switching providers never drops a stored
-    // field. apiKey = "" means keep; a typed value replaces (backend merge).
+    // field.
     await update.mutateAsync({
       ...topLevel,
       search: {
         provider: fields.provider,
         providers: {
-          tavily: { apiKey: fields.tavilyApiKey.trim(), baseUrl: fields.tavilyBaseUrl },
-          serpapi: {
-            apiKey: fields.serpapiApiKey.trim(),
-            engine: fields.serpapiEngine,
-            baseUrl: fields.serpapiBaseUrl,
+          tavily: {
+            apiKey: keyValue(clearKeys.tavily, fields.tavilyApiKey),
+            baseUrl: urlOrClear(fields.tavilyBaseUrl),
           },
-          searxng: { url: fields.searxngUrl, categories: categories.length ? categories : ["general"] },
-          ollama: { apiKey: fields.ollamaApiKey.trim(), url: fields.ollamaUrl },
+          serpapi: {
+            apiKey: keyValue(clearKeys.serpapi, fields.serpapiApiKey),
+            engine: fields.serpapiEngine,
+            baseUrl: urlOrClear(fields.serpapiBaseUrl),
+          },
+          searxng: { url: urlOrClear(fields.searxngUrl), categories: categories.length ? categories : ["general"] },
+          ollama: {
+            apiKey: keyValue(clearKeys.ollama, fields.ollamaApiKey),
+            url: urlOrClear(fields.ollamaUrl),
+          },
         },
       },
     });
     setFields((f) => ({ ...f, tavilyApiKey: "", serpapiApiKey: "", ollamaApiKey: "" }));
+    setClearKeys({ tavily: false, serpapi: false, ollama: false });
   }
 
   const configured = settings.data?.search?.providers;
@@ -136,6 +157,7 @@ export function WebSearchSection() {
               Tavily API Key
               <Input
                 type="password"
+                disabled={clearKeys.tavily}
                 placeholder={
                   configured?.tavily?.apiKeyConfigured
                     ? "Leave blank to keep the current key"
@@ -145,6 +167,16 @@ export function WebSearchSection() {
                 onChange={(e) => set("tavilyApiKey", e.target.value)}
               />
             </label>
+            {configured?.tavily?.apiKeyConfigured ? (
+              <label className="flex items-center justify-between text-sm text-muted-foreground">
+                <span>Clear stored key</span>
+                <Switch
+                  aria-label="Clear stored Tavily key"
+                  checked={clearKeys.tavily}
+                  onCheckedChange={(v) => setClearKeys((c) => ({ ...c, tavily: v }))}
+                />
+              </label>
+            ) : null}
             <label className="grid gap-1.5 text-sm font-medium">
               Tavily Base URL
               <Input
@@ -162,6 +194,7 @@ export function WebSearchSection() {
               SerpApi API Key
               <Input
                 type="password"
+                disabled={clearKeys.serpapi}
                 placeholder={
                   configured?.serpapi?.apiKeyConfigured
                     ? "Leave blank to keep the current key"
@@ -171,6 +204,16 @@ export function WebSearchSection() {
                 onChange={(e) => set("serpapiApiKey", e.target.value)}
               />
             </label>
+            {configured?.serpapi?.apiKeyConfigured ? (
+              <label className="flex items-center justify-between text-sm text-muted-foreground">
+                <span>Clear stored key</span>
+                <Switch
+                  aria-label="Clear stored SerpApi key"
+                  checked={clearKeys.serpapi}
+                  onCheckedChange={(v) => setClearKeys((c) => ({ ...c, serpapi: v }))}
+                />
+              </label>
+            ) : null}
             <label className="grid gap-1.5 text-sm font-medium">
               SerpApi Engine
               <Select
@@ -222,6 +265,7 @@ export function WebSearchSection() {
               Ollama API Key
               <Input
                 type="password"
+                disabled={clearKeys.ollama}
                 placeholder={
                   configured?.ollama?.apiKeyConfigured
                     ? "Leave blank to keep the current key"
@@ -231,6 +275,16 @@ export function WebSearchSection() {
                 onChange={(e) => set("ollamaApiKey", e.target.value)}
               />
             </label>
+            {configured?.ollama?.apiKeyConfigured ? (
+              <label className="flex items-center justify-between text-sm text-muted-foreground">
+                <span>Clear stored key</span>
+                <Switch
+                  aria-label="Clear stored Ollama key"
+                  checked={clearKeys.ollama}
+                  onCheckedChange={(v) => setClearKeys((c) => ({ ...c, ollama: v }))}
+                />
+              </label>
+            ) : null}
             <label className="grid gap-1.5 text-sm font-medium">
               Ollama Search URL
               <Input
