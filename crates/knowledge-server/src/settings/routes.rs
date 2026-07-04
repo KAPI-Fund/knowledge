@@ -377,6 +377,23 @@ fn validate_search_provider(provider: &str) -> Result<(), ApiError> {
     }
 }
 
+/// The default number of retrieval results must be a positive integer no larger
+/// than the search layer's hard cap (`MAX_RESULTS = 100` in knowledge-core). A
+/// zero/negative limit would silently return no context; anything above the cap
+/// is clamped downstream anyway, so reject it up front rather than storing a
+/// misleading value.
+const MAX_DEFAULT_QUERY_LIMIT: i64 = 100;
+
+fn validate_default_query_limit(limit: i64) -> Result<(), ApiError> {
+    if (1..=MAX_DEFAULT_QUERY_LIMIT).contains(&limit) {
+        Ok(())
+    } else {
+        Err(ApiError::bad_request(format!(
+            "defaultQueryLimit must be between 1 and {MAX_DEFAULT_QUERY_LIMIT}"
+        )))
+    }
+}
+
 async fn update_settings(
   State(state): State<AppState>,
   headers: HeaderMap,
@@ -389,12 +406,43 @@ async fn update_settings(
   if let Some(provider) = payload.search.as_ref().and_then(|s| s.provider.as_ref()) {
       validate_search_provider(provider)?;
   }
+  if let Some(limit) = payload.defaults.as_ref().and_then(|d| d.default_query_limit) {
+      validate_default_query_limit(limit)?;
+  }
 
   // All writes share one transaction: any failure rolls the whole PATCH back
   // instead of leaving some capability blocks updated and others not.
   let mut tx = state.pool.begin().await.map_err(ApiError::from)?;
 
   if let Some(image) = &payload.image {
+      // Validate the EFFECTIVE model+size: the UPDATE below keeps the stored value
+      // for any field the request omits (COALESCE), so an incompatible pair could
+      // otherwise slip through when only one of model/size is edited. Reject it
+      // here — inside the tx, before the write — so a bad combo rolls back.
+      let (stored_model, stored_size): (Option<String>, Option<String>) = sqlx::query_as(
+          "SELECT image_model, image_size FROM system_settings WHERE id = 1",
+      )
+      .fetch_one(&mut *tx)
+      .await
+      .map_err(ApiError::from)?;
+      let effective_model = image
+          .model
+          .as_deref()
+          .map(str::trim)
+          .filter(|m| !m.is_empty())
+          .map(str::to_string)
+          .or(stored_model)
+          .unwrap_or_default();
+      let effective_size = image
+          .size
+          .as_deref()
+          .map(str::trim)
+          .filter(|s| !s.is_empty())
+          .map(str::to_string)
+          .or(stored_size)
+          .unwrap_or_default();
+      crate::providers::validate_image_size(&effective_model, &effective_size)?;
+
       sqlx::query(
           "UPDATE system_settings
            SET image_base_url = COALESCE($1, image_base_url),
@@ -631,5 +679,16 @@ mod tests {
         }
         assert!(validate_search_provider("google").is_err());
         assert!(validate_search_provider("").is_err());
+    }
+
+    #[test]
+    fn validate_default_query_limit_accepts_range_and_rejects_out_of_bounds() {
+        use super::validate_default_query_limit;
+        for ok in [1, 5, 100] {
+            assert!(validate_default_query_limit(ok).is_ok(), "{ok} should be valid");
+        }
+        assert!(validate_default_query_limit(0).is_err());
+        assert!(validate_default_query_limit(-3).is_err());
+        assert!(validate_default_query_limit(101).is_err());
     }
 }

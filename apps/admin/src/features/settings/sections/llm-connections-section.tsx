@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import type { ProviderConnection } from "../../shared/api";
 import {
   useActivateConnectionMutation,
@@ -18,11 +19,19 @@ interface DraftFields {
   label: string;
   baseUrl: string;
   apiKey: string;
+  clearApiKey: boolean;
   model: string;
   timeoutSeconds: string;
 }
 
-const EMPTY_DRAFT: DraftFields = { label: "", baseUrl: "", apiKey: "", model: "", timeoutSeconds: "60" };
+const EMPTY_DRAFT: DraftFields = {
+  label: "",
+  baseUrl: "",
+  apiKey: "",
+  clearApiKey: false,
+  model: "",
+  timeoutSeconds: "60",
+};
 
 /// Backend rejects blank label/base_url/model with a 400; mirror that here so the
 /// Create/Save buttons stay disabled until the required fields are filled.
@@ -57,11 +66,30 @@ function ConnectionForm({
         API Key
         <Input
           type="password"
-          placeholder={showKeyConfigured ? "Leave blank to keep the current key" : "sk-..."}
+          placeholder={
+            fields.clearApiKey
+              ? "Saved key will be removed on save"
+              : showKeyConfigured
+                ? "Leave blank to keep the current key"
+                : "sk-..."
+          }
+          disabled={fields.clearApiKey}
           value={fields.apiKey}
           onChange={(e) => onChange({ ...fields, apiKey: e.target.value })}
         />
       </label>
+      {showKeyConfigured ? (
+        <label className="flex items-center justify-between text-sm font-medium">
+          <span>Clear saved key</span>
+          <Switch
+            aria-label="Clear saved key"
+            checked={fields.clearApiKey}
+            onCheckedChange={(checked) =>
+              onChange({ ...fields, clearApiKey: checked, apiKey: checked ? "" : fields.apiKey })
+            }
+          />
+        </label>
+      ) : null}
       <label className="grid gap-1.5 text-sm font-medium">
         Model
         <Input value={fields.model} onChange={(e) => onChange({ ...fields, model: e.target.value })} />
@@ -88,6 +116,7 @@ function ConnectionRow({ connection }: { connection: ProviderConnection }) {
     label: connection.label,
     baseUrl: connection.baseUrl,
     apiKey: "",
+    clearApiKey: false,
     model: connection.model,
     timeoutSeconds: String(connection.timeoutSeconds ?? 60),
   });
@@ -99,9 +128,13 @@ function ConnectionRow({ connection }: { connection: ProviderConnection }) {
       baseUrl: fields.baseUrl,
       model: fields.model,
       timeoutSeconds: parseTimeoutSeconds(fields.timeoutSeconds, 60),
-      ...(fields.apiKey.trim() ? { apiKey: fields.apiKey.trim() } : {}),
+      ...(fields.apiKey.trim()
+        ? { apiKey: fields.apiKey.trim() }
+        : fields.clearApiKey
+          ? { clearApiKey: true }
+          : {}),
     });
-    setFields((f) => ({ ...f, apiKey: "" }));
+    setFields((f) => ({ ...f, apiKey: "", clearApiKey: false }));
     setEditing(false);
   }
 

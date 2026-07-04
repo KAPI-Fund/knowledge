@@ -58,4 +58,30 @@ describe("EmbeddingSection", () => {
 
     expect(updateSettings.mock.calls[0][0].embedding.enabled).toBe(false);
   });
+
+  it("sends clearApiKey when the clear-key switch is on and no new key is typed", async () => {
+    const user = userEvent.setup();
+    updateSettings.mockResolvedValue({});
+    settingsData.mockReturnValue({
+      defaults: { language: "en", defaultQueryLimit: 8 },
+      embedding: {
+        enabled: true,
+        baseUrl: "https://emb.example.com",
+        model: "text-embedding-3-small",
+        timeoutSeconds: 60,
+        apiKeyConfigured: true,
+      },
+    });
+
+    render(<EmbeddingSection />);
+
+    await user.click(screen.getByRole("switch", { name: /clear saved key/i }));
+    expect(screen.getByLabelText(/api key/i)).toBeDisabled();
+
+    await user.click(screen.getByRole("button", { name: /save/i }));
+
+    const payload = updateSettings.mock.calls[0][0];
+    expect(payload.embedding).toMatchObject({ clearApiKey: true });
+    expect(payload.embedding).not.toHaveProperty("apiKey");
+  });
 });

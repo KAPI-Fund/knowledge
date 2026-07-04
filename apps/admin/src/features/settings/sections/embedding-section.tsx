@@ -14,6 +14,7 @@ export function EmbeddingSection() {
   const [enabled, setEnabled] = useState(false);
   const [baseUrl, setBaseUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
+  const [clearApiKey, setClearApiKey] = useState(false);
   const [model, setModel] = useState("");
   const [timeoutSeconds, setTimeoutSeconds] = useState("60");
   const hydratedFrom = useRef<string>("");
@@ -34,6 +35,8 @@ export function EmbeddingSection() {
     setTimeoutSeconds(String(emb.timeoutSeconds ?? 60));
   }, [settings.data?.embedding]);
 
+  const apiKeyConfigured = settings.data?.embedding?.apiKeyConfigured ?? false;
+
   async function save() {
     await update.mutateAsync({
       embedding: {
@@ -41,10 +44,15 @@ export function EmbeddingSection() {
         baseUrl,
         model,
         timeoutSeconds: parseTimeoutSeconds(timeoutSeconds, 60),
-        ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
+        ...(apiKey.trim()
+          ? { apiKey: apiKey.trim() }
+          : clearApiKey
+            ? { clearApiKey: true }
+            : {}),
       },
     });
     setApiKey("");
+    setClearApiKey(false);
   }
 
   return (
@@ -67,14 +75,32 @@ export function EmbeddingSection() {
           <Input
             type="password"
             placeholder={
-              settings.data?.embedding?.apiKeyConfigured
-                ? "Leave blank to keep the current key"
-                : "sk-..."
+              clearApiKey
+                ? "Saved key will be removed on save"
+                : apiKeyConfigured
+                  ? "Leave blank to keep the current key"
+                  : "sk-..."
             }
+            disabled={clearApiKey}
             value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
           />
         </label>
+        {apiKeyConfigured ? (
+          <label className="flex items-center justify-between text-sm font-medium">
+            <span>Clear saved key</span>
+            <Switch
+              aria-label="Clear saved key"
+              checked={clearApiKey}
+              onCheckedChange={(checked) => {
+                setClearApiKey(checked);
+                if (checked) {
+                  setApiKey("");
+                }
+              }}
+            />
+          </label>
+        ) : null}
         <label className="grid gap-1.5 text-sm font-medium">
           Model
           <Input value={model} onChange={(e) => setModel(e.target.value)} />

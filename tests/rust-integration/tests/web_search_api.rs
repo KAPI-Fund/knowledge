@@ -871,3 +871,140 @@ async fn patch_settings_can_clear_search_api_key() {
         "explicit null apiKey must set search.providers.tavily.apiKeyConfigured to false"
     );
 }
+
+#[tokio::test]
+async fn patch_settings_rejects_incompatible_image_model_and_size() {
+    let _env = TestEnvironment::start("settings-image-size-validation").await.unwrap();
+    let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
+    let state = bootstrap_state(&config).await.unwrap();
+    let (cookie, csrf) = login_and_csrf(state.clone()).await;
+
+    // dall-e-3 does not support 512x512 -> the PATCH must be rejected as a 400,
+    // not silently persisted to fail later at canvas runtime.
+    let bad = build_app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/system/settings")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .header("x-csrf-token", &csrf)
+                .body(Body::from(
+                    json!({
+                      "image": {
+                        "baseUrl": "https://img.local/v1",
+                        "model": "dall-e-3",
+                        "size": "512x512"
+                      }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(bad.status(), StatusCode::BAD_REQUEST);
+
+    // A compatible pair for the same family is accepted and persisted.
+    let good = build_app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/system/settings")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .header("x-csrf-token", &csrf)
+                .body(Body::from(
+                    json!({
+                      "image": {
+                        "baseUrl": "https://img.local/v1",
+                        "model": "dall-e-3",
+                        "size": "1792x1024"
+                      }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(good.status(), StatusCode::OK);
+    let body = read_json(good.into_body()).await;
+    assert_eq!(body["image"]["model"], json!("dall-e-3"));
+    assert_eq!(body["image"]["size"], json!("1792x1024"));
+
+    // Editing ONLY the model to a family incompatible with the now-stored size
+    // must also be rejected (the effective size is kept via COALESCE): dall-e-2
+    // does not support 1792x1024.
+    let bad_effective = build_app(state)
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/system/settings")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .header("x-csrf-token", &csrf)
+                .body(Body::from(
+                    json!({ "image": { "model": "dall-e-2" } }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        bad_effective.status(),
+        StatusCode::BAD_REQUEST,
+        "changing model alone must validate against the stored (effective) size"
+    );
+}
+
+#[tokio::test]
+async fn patch_settings_rejects_out_of_range_default_query_limit() {
+    let _env = TestEnvironment::start("settings-query-limit-validation").await.unwrap();
+    let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
+    let state = bootstrap_state(&config).await.unwrap();
+    let (cookie, csrf) = login_and_csrf(state.clone()).await;
+
+    for bad_limit in [0, -1, 101] {
+        let response = build_app(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri("/api/system/settings")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(header::COOKIE, &cookie)
+                    .header("x-csrf-token", &csrf)
+                    .body(Body::from(
+                        json!({ "defaults": { "language": "en", "defaultQueryLimit": bad_limit } })
+                            .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::BAD_REQUEST,
+            "defaultQueryLimit={bad_limit} must be rejected"
+        );
+    }
+
+    // A valid limit is accepted and reflected back.
+    let ok = build_app(state)
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/system/settings")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .header("x-csrf-token", &csrf)
+                .body(Body::from(
+                    json!({ "defaults": { "language": "en", "defaultQueryLimit": 25 } }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(ok.status(), StatusCode::OK);
+    assert_eq!(read_json(ok.into_body()).await["defaults"]["defaultQueryLimit"], json!(25));
+}

@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { useSystemSettingsQuery, useUpdateSystemSettingsMutation } from "../queries";
 import { parseTimeoutSeconds } from "./parse-timeout";
 
@@ -37,6 +38,7 @@ export function ImageSection() {
 
   const [baseUrl, setBaseUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
+  const [clearApiKey, setClearApiKey] = useState(false);
   const [model, setModel] = useState("");
   const [size, setSize] = useState("1024x1024");
   const [timeoutSeconds, setTimeoutSeconds] = useState("60");
@@ -63,6 +65,8 @@ export function ImageSection() {
     setSize((cur) => (allowed.includes(cur) ? cur : allowed[0]));
   }, [model]);
 
+  const apiKeyConfigured = settings.data?.image?.apiKeyConfigured ?? false;
+
   async function save() {
     await update.mutateAsync({
       image: {
@@ -70,10 +74,15 @@ export function ImageSection() {
         model,
         size,
         timeoutSeconds: parseTimeoutSeconds(timeoutSeconds, 60),
-        ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
+        ...(apiKey.trim()
+          ? { apiKey: apiKey.trim() }
+          : clearApiKey
+            ? { clearApiKey: true }
+            : {}),
       },
     });
     setApiKey("");
+    setClearApiKey(false);
   }
 
   return (
@@ -92,14 +101,32 @@ export function ImageSection() {
           <Input
             type="password"
             placeholder={
-              settings.data?.image?.apiKeyConfigured
-                ? "Leave blank to keep the current key"
-                : "sk-..."
+              clearApiKey
+                ? "Saved key will be removed on save"
+                : apiKeyConfigured
+                  ? "Leave blank to keep the current key"
+                  : "sk-..."
             }
+            disabled={clearApiKey}
             value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
           />
         </label>
+        {apiKeyConfigured ? (
+          <label className="flex items-center justify-between text-sm font-medium">
+            <span>Clear saved key</span>
+            <Switch
+              aria-label="Clear saved key"
+              checked={clearApiKey}
+              onCheckedChange={(checked) => {
+                setClearApiKey(checked);
+                if (checked) {
+                  setApiKey("");
+                }
+              }}
+            />
+          </label>
+        ) : null}
         <label className="grid gap-1.5 text-sm font-medium">
           Model
           <Input

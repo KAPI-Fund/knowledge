@@ -65,6 +65,11 @@ pub fn resolve_active(rows: &[ProviderConnection]) -> Option<&ProviderConnection
 
 const SELECT_COLUMNS: &str = "id, label, base_url, api_key, model, timeout_seconds, is_active, sort_order, created_at, updated_at";
 
+/// Transaction-scoped advisory lock key that serializes concurrent
+/// `create_connection` calls. The value is arbitrary but must stay stable so all
+/// callers contend on the same lock. (ASCII for "llm_conn".)
+const CREATE_CONNECTION_LOCK: i64 = 0x6c6c6d5f636f6e6e;
+
 fn now() -> Result<String, ApiError> {
     OffsetDateTime::now_utc()
         .format(&Rfc3339)
@@ -142,16 +147,29 @@ pub async fn create_connection(
     validate_connection_fields(&label, &base_url, &model)?;
     let id = Uuid::new_v4().to_string();
     let ts = now()?;
+
+    // Everything from here runs in one transaction guarded by a transaction-scoped
+    // advisory lock, so two concurrent creates can't both observe an empty table
+    // and each insert an is_active=true row (which would break the "exactly one
+    // active connection" invariant). The lock releases automatically on
+    // commit/rollback.
+    let mut tx = pool.begin().await.map_err(ApiError::from)?;
+    sqlx::query("SELECT pg_advisory_xact_lock($1)")
+        .bind(CREATE_CONNECTION_LOCK)
+        .execute(&mut *tx)
+        .await
+        .map_err(ApiError::from)?;
+
     // First connection becomes active; new ones append after the current max.
     let existing: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM provider_connections")
-        .fetch_one(pool)
+        .fetch_one(&mut *tx)
         .await
         .map_err(ApiError::from)?;
     let is_active = existing == 0;
     let next_sort: i32 = sqlx::query_scalar(
         "SELECT COALESCE(MAX(sort_order) + 1, 0) FROM provider_connections",
     )
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await
     .map_err(ApiError::from)?;
 
@@ -169,9 +187,11 @@ pub async fn create_connection(
     .bind(is_active)
     .bind(next_sort)
     .bind(&ts)
-    .execute(pool)
+    .execute(&mut *tx)
     .await
     .map_err(ApiError::from)?;
+
+    tx.commit().await.map_err(ApiError::from)?;
 
     get_connection(pool, &id)
         .await?

@@ -101,4 +101,49 @@ describe("ImageSection", () => {
     expect(screen.queryByRole("option", { name: "512x512" })).not.toBeInTheDocument();
     expect(screen.getByRole("option", { name: "1536x1024" })).toBeInTheDocument();
   });
+
+  it("sends clearApiKey when the clear-key switch is on and no new key is typed", async () => {
+    const user = userEvent.setup();
+    updateSettings.mockResolvedValue({});
+    settingsData.mockReturnValue({
+      defaults: { language: "en", defaultQueryLimit: 8 },
+      image: {
+        baseUrl: "https://img.example.com",
+        model: "gpt-image-1",
+        size: "1024x1024",
+        timeoutSeconds: 60,
+        apiKeyConfigured: true,
+      },
+    });
+
+    render(<ImageSection />);
+
+    await user.click(screen.getByLabelText(/clear saved key/i));
+    // The API key field is disabled once clearing is requested.
+    expect(screen.getByLabelText(/api key/i)).toBeDisabled();
+
+    await user.click(screen.getByRole("button", { name: /save/i }));
+
+    const payload = updateSettings.mock.calls[0][0];
+    expect(payload.image).toMatchObject({ clearApiKey: true });
+    expect(payload.image).not.toHaveProperty("apiKey");
+  });
+
+  it("does not offer the clear-key switch when no key is configured", () => {
+    updateSettings.mockResolvedValue({});
+    settingsData.mockReturnValue({
+      defaults: { language: "en", defaultQueryLimit: 8 },
+      image: {
+        baseUrl: "https://img.example.com",
+        model: "gpt-image-1",
+        size: "1024x1024",
+        timeoutSeconds: 60,
+        apiKeyConfigured: false,
+      },
+    });
+
+    render(<ImageSection />);
+
+    expect(screen.queryByLabelText(/clear saved key/i)).not.toBeInTheDocument();
+  });
 });

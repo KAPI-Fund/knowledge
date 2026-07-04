@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { useSystemSettingsQuery, useUpdateSystemSettingsMutation } from "../queries";
+import { parseQueryLimit } from "./parse-query-limit";
 
 export function DefaultsSection() {
   const settings = useSystemSettingsQuery();
@@ -28,7 +29,10 @@ export function DefaultsSection() {
   }, [settings.data?.defaults]);
 
   async function save() {
-    const limit = Number(defaultQueryLimit);
+    const limit = parseQueryLimit(defaultQueryLimit, 5);
+    // Reflect the coerced value back into the field so the user sees exactly what
+    // was persisted (e.g. a cleared/invalid box snaps to the fallback).
+    setDefaultQueryLimit(String(limit));
     await update.mutateAsync({
       defaults: { language, defaultQueryLimit: limit },
     });
@@ -48,6 +52,9 @@ export function DefaultsSection() {
         <label className="grid gap-1.5 text-sm font-medium">
           Default Query Limit
           <Input
+            type="number"
+            min={1}
+            max={100}
             aria-label="Default Query Limit"
             value={defaultQueryLimit}
             onChange={(e) => setDefaultQueryLimit(e.target.value)}
