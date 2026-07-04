@@ -44,6 +44,9 @@ services:
       KNOWLEDGE_DATABASE_URL: postgres://postgres:postgres@postgres:5432/knowledge?sslmode=disable
       KNOWLEDGE_REDIS_URL: redis://redis:6379/
       KNOWLEDGE_PROJECT_ROOT: /data/projects
+      # Bootstraps the first admin user on a fresh database. Change before any
+      # non-local deployment.
+      KNOWLEDGE_ADMIN_PASSWORD: admin
     ports:
       - "4001:4001"
     volumes:
