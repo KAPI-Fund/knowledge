@@ -29,9 +29,12 @@ export function DefaultsSection() {
   }, [settings.data?.defaults]);
 
   async function save() {
-    const limit = parseQueryLimit(defaultQueryLimit, 5);
+    // On invalid/empty input, fall back to the currently-saved limit (not a fixed
+    // constant) so a stray edit can't silently reset a saved 25 down to 5.
+    const savedLimit = settings.data?.defaults?.defaultQueryLimit ?? 5;
+    const limit = parseQueryLimit(defaultQueryLimit, savedLimit);
     // Reflect the coerced value back into the field so the user sees exactly what
-    // was persisted (e.g. a cleared/invalid box snaps to the fallback).
+    // was persisted (e.g. a cleared/invalid box snaps back to the saved value).
     setDefaultQueryLimit(String(limit));
     await update.mutateAsync({
       defaults: { language, defaultQueryLimit: limit },

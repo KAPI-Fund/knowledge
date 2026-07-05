@@ -65,10 +65,13 @@ pub fn resolve_active(rows: &[ProviderConnection]) -> Option<&ProviderConnection
 
 const SELECT_COLUMNS: &str = "id, label, base_url, api_key, model, timeout_seconds, is_active, sort_order, created_at, updated_at";
 
-/// Transaction-scoped advisory lock key that serializes concurrent
-/// `create_connection` calls. The value is arbitrary but must stay stable so all
-/// callers contend on the same lock. (ASCII for "llm_conn".)
-const CREATE_CONNECTION_LOCK: i64 = 0x6c6c6d5f636f6e6e;
+/// Transaction-scoped advisory lock key that serializes every mutation touching
+/// the `is_active` invariant — create, activate, and delete. Without a single
+/// shared lock these can interleave into a 0- or 2-active state (e.g. a delete
+/// that read the row as inactive racing an activate that just made it active).
+/// The value is arbitrary but must stay stable so all callers contend on the same
+/// lock. It releases automatically on commit/rollback. (ASCII for "llm_conn".)
+const ACTIVE_STATE_LOCK: i64 = 0x6c6c6d5f636f6e6e;
 
 fn now() -> Result<String, ApiError> {
     OffsetDateTime::now_utc()
@@ -148,14 +151,13 @@ pub async fn create_connection(
     let id = Uuid::new_v4().to_string();
     let ts = now()?;
 
-    // Everything from here runs in one transaction guarded by a transaction-scoped
-    // advisory lock, so two concurrent creates can't both observe an empty table
-    // and each insert an is_active=true row (which would break the "exactly one
-    // active connection" invariant). The lock releases automatically on
-    // commit/rollback.
+    // Serialize against activate/delete via the shared active-state lock so two
+    // concurrent creates can't both observe an empty table and each insert an
+    // is_active=true row (which would break the "exactly one active connection"
+    // invariant).
     let mut tx = pool.begin().await.map_err(ApiError::from)?;
     sqlx::query("SELECT pg_advisory_xact_lock($1)")
-        .bind(CREATE_CONNECTION_LOCK)
+        .bind(ACTIVE_STATE_LOCK)
         .execute(&mut *tx)
         .await
         .map_err(ApiError::from)?;
@@ -251,56 +253,68 @@ pub async fn update_connection(
 /// Activate one connection, clearing is_active on all others in a single UPDATE
 /// so exactly one row stays active. The EXISTS guard makes a missing id a no-op
 /// (rows_affected == 0 -> not_found) instead of clearing every row's is_active,
-/// which would leave the list with zero active connections.
+/// which would leave the list with zero active connections. Runs under the shared
+/// active-state lock so it can't interleave with a concurrent delete/create.
 pub async fn activate_connection(pool: &PgPool, id: &str) -> Result<(), ApiError> {
+    let mut tx = pool.begin().await.map_err(ApiError::from)?;
+    sqlx::query("SELECT pg_advisory_xact_lock($1)")
+        .bind(ACTIVE_STATE_LOCK)
+        .execute(&mut *tx)
+        .await
+        .map_err(ApiError::from)?;
+
     let affected = sqlx::query(
         "UPDATE provider_connections SET is_active = (id = $1)
          WHERE EXISTS (SELECT 1 FROM provider_connections WHERE id = $1)",
     )
     .bind(id)
-    .execute(pool)
+    .execute(&mut *tx)
     .await
     .map_err(ApiError::from)?
     .rows_affected();
     if affected == 0 {
         return Err(ApiError::not_found("connection not found"));
     }
+
+    tx.commit().await.map_err(ApiError::from)?;
     Ok(())
 }
 
-/// Delete a connection. If it was the active one, auto-activate the next
-/// surviving connection by sort_order. When the deleted connection was the last
-/// one, the table is simply left empty (an unconfigured state, same as a fresh
-/// install) — there is nothing to promote.
+/// Delete a connection, then unconditionally re-promote the lowest-sort_order
+/// survivor whenever no active row remains. Reading "was this active?" before the
+/// delete would race a concurrent activate; instead we always heal the invariant
+/// after the delete. When the deleted connection was the last one, the table is
+/// left empty (an unconfigured state, same as a fresh install) — there is nothing
+/// to promote. Runs under the shared active-state lock so it can't interleave with
+/// a concurrent activate/create.
 pub async fn delete_connection(pool: &PgPool, id: &str) -> Result<(), ApiError> {
     let mut tx = pool.begin().await.map_err(ApiError::from)?;
+    sqlx::query("SELECT pg_advisory_xact_lock($1)")
+        .bind(ACTIVE_STATE_LOCK)
+        .execute(&mut *tx)
+        .await
+        .map_err(ApiError::from)?;
 
-    let was_active: Option<bool> =
-        sqlx::query_scalar("SELECT is_active FROM provider_connections WHERE id = $1")
-            .bind(id)
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(ApiError::from)?;
-    let Some(was_active) = was_active else {
-        return Err(ApiError::not_found("connection not found"));
-    };
-
-    sqlx::query("DELETE FROM provider_connections WHERE id = $1")
+    let affected = sqlx::query("DELETE FROM provider_connections WHERE id = $1")
         .bind(id)
         .execute(&mut *tx)
         .await
-        .map_err(ApiError::from)?;
-
-    if was_active {
-        // Promote the lowest-sort_order survivor, if any remain.
-        sqlx::query(
-            "UPDATE provider_connections SET is_active = true
-             WHERE id = (SELECT id FROM provider_connections ORDER BY sort_order, created_at LIMIT 1)",
-        )
-        .execute(&mut *tx)
-        .await
-        .map_err(ApiError::from)?;
+        .map_err(ApiError::from)?
+        .rows_affected();
+    if affected == 0 {
+        return Err(ApiError::not_found("connection not found"));
     }
+
+    // Heal the invariant: if nothing is active (either we deleted the active row,
+    // or a prior race left the table with zero active), promote the first survivor.
+    sqlx::query(
+        "UPDATE provider_connections SET is_active = true
+         WHERE id = (SELECT id FROM provider_connections ORDER BY sort_order, created_at LIMIT 1)
+           AND NOT EXISTS (SELECT 1 FROM provider_connections WHERE is_active)",
+    )
+    .execute(&mut *tx)
+    .await
+    .map_err(ApiError::from)?;
 
     tx.commit().await.map_err(ApiError::from)?;
     Ok(())

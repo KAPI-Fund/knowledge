@@ -456,7 +456,7 @@ async fn update_settings(
       .bind(image.api_key.as_deref())
       .bind(image.clear_api_key)
       .bind(image.model.as_deref().map(str::trim))
-      .bind(image.size.as_deref())
+      .bind(image.size.as_deref().map(str::trim))
       .bind(image.timeout_seconds)
       .execute(&mut *tx)
       .await

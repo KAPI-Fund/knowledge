@@ -31,22 +31,22 @@ describe("DefaultsSection", () => {
     expect(payload).toEqual({ defaults: { language: "en", defaultQueryLimit: 12 } });
   });
 
-  it("clamps an empty/invalid query limit to the fallback before saving", async () => {
+  it("keeps the saved query limit when the box is cleared before saving", async () => {
     const user = userEvent.setup();
     updateSettings.mockResolvedValue({});
     settingsData.mockReturnValue({
-      defaults: { language: "en", defaultQueryLimit: 5 },
+      defaults: { language: "en", defaultQueryLimit: 25 },
     });
 
     render(<DefaultsSection />);
 
-    // Clearing the box would previously send Number("") === 0; it must snap to the
-    // fallback (5) and echo that back into the field.
+    // Clearing the box would previously send Number("") === 0; it must snap back to
+    // the currently-saved value (25, not a hardcoded 5) and echo that into the field.
     await user.clear(screen.getByLabelText(/default query limit/i));
     await user.click(screen.getByRole("button", { name: /save/i }));
 
     const payload = updateSettings.mock.calls[0][0];
-    expect(payload).toEqual({ defaults: { language: "en", defaultQueryLimit: 5 } });
-    expect(screen.getByLabelText(/default query limit/i)).toHaveValue(5);
+    expect(payload).toEqual({ defaults: { language: "en", defaultQueryLimit: 25 } });
+    expect(screen.getByLabelText(/default query limit/i)).toHaveValue(25);
   });
 });
