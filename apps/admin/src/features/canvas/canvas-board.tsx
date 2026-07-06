@@ -162,6 +162,56 @@ export function pruneDanglingEdges(
   return edges.filter((e) => ids.has(e.source) && ids.has(e.target));
 }
 
+const CONSUMER_TYPES = ["search", "ai_analyze", "ai_image"];
+
+// A connection is valid iff: the endpoints differ, the target is a consumer
+// (search/ai_analyze/ai_image), it does not duplicate an existing edge, and it
+// would not create a cycle (walking forward from target must not reach source).
+// React Flow calls this during a drag, so an illegal handle never highlights and
+// a release over it makes no edge (§3.2 "middle" blocking).
+export function isValidConnection(
+  nodes: { id: string; type?: string }[],
+  edges: { source: string; target: string }[],
+  conn: { source: string | null; target: string | null },
+): boolean {
+  const { source, target } = conn;
+  if (!source || !target || source === target) {
+    return false;
+  }
+  const targetNode = nodes.find((n) => n.id === target);
+  if (!targetNode || !CONSUMER_TYPES.includes(targetNode.type ?? "")) {
+    return false;
+  }
+  if (edges.some((e) => e.source === source && e.target === target)) {
+    return false;
+  }
+  const adjacency = new Map<string, string[]>();
+  for (const e of edges) {
+    const list = adjacency.get(e.source);
+    if (list) {
+      list.push(e.target);
+    } else {
+      adjacency.set(e.source, [e.target]);
+    }
+  }
+  const stack = [target];
+  const seen = new Set<string>();
+  while (stack.length > 0) {
+    const cur = stack.pop() as string;
+    if (cur === source) {
+      return false;
+    }
+    if (seen.has(cur)) {
+      continue;
+    }
+    seen.add(cur);
+    for (const next of adjacency.get(cur) ?? []) {
+      stack.push(next);
+    }
+  }
+  return true;
+}
+
 // True only for the change that *ends* a NodeResizer drag (`resizing === false`).
 // A dimensions change with `resizing === true` is mid-drag, and a dimensions
 // change with no `resizing` flag is a passive ResizeObserver measurement -- both
@@ -362,6 +412,11 @@ export function CanvasBoard({ document, onChange, onRunNode, onFetchUrl, onSearc
     [document, onChange, rfEdges],
   );
 
+  const validateConnection = useCallback(
+    (conn: Connection | Edge) => isValidConnection(rfNodes, rfEdges, conn),
+    [rfNodes, rfEdges],
+  );
+
   return (
     <div className="h-full w-full">
       <ReactFlowProvider>
@@ -372,6 +427,7 @@ export function CanvasBoard({ document, onChange, onRunNode, onFetchUrl, onSearc
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onConnect={onConnect}
+          isValidConnection={validateConnection}
           deleteKeyCode={["Delete", "Backspace"]}
           defaultViewport={document.viewport}
         >
