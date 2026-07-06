@@ -67,6 +67,20 @@ impl CanvasDocument {
     pub fn node(&self, node_id: &str) -> Option<&CanvasNode> {
         self.nodes.iter().find(|n| n.id == node_id)
     }
+
+    /// Upstream nodes feeding `node_id`, sorted top-to-bottom then left-to-right
+    /// (y ascending, x ascending) so reference blocks assemble in reading order.
+    pub fn ordered_incoming_sources(&self, node_id: &str) -> Vec<&CanvasNode> {
+        let mut sources: Vec<&CanvasNode> = self
+            .incoming_source_ids(node_id)
+            .iter()
+            .filter_map(|src| self.node(src))
+            .collect();
+        sources.sort_by(|a, b| {
+            a.y.total_cmp(&b.y).then(a.x.total_cmp(&b.x))
+        });
+        sources
+    }
 }
 
 pub fn default_canvas_document() -> CanvasDocument {
@@ -155,6 +169,31 @@ mod tests {
         let s = serde_json::to_string(&doc).unwrap();
         let back: CanvasDocument = serde_json::from_str(&s).unwrap();
         assert_eq!(back.nodes.len(), 0);
+    }
+
+    fn node_at(id: &str, ty: &str, x: f64, y: f64) -> CanvasNode {
+        CanvasNode { id: id.to_string(), r#type: ty.to_string(), x, y, w: 280.0, h: 160.0, data: serde_json::json!({}) }
+    }
+
+    #[test]
+    fn ordered_incoming_sources_sorts_by_y_then_x() {
+        let doc = CanvasDocument {
+            nodes: vec![
+                node_at("t", "ai_analyze", 500.0, 500.0),
+                node_at("low", "note", 0.0, 300.0),       // lower on canvas
+                node_at("hi_right", "note", 200.0, 0.0),  // top, right
+                node_at("hi_left", "note", 0.0, 0.0),     // top, left (same y as hi_right)
+            ],
+            edges: vec![
+                CanvasEdge { id: "e1".into(), source: "low".into(), target: "t".into(), ..Default::default() },
+                CanvasEdge { id: "e2".into(), source: "hi_right".into(), target: "t".into(), ..Default::default() },
+                CanvasEdge { id: "e3".into(), source: "hi_left".into(), target: "t".into(), ..Default::default() },
+            ],
+            viewport: Viewport::default(),
+        };
+        let ids: Vec<&str> = doc.ordered_incoming_sources("t").iter().map(|n| n.id.as_str()).collect();
+        // y ascending: hi_* (y=0) before low (y=300); within y=0, x ascending: hi_left before hi_right.
+        assert_eq!(ids, vec!["hi_left", "hi_right", "low"]);
     }
 
     #[test]
