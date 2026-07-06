@@ -218,6 +218,14 @@ export function CanvasPage() {
                   if (n.id !== nodeId) {
                     return n;
                   }
+                  // Search results replace the node's markdown and are not
+                  // versioned (unlike analyze/image, which accumulate versions).
+                  if (n.type === "search") {
+                    return {
+                      ...n,
+                      data: { ...n.data, status: "idle", error: null, markdown: payload.markdown },
+                    };
+                  }
                   const versions = Array.isArray(n.data.versions)
                     ? (n.data.versions as unknown[])
                     : [];

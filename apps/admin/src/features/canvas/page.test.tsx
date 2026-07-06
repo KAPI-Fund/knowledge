@@ -200,6 +200,35 @@ describe("CanvasPage", () => {
     );
   });
 
+  it("writes search results to markdown without appending a version", async () => {
+    canvasResult = {
+      data: {
+        ...c1Data(),
+        document: {
+          nodes: [
+            { id: "s1", type: "search", x: 0, y: 0, w: 280, h: 160, data: { query: "cats" } } as unknown as ReturnType<typeof c1Data>["document"]["nodes"][number],
+          ],
+          edges: [],
+          viewport: { x: 0, y: 0, zoom: 1 },
+        },
+      },
+    };
+    runCanvasNode.mockImplementation(
+      (_id: string, _nodeId: string, handlers: { onDone: (p: unknown) => void }) => {
+        handlers.onDone({ markdown: "# results" });
+        return Promise.resolve(undefined);
+      },
+    );
+    render(<CanvasPage />);
+    await waitFor(() => expect(boardProps.onRunNode).toBeTypeOf("function"));
+    boardProps.onRunNode?.("s1");
+    await waitFor(() => {
+      const node = boardProps.document?.nodes.find((n) => n.id === "s1");
+      expect(node?.data?.markdown).toBe("# results");
+      expect(node?.data?.versions).toBeUndefined();
+    });
+  });
+
   it("creates reference edges when an analyze skill node references selected nodes", async () => {
     render(<CanvasPage />);
     await waitFor(() => expect(chatProps.onSkillNode).toBeTypeOf("function"));
