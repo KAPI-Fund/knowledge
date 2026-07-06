@@ -1,12 +1,13 @@
 import { cn } from "@/lib/utils";
 
-export type SettingsSectionId = "llm" | "embedding" | "image" | "search" | "defaults";
+export type SettingsSectionId = "llm" | "embedding" | "image" | "search" | "fetch" | "defaults";
 
 const ITEMS: { id: SettingsSectionId; label: string }[] = [
   { id: "llm", label: "LLM" },
   { id: "embedding", label: "Embedding" },
   { id: "image", label: "Image" },
   { id: "search", label: "Web Search" },
+  { id: "fetch", label: "Web Fetch" },
   { id: "defaults", label: "Defaults" },
 ];
 

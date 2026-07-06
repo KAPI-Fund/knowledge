@@ -5,6 +5,7 @@ import { Card, CardContent } from "@/components/ui/card";
 
 import { DefaultsSection } from "./sections/defaults-section";
 import { EmbeddingSection } from "./sections/embedding-section";
+import { FetchSection } from "./sections/fetch-section";
 import { ImageSection } from "./sections/image-section";
 import { LlmConnectionsSection } from "./sections/llm-connections-section";
 import { WebSearchSection } from "./sections/web-search-section";
@@ -30,6 +31,7 @@ export function SettingsPage() {
           {section === "embedding" ? <EmbeddingSection /> : null}
           {section === "image" ? <ImageSection /> : null}
           {section === "search" ? <WebSearchSection /> : null}
+          {section === "fetch" ? <FetchSection /> : null}
           {section === "defaults" ? <DefaultsSection /> : null}
         </div>
       </div>
