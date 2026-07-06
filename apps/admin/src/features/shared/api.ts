@@ -211,6 +211,13 @@ const searchProviderConfigsSchema = z.object({
     .optional(),
 });
 
+const fetchProviderConfigsSchema = z.object({
+  firecrawl: z
+    .object({ apiKeyConfigured: z.boolean().optional(), baseUrl: z.string().optional() })
+    .partial()
+    .optional(),
+});
+
 const settingsSchema = z.object({
   connections: z.array(connectionSchema).optional(),
   embedding: z
@@ -235,6 +242,12 @@ const settingsSchema = z.object({
     .object({
       provider: z.string().nullable().optional(),
       providers: searchProviderConfigsSchema,
+    })
+    .optional(),
+  fetch: z
+    .object({
+      provider: z.string().nullable().optional(),
+      providers: fetchProviderConfigsSchema,
     })
     .optional(),
   defaults: z
@@ -1115,6 +1128,10 @@ export async function updateSystemSettings(input: {
     provider?: string;
     providers?: Record<string, Record<string, unknown>>;
   };
+  fetch?: {
+    provider?: string;
+    providers?: Record<string, Record<string, unknown>>;
+  };
   defaults?: {
     language?: string;
     defaultQueryLimit?: number;
@@ -1157,6 +1174,25 @@ export async function updateSystemSettings(input: {
               ? {
                   providers: Object.fromEntries(
                     Object.entries(input.search.providers).map(([name, fields]) => [
+                      name,
+                      Object.fromEntries(
+                        Object.entries(fields).filter(([, v]) => v !== ""),
+                      ),
+                    ]),
+                  ),
+                }
+              : {}),
+          },
+        }
+      : {}),
+    ...(input.fetch
+      ? {
+          fetch: {
+            provider: input.fetch.provider,
+            ...(input.fetch.providers
+              ? {
+                  providers: Object.fromEntries(
+                    Object.entries(input.fetch.providers).map(([name, fields]) => [
                       name,
                       Object.fromEntries(
                         Object.entries(fields).filter(([, v]) => v !== ""),
