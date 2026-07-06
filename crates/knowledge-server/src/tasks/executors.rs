@@ -9,10 +9,11 @@ use crate::deep_research::collect_research_sources;
 use crate::multimodal::{
   caption_image, inject_images_into_source_summary, load_cached_caption, save_cached_caption,
 };
-use crate::http::error::ApiError;
+use crate::http::error::{ApiError, RetryHint};
 use crate::providers::{OpenAiCompatibleProvider, ProviderError, ProviderTextRequest};
 use crate::projects::audit::{append_audit_log, CreateAuditLog};
 use crate::projects::service::project_root_for_id;
+use crate::projects::tasks::{create_queued_task, CreateTaskRecord};
 use crate::web_search::config::load_web_search_config;
 use crate::retrieval::dedup::{
   select_dedup_candidate_pages, DEDUP_MAX_CANDIDATE_PAGES, DEDUP_SIMILARITY_THRESHOLD,
@@ -88,7 +89,7 @@ pub async fn run_task_executor(state: &AppState, task: &TaskRecord) -> Result<()
 
       if retryable {
         let next_retry_at = OffsetDateTime::now_utc()
-          .checked_add(Duration::seconds(2))
+          .checked_add(Duration::seconds(retry_backoff_seconds(task.attempt_count)))
           .ok_or_else(|| ApiError::internal("failed to compute retry timestamp"))?
           .format(&Rfc3339)
           .map_err(|_| ApiError::internal("failed to format retry timestamp"))?;
@@ -102,6 +103,16 @@ pub async fn run_task_executor(state: &AppState, task: &TaskRecord) -> Result<()
       Err(error.into_api_error())
     }
   }
+}
+
+/// Exponential backoff (seconds) before the next retry of a transient task
+/// failure. `attempt_count` is the number of attempts already made. Spacing
+/// retries out (4s, 8s, 16s, capped at 30s) gives a burst of gateway overload
+/// time to clear instead of hammering the limit again 2s later.
+fn retry_backoff_seconds(attempt_count: i64) -> i64 {
+  const CAP_SECONDS: i64 = 30;
+  let exponent = attempt_count.clamp(1, 8) as u32;
+  (2_i64.saturating_pow(exponent + 1)).min(CAP_SECONDS)
 }
 
 #[derive(Debug)]
@@ -147,17 +158,34 @@ impl TaskExecutionError {
   }
 
   fn into_api_error(self) -> ApiError {
-    self.api_error
+    // Stamp the retry metadata onto the ApiError so it survives the executor's
+    // `Result<_, ApiError>` return type. run_task_executor re-lifts it via
+    // `From<ApiError>` and reads the hint back to decide retry vs. permanent
+    // fail — otherwise a transient provider error (429/timeout/gateway overload)
+    // would be flattened to a one-shot permanent failure.
+    let hint = RetryHint {
+      code: self.code.clone(),
+      retryable: self.retryable,
+      provider_status: self.provider_status,
+    };
+    self.api_error.with_retry_hint(hint)
   }
 }
 
 impl From<ApiError> for TaskExecutionError {
   fn from(api_error: ApiError) -> Self {
+    // Recover the retry hint stamped by `into_api_error`; executor errors that
+    // never touched a provider (bad input, IO) have no hint and default to a
+    // single permanent failure.
+    let (code, retryable, provider_status) = match api_error.retry_hint() {
+      Some(hint) => (hint.code.clone(), hint.retryable, hint.provider_status),
+      None => ("task_execution_failed".to_string(), false, None),
+    };
     Self {
       api_error,
-      code: "task_execution_failed".to_string(),
-      retryable: false,
-      provider_status: None,
+      code,
+      retryable,
+      provider_status,
     }
   }
 }
@@ -169,10 +197,92 @@ async fn run_import_source_executor(state: &AppState, task: &TaskRecord) -> Resu
   let source = import_source(&root, &file_name, &content_base64)
     .map_err(|error| ApiError::bad_request(error.to_string()))?;
 
+  // Copy upstream_llm_wiki's importSourceFiles → enqueueSourceIngest chaining
+  // (upstream_llm_wiki/src/lib/source-lifecycle.ts:154-190 and :134-152): once a
+  // source lands in raw/sources, automatically enqueue its ingest so an upload
+  // produces the wiki pages/graph/index without a second manual "Ingest" click.
+  // Centralized here (rather than in the HTTP handler) so every import path — UI
+  // upload, folder import, direct API — chains identically, exactly as upstream
+  // funnels them all through the shared importSourceFiles lib.
+  //
+  // Two guards are copied verbatim from upstream:
+  //   1. ingestable extension only (INGESTABLE_SOURCE_EXTENSIONS, :39-60 /
+  //      isIngestableSourcePath, :111-118) — images/media are imported but not
+  //      auto-ingested.
+  //   2. only when a usable LLM is configured (hasUsableLlm, has-usable-llm.ts:42-47
+  //      → an active provider connection here). With no active connection the file
+  //      still imports, but we skip ingest instead of queuing tasks that could
+  //      only fail; the user can ingest later once a connection exists.
+  let ingest_enqueued = if is_ingestable_source_path(&source.relative_path)
+    && load_ingest_provider(state).await?.is_some()
+  {
+    enqueue_source_ingest(state, task, &source.relative_path).await?;
+    true
+  } else {
+    false
+  };
+
   Ok(json!({
     "relativePath": source.relative_path,
-    "size": source.size
+    "size": source.size,
+    "ingestEnqueued": ingest_enqueued
   }))
+}
+
+/// Source extensions that produce a wiki page when ingested. Copied verbatim from
+/// upstream_llm_wiki's INGESTABLE_SOURCE_EXTENSIONS
+/// (upstream_llm_wiki/src/lib/source-lifecycle.ts:39-60). Images/media land in
+/// raw/sources on import but are never auto-ingested.
+const INGESTABLE_SOURCE_EXTENSIONS: &[&str] = &[
+  "md", "mdx", "txt", "pdf", "doc", "docx", "pptx", "xlsx", "odt", "odp", "ods",
+  "xls", "csv", "json", "html", "htm", "rtf", "xml", "yaml", "yml",
+];
+
+/// Whether a freshly imported raw source should be auto-ingested. Mirrors
+/// upstream's isIngestableSourcePath
+/// (upstream_llm_wiki/src/lib/source-lifecycle.ts:111-118): skip the `.cache`
+/// extraction dir and dotfiles, then match on the lowercased file extension.
+fn is_ingestable_source_path(relative_path: &str) -> bool {
+  let normalized = relative_path.replace('\\', "/");
+  if normalized.split('/').any(|segment| segment == ".cache") {
+    return false;
+  }
+  let file_name = normalized.rsplit('/').next().unwrap_or_default();
+  if file_name.is_empty() || file_name.starts_with('.') {
+    return false;
+  }
+  match file_name.rsplit_once('.') {
+    Some((_, ext)) => INGESTABLE_SOURCE_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()),
+    None => false,
+  }
+}
+
+/// Enqueue the ingest task for a just-imported source. Mirrors
+/// source_watch::enqueue_ingest_task, but attributes the chained ingest to the
+/// import task's creator so it audits back to whoever uploaded the file.
+async fn enqueue_source_ingest(
+  state: &AppState,
+  import_task: &TaskRecord,
+  relative_path: &str,
+) -> Result<(), ApiError> {
+  create_queued_task(
+    state,
+    CreateTaskRecord {
+      project_id: import_task.project_id.clone(),
+      task_type: "project.ingest_source".to_string(),
+      title: format!("Ingest {relative_path}"),
+      relative_path: Some(relative_path.to_string()),
+      detail: json!({
+        "autoIngest": true,
+        "sourceImportTaskId": import_task.id,
+      }),
+      created_by: import_task.created_by.clone(),
+    },
+    json!({ "relativePath": relative_path }),
+  )
+  .await?;
+
+  Ok(())
 }
 
 async fn run_rescan_sources_executor(
@@ -1069,4 +1179,70 @@ fn review_block_suffix(generation_text: &str) -> String {
     .find("---REVIEW:")
     .map(|index| generation_text[index..].trim().to_string())
     .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn ingestable_source_paths_match_text_and_doc_extensions() {
+    // Text/doc sources produce a wiki page → auto-ingest them.
+    assert!(is_ingestable_source_path("raw/sources/note.md"));
+    assert!(is_ingestable_source_path("raw/sources/project-a/config.yaml"));
+    assert!(is_ingestable_source_path("raw/sources/report.pdf"));
+    // Extension match is case-insensitive.
+    assert!(is_ingestable_source_path("raw/sources/DATA.CSV"));
+  }
+
+  #[test]
+  fn non_ingestable_source_paths_are_skipped() {
+    // Images/media are imported but never auto-ingested (mirrors upstream).
+    assert!(!is_ingestable_source_path("raw/sources/diagram.png"));
+    assert!(!is_ingestable_source_path("raw/sources/clip.mp4"));
+    // Files with no extension can't be routed to an ingest strategy.
+    assert!(!is_ingestable_source_path("raw/sources/README"));
+    // Dotfiles and the extraction cache are never sources.
+    assert!(!is_ingestable_source_path("raw/sources/.keep"));
+    assert!(!is_ingestable_source_path("raw/sources/.cache/note.md.txt"));
+  }
+
+  #[test]
+  fn retryable_provider_error_survives_api_error_boundary() {
+    // Executors return Result<_, ApiError>; the scheduler re-lifts that into a
+    // TaskExecutionError to decide retry vs. permanent fail. A transient provider
+    // failure (gateway 429/timeout/overload) must stay retryable across that
+    // round-trip — otherwise one gateway blip permanently kills an ingest that a
+    // simple retry would have saved (the actual production failure we're fixing).
+    let provider_error =
+      ProviderError::new("provider_rate_limited", "slow down", true).with_status(429);
+    let api_error = TaskExecutionError::from_provider_error(provider_error).into_api_error();
+    let relifted: TaskExecutionError = api_error.into();
+    assert!(
+      relifted.retryable(),
+      "retryable provider error must remain retryable across the ApiError boundary"
+    );
+    assert_eq!(relifted.code, "provider_rate_limited");
+    assert_eq!(relifted.provider_status, Some(429));
+  }
+
+  #[test]
+  fn non_provider_error_defaults_to_non_retryable() {
+    // Plain executor errors (bad input, IO) carry no retry metadata and must
+    // default to a single permanent failure.
+    let lifted: TaskExecutionError = ApiError::bad_request("bad input").into();
+    assert!(!lifted.retryable());
+    assert_eq!(lifted.code, "task_execution_failed");
+    assert_eq!(lifted.provider_status, None);
+  }
+
+  #[test]
+  fn retry_backoff_grows_then_caps() {
+    // Exponential backoff spaces retries out so a burst of gateway overload has
+    // time to clear before the next attempt, capped so we never wait absurdly.
+    assert_eq!(retry_backoff_seconds(1), 4);
+    assert_eq!(retry_backoff_seconds(2), 8);
+    assert_eq!(retry_backoff_seconds(3), 16);
+    assert_eq!(retry_backoff_seconds(10), 30);
+  }
 }

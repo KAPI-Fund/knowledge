@@ -146,46 +146,45 @@ impl OpenAiCompatibleProvider {
             .map_err(map_transport_error)?;
 
         let status = response.status();
-        let body = response.text().await.map_err(map_transport_error)?;
-        let payload: Value = serde_json::from_str(&body).map_err(|error| {
-            ProviderError::new(
-                "provider_invalid_response",
-                format!("provider returned invalid JSON: {error}"),
-                false,
-            )
-        })?;
-
         if !status.is_success() {
+            let body = response.text().await.map_err(map_transport_error)?;
+            let payload: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
             return Err(map_provider_error(status, &payload));
         }
 
-        let response: ChatCompletionResponse =
-            serde_json::from_value(payload).map_err(|error| {
-                ProviderError::new(
-                    "provider_invalid_response",
-                    format!("provider returned unsupported response shape: {error}"),
-                    false,
-                )
-            })?;
+        // Stream the SSE body and reassemble the content deltas into one text.
+        // Streaming keeps the connection continuously active, so the gateway's
+        // ~60s *idle* timeout never fires on a long generation. A non-streamed
+        // read blocks for the whole body with zero bytes flowing and gets cut at
+        // 60s (verified live: non-stream died at 60.3s, stream survived 171s and
+        // completed). Callers still get a fully-aggregated ProviderTextResponse.
+        let mut text = String::new();
+        let mut usage = ChatUsage::default();
+        let mut bytes_stream = response.bytes_stream();
+        let mut buffer = String::new();
+        while let Some(chunk) = bytes_stream.next().await {
+            let chunk = chunk.map_err(map_transport_error)?;
+            buffer.push_str(&String::from_utf8_lossy(&chunk));
+            while let Some(newline) = buffer.find('\n') {
+                let line = buffer[..newline].trim().to_string();
+                buffer.drain(..=newline);
+                apply_stream_line(&line, &mut text, &mut usage);
+            }
+        }
+        // The final SSE line may arrive without a trailing newline.
+        apply_stream_line(buffer.trim(), &mut text, &mut usage);
 
-        let content = response
-            .choices
-            .first()
-            .and_then(|choice| choice.message.content.as_deref())
-            .map(str::trim)
-            .filter(|content| !content.is_empty())
-            .ok_or_else(|| {
-                ProviderError::new(
-                    "provider_invalid_response",
-                    "provider did not return assistant content",
-                    false,
-                )
-            })?;
-
-        let usage = response.usage.unwrap_or_default();
+        let text = text.trim();
+        if text.is_empty() {
+            return Err(ProviderError::new(
+                "provider_invalid_response",
+                "provider did not return assistant content",
+                false,
+            ));
+        }
 
         Ok(ProviderTextResponse {
-            text: content.to_string(),
+            text: text.to_string(),
             usage: ProviderUsage {
                 prompt_tokens: usage.prompt_tokens.unwrap_or_default(),
                 completion_tokens: usage.completion_tokens.unwrap_or_default(),
@@ -459,6 +458,37 @@ fn parse_stream_data_line(line: &str) -> Option<String> {
     }
 }
 
+/// Apply one SSE line to the aggregation state used by `complete_text`: append any
+/// content delta to `text`, and capture a `usage` object if the chunk carries one
+/// (the terminal usage-bearing chunk has an empty `choices` array). Non-data lines,
+/// `[DONE]`, and unparseable payloads are ignored.
+fn apply_stream_line(line: &str, text: &mut String, usage: &mut ChatUsage) {
+    let Some(data) = line.strip_prefix("data:").map(str::trim) else {
+        return;
+    };
+    if data.is_empty() || data == "[DONE]" {
+        return;
+    }
+    let Ok(payload) = serde_json::from_str::<Value>(data) else {
+        return;
+    };
+    if let Some(delta) = payload
+        .get("choices")
+        .and_then(|choices| choices.get(0))
+        .and_then(|choice| choice.get("delta"))
+        .and_then(|delta| delta.get("content"))
+        .and_then(Value::as_str)
+    {
+        text.push_str(delta);
+    }
+    if let Some(chunk_usage) = payload
+        .get("usage")
+        .and_then(|value| serde_json::from_value::<ChatUsage>(value.clone()).ok())
+    {
+        *usage = chunk_usage;
+    }
+}
+
 fn map_provider_error(status: StatusCode, payload: &Value) -> ProviderError {
     let message = payload
         .get("error")
@@ -486,6 +516,16 @@ fn map_provider_error(status: StatusCode, payload: &Value) -> ProviderError {
             false,
         )
         .with_status(status.as_u16()),
+        // Some gateways (e.g. IntelAlloc) return 404 + model_not_found when an
+        // account/route is transiently unavailable under load, using the same
+        // shape as a genuinely-missing model. We can't tell the two apart from
+        // the response, so treat it as retryable and let max_attempts bound it:
+        // transient overload recovers on retry, a real misconfig fails after a
+        // few bounded attempts. 408 (request timeout) is likewise transient.
+        StatusCode::NOT_FOUND | StatusCode::REQUEST_TIMEOUT => {
+            ProviderError::new("provider_upstream_unavailable", message.to_string(), true)
+                .with_status(status.as_u16())
+        }
         _ if status.is_server_error() => {
             ProviderError::new("provider_server_error", message.to_string(), true)
                 .with_status(status.as_u16())
@@ -519,7 +559,9 @@ impl ChatCompletionRequest {
                 },
             ],
             temperature: 0.0,
-            stream: None,
+            // Stream so the gateway's ~60s idle timeout never fires mid-generation
+            // (complete_text reassembles the deltas into one text).
+            stream: Some(true),
         }
     }
 
@@ -661,6 +703,49 @@ mod tests {
   use crate::providers::types::{ProviderChatMessage, ProviderChatStreamRequest};
 
   #[test]
+  fn maps_rate_limit_and_server_errors_as_retryable() {
+    let body = serde_json::json!({"error": {"message": "slow down", "type": "rate_limit_error"}});
+    let err = map_provider_error(StatusCode::TOO_MANY_REQUESTS, &body);
+    assert!(err.retryable(), "429 must be retryable");
+    assert_eq!(err.code(), "provider_rate_limited");
+
+    let body = serde_json::json!({"error": {"message": "upstream down"}});
+    let err = map_provider_error(StatusCode::SERVICE_UNAVAILABLE, &body);
+    assert!(err.retryable(), "503 must be retryable");
+  }
+
+  #[test]
+  fn maps_gateway_overload_404_as_retryable() {
+    // The IntelAlloc gateway returns 404 + model_not_found when an account/route
+    // is transiently unavailable under load — indistinguishable from a genuinely
+    // wrong model name. Treat it as retryable (bounded by max_attempts): transient
+    // overload auto-recovers, a truly-misconfigured model just fails after a few
+    // bounded attempts instead of instantly. This is the exact error that killed
+    // the ingest batch on the first attempt.
+    let body = serde_json::json!({
+      "error": {
+        "message": "Model \"gpt-5.4\" is not supported by any configured account in this group",
+        "type": "model_not_found"
+      }
+    });
+    let err = map_provider_error(StatusCode::NOT_FOUND, &body);
+    assert!(err.retryable(), "gateway overload 404 must be retryable");
+    assert_eq!(err.provider_status(), Some(404));
+  }
+
+  #[test]
+  fn maps_invalid_request_400_as_permanent() {
+    // A real client-side bad request (malformed payload) must NOT be retried —
+    // retrying can't fix it and only wastes the gateway's concurrency budget.
+    let body = serde_json::json!({
+      "error": {"message": "invalid 'messages'", "type": "invalid_request_error"}
+    });
+    let err = map_provider_error(StatusCode::BAD_REQUEST, &body);
+    assert!(!err.retryable(), "invalid_request 400 must be permanent");
+    assert_eq!(err.code(), "provider_invalid_request");
+  }
+
+  #[test]
   fn parses_stream_data_lines() {
     assert_eq!(
       parse_stream_data_line(r#"data: {"choices":[{"delta":{"content":"Hel"}}]}"#),
@@ -705,7 +790,112 @@ mod tests {
         user_prompt: "u".to_string(),
       },
     );
-    assert!(serde_json::to_value(plain).unwrap().get("stream").is_none());
+    // complete_text now streams too (to dodge the gateway's 60s idle cut), so
+    // from_text also sets stream:true.
+    assert_eq!(serde_json::to_value(plain).unwrap()["stream"], true);
+  }
+
+  #[tokio::test]
+  async fn complete_text_streams_and_aggregates_delta_content() {
+    // The gateway cuts an *idle* (non-streaming) connection at ~60s: while the
+    // model generates, a non-streamed request moves zero bytes and gets killed
+    // (verified live — non-stream died at 60.3s, stream survived 171s). So
+    // complete_text must request stream:true and reassemble the SSE deltas into
+    // one text, keeping the socket alive the whole time. This mock streams three
+    // content chunks then a usage-bearing chunk and [DONE]; complete_text must
+    // return the concatenated text and the final usage.
+    let sse = concat!(
+      "data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}\n\n",
+      "data: {\"choices\":[{\"delta\":{\"content\":\", \"}}]}\n\n",
+      "data: {\"choices\":[{\"delta\":{\"content\":\"world\"}}]}\n\n",
+      "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":5,\"total_tokens\":8}}\n\n",
+      "data: [DONE]\n\n",
+    );
+    let (handle, base) = spawn_mock_sse_server(sse.to_string()).await;
+
+    let provider = OpenAiCompatibleProvider::new(base, "key".to_string(), "gpt-4o".to_string(), 30);
+    let response = provider
+      .complete_text(ProviderTextRequest {
+        system_prompt: "s".to_string(),
+        user_prompt: "u".to_string(),
+      })
+      .await
+      .expect("streamed completion");
+
+    assert_eq!(response.text, "Hello, world");
+    assert_eq!(response.usage.prompt_tokens, 3);
+    assert_eq!(response.usage.completion_tokens, 5);
+    assert_eq!(response.usage.total_tokens, 8);
+    handle.abort();
+  }
+
+  #[tokio::test]
+  async fn complete_text_maps_error_status_from_stream_endpoint() {
+    // A non-2xx response on the streaming path must still map through
+    // map_provider_error (e.g. 429 -> retryable) rather than being treated as a
+    // stream body.
+    let (handle, base) = spawn_mock_status_server(
+      429,
+      "{\"error\":{\"message\":\"slow down\",\"type\":\"rate_limit_error\"}}".to_string(),
+    )
+    .await;
+
+    let provider = OpenAiCompatibleProvider::new(base, "key".to_string(), "gpt-4o".to_string(), 30);
+    let err = provider
+      .complete_text(ProviderTextRequest {
+        system_prompt: "s".to_string(),
+        user_prompt: "u".to_string(),
+      })
+      .await
+      .expect_err("429 must surface as an error");
+
+    assert_eq!(err.code(), "provider_rate_limited");
+    assert!(err.retryable());
+    handle.abort();
+  }
+
+  async fn spawn_mock_sse_server(body: String) -> (tokio::task::JoinHandle<()>, String) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let handle = tokio::spawn(async move {
+      if let Ok((mut sock, _)) = listener.accept().await {
+        let mut buf = [0u8; 4096];
+        let _ = sock.read(&mut buf).await;
+        let resp = format!(
+          "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\n\r\n{}",
+          body.len(),
+          body
+        );
+        let _ = sock.write_all(resp.as_bytes()).await;
+        let _ = sock.flush().await;
+      }
+    });
+    (handle, format!("http://{addr}"))
+  }
+
+  async fn spawn_mock_status_server(
+    status: u16,
+    body: String,
+  ) -> (tokio::task::JoinHandle<()>, String) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let handle = tokio::spawn(async move {
+      if let Ok((mut sock, _)) = listener.accept().await {
+        let mut buf = [0u8; 4096];
+        let _ = sock.read(&mut buf).await;
+        let resp = format!(
+          "HTTP/1.1 {} STATUS\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+          status,
+          body.len(),
+          body
+        );
+        let _ = sock.write_all(resp.as_bytes()).await;
+        let _ = sock.flush().await;
+      }
+    });
+    (handle, format!("http://{addr}"))
   }
 
   #[test]

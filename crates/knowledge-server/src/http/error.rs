@@ -3,10 +3,24 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::Serialize;
 
+/// Retry hint carried by an [`ApiError`] that originated from a background-task
+/// executor. The HTTP layer ignores it; the task scheduler reads it to decide
+/// whether a failure is transient (retry with backoff) or permanent. Without
+/// this, a provider error's `retryable` flag was lost the moment an executor
+/// returned `Result<_, ApiError>`, so every gateway blip killed the task on the
+/// first attempt.
+#[derive(Debug, Clone)]
+pub struct RetryHint {
+  pub code: String,
+  pub retryable: bool,
+  pub provider_status: Option<u16>,
+}
+
 #[derive(Debug)]
 pub struct ApiError {
   status: StatusCode,
   message: String,
+  retry: Option<RetryHint>,
 }
 
 impl ApiError {
@@ -14,6 +28,7 @@ impl ApiError {
     Self {
       status: StatusCode::BAD_REQUEST,
       message: message.into(),
+      retry: None,
     }
   }
 
@@ -21,6 +36,7 @@ impl ApiError {
     Self {
       status: StatusCode::FORBIDDEN,
       message: message.into(),
+      retry: None,
     }
   }
 
@@ -28,6 +44,7 @@ impl ApiError {
     Self {
       status: StatusCode::INTERNAL_SERVER_ERROR,
       message: message.into(),
+      retry: None,
     }
   }
 
@@ -35,6 +52,7 @@ impl ApiError {
     Self {
       status: StatusCode::NOT_FOUND,
       message: message.into(),
+      retry: None,
     }
   }
 
@@ -42,6 +60,7 @@ impl ApiError {
     Self {
       status: StatusCode::PAYLOAD_TOO_LARGE,
       message: message.into(),
+      retry: None,
     }
   }
 
@@ -49,6 +68,7 @@ impl ApiError {
     Self {
       status: StatusCode::UNSUPPORTED_MEDIA_TYPE,
       message: message.into(),
+      retry: None,
     }
   }
 
@@ -56,7 +76,20 @@ impl ApiError {
     Self {
       status: StatusCode::UNAUTHORIZED,
       message: message.into(),
+      retry: None,
     }
+  }
+
+  /// Attach a task retry hint so the scheduler can preserve `retryable`/`code`
+  /// across the executor's `Result<_, ApiError>` boundary.
+  pub fn with_retry_hint(mut self, hint: RetryHint) -> Self {
+    self.retry = Some(hint);
+    self
+  }
+
+  /// The retry hint, if this error came from a task executor.
+  pub fn retry_hint(&self) -> Option<&RetryHint> {
+    self.retry.as_ref()
   }
 
   /// Map a SQLx error to 400 when it is a Postgres unique-constraint violation
