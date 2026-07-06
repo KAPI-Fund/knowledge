@@ -18,7 +18,7 @@ use crate::canvas::store;
 use crate::http::error::ApiError;
 use crate::providers::{
     load_active_connection, load_image_config, ProviderChatMessage, ProviderChatStreamRequest,
-    ProviderImageRequest,
+    ProviderImageRequest, ProviderTextRequest,
 };
 use crate::query::load_query_settings;
 
@@ -283,8 +283,17 @@ async fn run_node_handler(
             return Err(ApiError::bad_request("image node has no prompt"));
         }
         load_image_config(&state).await?; // validate image config before streaming
+
+        let blocks =
+            assemble_reference_blocks(&state, &principal, &doc, &node_id, &node_prompt).await?;
+        let final_prompt = if blocks.is_empty() {
+            node_prompt.clone()
+        } else {
+            format!("{node_prompt}\n\n参考:\n{}", blocks.join("\n\n"))
+        };
+
         let user_id = principal.user_id.clone();
-        let prompt = node_prompt.clone();
+        let prompt = final_prompt;
         let stream_state = state.clone();
         let event_stream: std::pin::Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>> =
             Box::pin(async_stream::stream! {
@@ -311,39 +320,51 @@ async fn run_node_handler(
         return Ok(Sse::new(event_stream).keep_alive(KeepAlive::default()));
     }
 
-    // Note/URL/prior-analysis references.
-    let mut blocks = crate::canvas::service::collect_reference_blocks(&doc, &node_id);
+    if node.r#type == "search" {
+        let blocks =
+            assemble_reference_blocks(&state, &principal, &doc, &node_id, &node_prompt).await?;
+        let guidance = node.data.get("query").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
 
-    // KB nodes -> RAG, with a per-project permission check; excluded if no access.
-    for project_id in crate::canvas::service::referenced_kb_project_ids(&doc, &node_id) {
-        let role = crate::tenancy::access::project_access_role(
-            &state.pool,
-            &project_id,
-            &principal.user_id,
-        )
-        .await
-        .map_err(ApiError::from)?;
-        match role {
-            Some(_role) => {
-                let root =
-                    crate::projects::service::project_root_for_id(&state, &project_id).await?;
-                let assembled = crate::chat::context::assemble_chat_context(
-                    &state,
-                    &project_id,
-                    &root,
-                    &node_prompt,
-                    8,
-                )
-                .await?;
-                for b in assembled.context_blocks {
-                    blocks.push(format!("Knowledge base ({project_id}):\n{b}"));
+        let query = if blocks.is_empty() {
+            if guidance.is_empty() {
+                return Err(ApiError::bad_request("search node has no query"));
+            }
+            guidance
+        } else {
+            let (system_prompt, user_prompt) =
+                crate::canvas::service::build_search_query_prompt(&guidance, &blocks);
+            let provider = load_active_connection(&state).await?.provider();
+            let response = provider
+                .complete_text(ProviderTextRequest { system_prompt, user_prompt })
+                .await
+                .map_err(|e| ApiError::bad_request(e.message().to_string()))?;
+            let synthesized = response.text.lines().next().unwrap_or("").trim().to_string();
+            if synthesized.is_empty() {
+                return Err(ApiError::bad_request("could not synthesize a search query"));
+            }
+            synthesized
+        };
+
+        let stream_state = state.clone();
+        let event_stream: std::pin::Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>> =
+            Box::pin(async_stream::stream! {
+                match run_web_search_markdown(&stream_state, &query).await {
+                    Ok(markdown) => {
+                        yield Ok(
+                            Event::default().event("done").data(
+                                build_search_done_payload(&markdown).to_string(),
+                            ),
+                        );
+                    }
+                    Err(message) => yield Ok(sse_error(&message)),
                 }
-            }
-            None => {
-                blocks.push(format!("[Knowledge base {project_id}: no access, excluded]"));
-            }
-        }
+            });
+        return Ok(Sse::new(event_stream).keep_alive(KeepAlive::default()));
     }
+
+    // Ordered Note/URL/prior-analysis/search/image references + KB via RAG.
+    let blocks =
+        assemble_reference_blocks(&state, &principal, &doc, &node_id, &node_prompt).await?;
 
     let prompt = crate::canvas::service::build_analyze_prompt(&node_prompt, &blocks);
 
@@ -715,6 +736,56 @@ async fn run_web_search_markdown(state: &AppState, query: &str) -> Result<String
         })
         .collect();
     Ok(crate::canvas::service::search_results_to_markdown(query, &entries))
+}
+
+/// Assemble reference blocks for `node_id` in spatial (y, then x) order. Text
+/// nodes format synchronously; KB nodes trigger RAG inline with a per-project
+/// permission check so every source obeys the same ordering.
+async fn assemble_reference_blocks(
+    state: &AppState,
+    principal: &Principal,
+    doc: &CanvasDocument,
+    node_id: &str,
+    node_prompt: &str,
+) -> Result<Vec<String>, ApiError> {
+    let mut blocks = Vec::new();
+    for src in doc.ordered_incoming_sources(node_id) {
+        if src.r#type == "kb" {
+            let Some(project_id) = src.data.get("projectId").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            let role = crate::tenancy::access::project_access_role(
+                &state.pool,
+                project_id,
+                &principal.user_id,
+            )
+            .await
+            .map_err(ApiError::from)?;
+            match role {
+                Some(_role) => {
+                    let root =
+                        crate::projects::service::project_root_for_id(state, project_id).await?;
+                    let assembled = crate::chat::context::assemble_chat_context(
+                        state,
+                        project_id,
+                        &root,
+                        node_prompt,
+                        8,
+                    )
+                    .await?;
+                    for b in assembled.context_blocks {
+                        blocks.push(format!("Knowledge base ({project_id}):\n{b}"));
+                    }
+                }
+                None => {
+                    blocks.push(format!("[Knowledge base {project_id}: no access, excluded]"));
+                }
+            }
+        } else if let Some(block) = crate::canvas::service::format_text_reference_block(src) {
+            blocks.push(block);
+        }
+    }
+    Ok(blocks)
 }
 
 async fn extract_url_handler(
