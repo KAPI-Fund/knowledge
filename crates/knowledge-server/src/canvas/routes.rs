@@ -337,7 +337,8 @@ async fn run_node_handler(
             let response = provider
                 .complete_text(ProviderTextRequest { system_prompt, user_prompt })
                 .await
-                .map_err(|e| ApiError::bad_request(e.message().to_string()))?;
+                // A provider/transport failure is server-side, not a client error.
+                .map_err(|e| ApiError::internal(e.message().to_string()))?;
             let synthesized = response.text.lines().next().unwrap_or("").trim().to_string();
             if synthesized.is_empty() {
                 return Err(ApiError::bad_request("could not synthesize a search query"));
