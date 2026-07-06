@@ -721,15 +721,19 @@ async fn extract_url_handler(
     let principal = resolve_principal(&state, &headers).await?;
     require_csrf(&principal, &headers)?;
 
-    let client = crate::canvas::service::build_extractor_client(state.allow_private_fetch)
-        .map_err(|error| ApiError::internal(format!("http client init failed: {error}")))?;
+    let Some(config) = crate::web_fetch::config::load_fetch_config(&state).await? else {
+        return Ok(Json(json!({
+            "status": "error", "title": "", "markdown": "",
+            "error": "web page fetch is not configured; set a fetch provider in Settings"
+        })));
+    };
 
-    match crate::canvas::service::fetch_url(&client, &body.url, state.allow_private_fetch).await {
+    match crate::web_fetch::firecrawl::scrape(&config, &body.url).await {
         Ok(page) => Ok(Json(json!({
             "status": "ok", "title": page.title, "markdown": page.markdown, "error": null
         }))),
         Err(error) => Ok(Json(json!({
-            "status": "error", "title": "", "markdown": "", "error": error
+            "status": "error", "title": "", "markdown": "", "error": error.to_string()
         }))),
     }
 }
