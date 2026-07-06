@@ -24,6 +24,7 @@ export function NoteNode({ data, nodeId, index, selected, onChange }: NoteNodePr
       nodeId={nodeId}
       index={index}
       selected={selected}
+      targetHandle={false}
     >
       <CompositionTextarea
         value={data.markdown ?? ""}

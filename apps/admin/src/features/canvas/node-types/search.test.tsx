@@ -55,8 +55,8 @@ describe("SearchNode", () => {
     expect(screen.getByRole("button", { name: /search/i })).toBeDisabled();
   });
 
-  it("renders only a source handle (no target — it is a data source)", () => {
+  it("renders both a source and a target handle (it is a consumer)", () => {
     const { container } = renderNode({ query: "cats" });
-    expect(container.querySelectorAll(".react-flow__handle").length).toBe(1);
+    expect(container.querySelectorAll(".react-flow__handle").length).toBe(2);
   });
 });

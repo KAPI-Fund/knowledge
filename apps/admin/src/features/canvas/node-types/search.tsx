@@ -37,7 +37,6 @@ export function SearchNode({ data, nodeId, index, selected, onQueryChange, onSea
       index={index}
       selected={selected}
       status={status}
-      targetHandle={false}
       headerRight={
         <Button
           type="button"
