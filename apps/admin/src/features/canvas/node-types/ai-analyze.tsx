@@ -2,7 +2,7 @@ import { Loader2, Play, Sparkles } from "lucide-react";
 
 import { MarkdownMessage } from "@/components/shared/markdown-message";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
+import { CompositionTextarea } from "@/components/ui/composition-input";
 
 import { ModelTag } from "./model-tag";
 import { NodeError } from "./node-error";
@@ -81,9 +81,9 @@ export function AiAnalyzeNode({
       }
     >
       <ModelTag model={model} />
-      <Textarea
+      <CompositionTextarea
         value={data.prompt ?? ""}
-        onChange={(event) => onPromptChange?.(event.target.value)}
+        onValueChange={onPromptChange ?? (() => {})}
         readOnly={!onPromptChange}
         placeholder="Describe what to analyze..."
         className="nodrag h-14 resize-none text-xs"

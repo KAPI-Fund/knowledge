@@ -72,4 +72,34 @@ describe("NodeShell", () => {
     );
     expect(container.querySelector(".ring-2")).not.toBeNull();
   });
+
+  it("marks the content area with `nowheel` so the wheel scrolls it instead of zooming the canvas", () => {
+    const { container } = renderShell();
+    // React Flow suppresses canvas zoom for wheel events over any element that
+    // carries the `nowheel` class, letting the node body scroll natively.
+    const scrollable = container.querySelector(".nowheel");
+    expect(scrollable).not.toBeNull();
+    expect(scrollable?.textContent).toContain("body");
+  });
+
+  it("shows a resize handle only when the node is selected", () => {
+    const { rerender, container } = render(
+      <ReactFlowProvider>
+        <NodeShell icon={<span>icon</span>} label="NOTE" nodeId="abcd-1">
+          <div>body</div>
+        </NodeShell>
+      </ReactFlowProvider>,
+    );
+    // NodeResizer only paints its controls when the node is selected, so an
+    // unselected node has no resize handle.
+    expect(container.querySelector(".react-flow__resize-control")).toBeNull();
+    rerender(
+      <ReactFlowProvider>
+        <NodeShell icon={<span>icon</span>} label="NOTE" nodeId="abcd-1" selected>
+          <div>body</div>
+        </NodeShell>
+      </ReactFlowProvider>,
+    );
+    expect(container.querySelector(".react-flow__resize-control")).not.toBeNull();
+  });
 });

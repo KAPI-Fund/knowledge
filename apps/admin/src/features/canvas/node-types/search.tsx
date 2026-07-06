@@ -2,7 +2,7 @@ import { Loader2, Search } from "lucide-react";
 
 import { MarkdownMessage } from "@/components/shared/markdown-message";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { CompositionInput } from "@/components/ui/composition-input";
 
 import { NodeError } from "./node-error";
 import { NodeShell } from "./node-shell";
@@ -55,9 +55,9 @@ export function SearchNode({ data, nodeId, index, selected, onQueryChange, onSea
         </Button>
       }
     >
-      <Input
+      <CompositionInput
         value={data.query ?? ""}
-        onChange={(event) => onQueryChange(event.target.value)}
+        onValueChange={onQueryChange}
         placeholder="Search the web..."
         className="nodrag h-8 text-xs"
       />

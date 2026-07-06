@@ -555,13 +555,21 @@ function nextNodeIndex(nodes: CanvasNode[]): number {
   return Math.max(maxStored, nodes.length) + 1;
 }
 
+// Per-type starting sizes tuned to each node's typical content. Users can resize
+// freely afterwards (persisted), so these are just sensible defaults, not caps.
 const NODE_SIZES: Record<CanvasNode["type"], { w: number; h: number }> = {
-  note: { w: 280, h: 180 },
-  url: { w: 340, h: 280 },
-  search: { w: 340, h: 280 },
-  kb: { w: 240, h: 120 },
-  ai_analyze: { w: 360, h: 320 },
-  ai_image: { w: 320, h: 400 },
+  // A single freeform markdown textarea: a comfortable, slightly-tall writing area.
+  note: { w: 300, h: 220 },
+  // URL input + fetched article markdown; content-heavy, so give the body reading room.
+  url: { w: 360, h: 340 },
+  // Query input + web-search results markdown; same content-heavy shape as url.
+  search: { w: 360, h: 340 },
+  // Read-only reference showing just a project name on one line; keep it compact.
+  kb: { w: 260, h: 120 },
+  // Prompt + a long streamed markdown answer; the answer dominates, so run tall.
+  ai_analyze: { w: 380, h: 360 },
+  // Prompt on top + a (default square 1024x1024) generated image filling the rest.
+  ai_image: { w: 340, h: 420 },
 };
 
 function defaultSize(type: CanvasNode["type"]): { w: number; h: number } {

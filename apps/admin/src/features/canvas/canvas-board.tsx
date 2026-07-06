@@ -162,6 +162,50 @@ export function pruneDanglingEdges(
   return edges.filter((e) => ids.has(e.source) && ids.has(e.target));
 }
 
+// True only for the change that *ends* a NodeResizer drag (`resizing === false`).
+// A dimensions change with `resizing === true` is mid-drag, and a dimensions
+// change with no `resizing` flag is a passive ResizeObserver measurement -- both
+// must be kept out of the document so we persist exactly once per resize.
+export function isResizeEndChange(change: NodeChange): boolean {
+  return change.type === "dimensions" && change.resizing === false;
+}
+
+// Minimal view of a React Flow node needed to snapshot its geometry back into the
+// document. NodeResizer writes the committed size onto `width`/`height`; we fall
+// back to the measured box and finally the stored size so a node never collapses.
+interface GeometrySource {
+  id: string;
+  position: { x: number; y: number };
+  width?: number | null;
+  height?: number | null;
+  measured?: { width?: number | null; height?: number | null };
+}
+
+// Rebuild the document's nodes from React Flow's live nodes, capturing both
+// position (drag) and size (resize), and prune any edges the change orphaned.
+// Shared by drag-end, resize-end, and deletion so all three commit identically.
+export function commitNodeGeometry(
+  document: CanvasDocument,
+  rfNodes: GeometrySource[],
+): CanvasDocument {
+  const nodes = rfNodes
+    .map((n) => {
+      const orig = document.nodes.find((d) => d.id === n.id);
+      if (!orig) {
+        return null;
+      }
+      return {
+        ...orig,
+        x: n.position.x,
+        y: n.position.y,
+        w: n.width ?? n.measured?.width ?? orig.w,
+        h: n.height ?? n.measured?.height ?? orig.h,
+      };
+    })
+    .filter((n): n is CanvasDocument["nodes"][number] => n !== null);
+  return { ...document, nodes, edges: pruneDanglingEdges(nodes, document.edges) };
+}
+
 export function CanvasBoard({ document, onChange, onRunNode, onFetchUrl, onSearchNode, onSelectionChange }: CanvasBoardProps) {
   const settings = useSystemSettingsQuery().data;
   const analyzeModel = settings?.connections?.find((c) => c.isActive)?.model ?? null;
@@ -273,18 +317,18 @@ export function CanvasBoard({ document, onChange, onRunNode, onFetchUrl, onSearc
         return;
       }
 
-      // Commit only structural changes (drag end, deletions) to the document. A
-      // batch that is purely selection or measurement leaves the document alone.
-      if (!changes.some((c) => c.type === "position" || c.type === "remove")) {
+      // Commit structural geometry changes to the document: drag end, deletions,
+      // and the end of a NodeResizer drag (resize-end). A batch that is purely
+      // selection or passive measurement leaves the document alone -- crucially,
+      // mid-resize and ResizeObserver measurement `dimensions` changes are
+      // excluded so we neither churn the document nor persist a half-drag size.
+      const structural = changes.some(
+        (c) => c.type === "position" || c.type === "remove" || isResizeEndChange(c),
+      );
+      if (!structural) {
         return;
       }
-      const nodes = next
-        .map((n) => {
-          const orig = document.nodes.find((d) => d.id === n.id);
-          return orig ? { ...orig, x: n.position.x, y: n.position.y } : null;
-        })
-        .filter((n): n is (typeof document.nodes)[number] => n !== null);
-      onChange({ ...document, nodes, edges: pruneDanglingEdges(nodes, document.edges) });
+      onChange(commitNodeGeometry(document, next as GeometrySource[]));
     },
     [document, onChange, rfNodes, selectedIds, onSelectionChange],
   );
