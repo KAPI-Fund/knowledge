@@ -211,6 +211,10 @@ pub fn build_image_done_payload(version_id: &str, url: &str, created_at: &str) -
     json!({ "versionId": version_id, "url": url, "createdAt": created_at })
 }
 
+pub fn build_search_done_payload(markdown: &str) -> serde_json::Value {
+    json!({ "markdown": markdown })
+}
+
 pub fn build_skill_node_done_payload(node: serde_json::Value, x: f64, y: f64) -> serde_json::Value {
     json!({ "node": node, "x": x, "y": y })
 }
@@ -859,5 +863,11 @@ mod tests {
         assert_eq!(versions[0]["id"], "v-1");
         assert_eq!(versions[0]["url"], "/api/assets/asset-1");
         assert_eq!(versions[0]["createdAt"], "2026-07-01T00:00:00Z");
+    }
+
+    #[test]
+    fn search_done_payload_carries_markdown() {
+        let payload = build_search_done_payload("Search results for \"cats\":\n- a");
+        assert_eq!(payload["markdown"], "Search results for \"cats\":\n- a");
     }
 }
