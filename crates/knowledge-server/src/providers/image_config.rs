@@ -44,7 +44,9 @@ pub fn image_config_from_row(
         api_key: api_key.unwrap_or_default(),
         model,
         size,
-        timeout_seconds: timeout_seconds.unwrap_or(60),
+        // Image generation is slow (multi-MB base64 payloads, tens of seconds to a
+        // few minutes), so default the request timeout to 5 minutes.
+        timeout_seconds: timeout_seconds.unwrap_or(300),
     })
 }
 
@@ -124,7 +126,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(cfg.size, "1024x1024");
-        assert_eq!(cfg.timeout_seconds, 60);
+        assert_eq!(cfg.timeout_seconds, 300);
         assert_eq!(cfg.api_key, "");
     }
 

@@ -41,7 +41,9 @@ export function ImageSection() {
   const [clearApiKey, setClearApiKey] = useState(false);
   const [model, setModel] = useState("");
   const [size, setSize] = useState("1024x1024");
-  const [timeoutSeconds, setTimeoutSeconds] = useState("60");
+  // Image generation is slow (gpt-image returns multi-MB base64 that takes tens
+  // of seconds to a few minutes), so default the request timeout to 5 minutes.
+  const [timeoutSeconds, setTimeoutSeconds] = useState("300");
   const hydratedFrom = useRef<string>("");
 
   useEffect(() => {
@@ -57,7 +59,7 @@ export function ImageSection() {
     setBaseUrl(img.baseUrl ?? "");
     setModel(img.model ?? "");
     setSize(img.size ?? "1024x1024");
-    setTimeoutSeconds(String(img.timeoutSeconds ?? 60));
+    setTimeoutSeconds(String(img.timeoutSeconds ?? 300));
   }, [settings.data?.image]);
 
   useEffect(() => {
@@ -73,7 +75,7 @@ export function ImageSection() {
         baseUrl,
         model,
         size,
-        timeoutSeconds: parseTimeoutSeconds(timeoutSeconds, 60),
+        timeoutSeconds: parseTimeoutSeconds(timeoutSeconds, 300),
         ...(apiKey.trim()
           ? { apiKey: apiKey.trim() }
           : clearApiKey
