@@ -102,7 +102,6 @@ pub async fn bootstrap_state_without_scheduler(config: &AppConfig) -> Result<App
         cache,
         project_root: config.project_root.clone(),
         session_ttl_hours: config.session_ttl_hours,
-        allow_private_fetch: config.allow_private_fetch,
     })
 }
 

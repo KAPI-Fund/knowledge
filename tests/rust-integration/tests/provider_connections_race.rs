@@ -24,7 +24,6 @@ async fn concurrent_create_connection_keeps_exactly_one_active() -> Result<()> {
         project_root: project_root.path().to_string_lossy().to_string(),
         session_ttl_hours: 12,
         admin_password: Some("secret-password".to_string()),
-        allow_private_fetch: false,
     };
     let state = bootstrap_state_without_scheduler(&config).await?;
 
@@ -83,7 +82,6 @@ async fn concurrent_activate_and_delete_never_drop_to_zero_active() -> Result<()
         project_root: project_root.path().to_string_lossy().to_string(),
         session_ttl_hours: 12,
         admin_password: Some("secret-password".to_string()),
-        allow_private_fetch: false,
     };
     let state = bootstrap_state_without_scheduler(&config).await?;
 

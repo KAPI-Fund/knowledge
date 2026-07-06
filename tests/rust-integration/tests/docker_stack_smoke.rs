@@ -17,7 +17,6 @@ async fn bootstrap_seeds_admin_user_and_leaves_provider_unconfigured() -> Result
     project_root: project_root.path().to_string_lossy().to_string(),
     session_ttl_hours: 12,
     admin_password: Some("secret-password".to_string()),
-    allow_private_fetch: false,
   };
 
   let state = bootstrap_state(&config).await?;
