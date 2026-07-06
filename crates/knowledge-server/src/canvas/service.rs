@@ -106,13 +106,19 @@ pub const MAX_EXTRACT_BYTES: usize = 5 * 1024 * 1024;
 /// services). It does NOT by itself defend against a public hostname that
 /// resolves to a private IP (DNS rebinding); that vector is closed at connect
 /// time by PublicOnlyResolver, which screens every resolved address.
-pub fn validate_public_url(raw: &str) -> Result<reqwest::Url, String> {
+///
+/// `allow_private` bypasses the IP/localhost screening (scheme + host validity
+/// are still enforced) for trusted deployments behind a fake-IP proxy.
+pub fn validate_public_url(raw: &str, allow_private: bool) -> Result<reqwest::Url, String> {
     let url = reqwest::Url::parse(raw).map_err(|_| "invalid URL".to_string())?;
     match url.scheme() {
         "http" | "https" => {}
         other => return Err(format!("unsupported URL scheme: {other}")),
     }
     let host = url.host_str().ok_or_else(|| "URL has no host".to_string())?;
+    if allow_private {
+        return Ok(url);
+    }
     if host.eq_ignore_ascii_case("localhost") {
         return Err("URL host is not allowed".to_string());
     }
@@ -173,11 +179,17 @@ fn is_blocked_ip(ip: &IpAddr) -> bool {
 /// nothing, or if ANY resolved address is in a blocked range. Screening every
 /// address (not just the first) is what closes the DNS-rebinding vector that
 /// validate_public_url cannot see: it only inspects the hostname/literal IP.
-pub fn screen_resolved_addrs(addrs: Vec<SocketAddr>) -> Result<Vec<SocketAddr>, String> {
+///
+/// `allow_private` skips the blocked-range screening (a resolved address is still
+/// required) for trusted deployments behind a fake-IP proxy.
+pub fn screen_resolved_addrs(
+    addrs: Vec<SocketAddr>,
+    allow_private: bool,
+) -> Result<Vec<SocketAddr>, String> {
     if addrs.is_empty() {
         return Err("host did not resolve to any address".to_string());
     }
-    if addrs.iter().any(|addr| is_blocked_ip(&addr.ip())) {
+    if !allow_private && addrs.iter().any(|addr| is_blocked_ip(&addr.ip())) {
         return Err("URL host resolves to a non-public address".to_string());
     }
     Ok(addrs)
@@ -189,11 +201,23 @@ pub fn screen_resolved_addrs(addrs: Vec<SocketAddr>) -> Result<Vec<SocketAddr>, 
 /// this ensures reqwest only ever connects to public IPs, closing the
 /// DNS-rebinding hole. tokio's "net" feature is not enabled in this workspace,
 /// so resolution runs on a blocking thread via std::net::ToSocketAddrs.
+///
+/// `allow_private` disables the address screening (the resolver then behaves like
+/// a plain system resolver) for trusted fake-IP-proxy deployments.
 #[derive(Debug, Clone, Default)]
-pub struct PublicOnlyResolver;
+pub struct PublicOnlyResolver {
+    allow_private: bool,
+}
+
+impl PublicOnlyResolver {
+    pub fn new(allow_private: bool) -> Self {
+        Self { allow_private }
+    }
+}
 
 impl reqwest::dns::Resolve for PublicOnlyResolver {
     fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        let allow_private = self.allow_private;
         Box::pin(async move {
             let host = name.as_str().to_string();
             let resolved = tokio::task::spawn_blocking(move || {
@@ -203,7 +227,7 @@ impl reqwest::dns::Resolve for PublicOnlyResolver {
             .map_err(box_dns_err)?
             .map_err(box_dns_err)?;
 
-            let screened = screen_resolved_addrs(resolved)
+            let screened = screen_resolved_addrs(resolved, allow_private)
                 .map_err(|msg| box_dns_err(std::io::Error::other(msg)))?;
             let addrs: reqwest::dns::Addrs = Box::new(screened.into_iter());
             Ok(addrs)
@@ -222,14 +246,14 @@ where
 /// redirect policy that re-validates every hop's URL, and a DNS resolver that
 /// rejects non-public resolved IPs. Centralized here so the SSRF defenses stay
 /// in one place rather than being re-declared at each call site.
-pub fn build_extractor_client() -> reqwest::Result<reqwest::Client> {
+pub fn build_extractor_client(allow_private: bool) -> reqwest::Result<reqwest::Client> {
     reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
-        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+        .redirect(reqwest::redirect::Policy::custom(move |attempt| {
             if attempt.previous().len() >= 5 {
                 return attempt.error("too many redirects");
             }
-            match validate_public_url(attempt.url().as_str()) {
+            match validate_public_url(attempt.url().as_str(), allow_private) {
                 Ok(_) => attempt.follow(),
                 Err(_) => attempt.stop(),
             }
@@ -239,31 +263,140 @@ pub fn build_extractor_client() -> reqwest::Result<reqwest::Client> {
         // not screen the final address -- reopening the SSRF hole this client
         // exists to close.
         .no_proxy()
-        .dns_resolver(Arc::new(PublicOnlyResolver))
+        .dns_resolver(Arc::new(PublicOnlyResolver::new(allow_private)))
         .build()
 }
 
-/// Fetch a URL and extract readable markdown.
-pub async fn fetch_url(client: &reqwest::Client, url: &str) -> Result<ExtractedPage, String> {
-    let url = validate_public_url(url)?;
-    let mut response = client
-        .get(url)
-        .header("User-Agent", "Mozilla/5.0 (compatible; KnowledgeCanvas/1.0)")
-        .send()
-        .await
-        .map_err(|e| format!("fetch failed: {e}"))?;
-    if !response.status().is_success() {
-        return Err(format!("fetch failed: HTTP {}", response.status()));
-    }
-    let mut body = Vec::new();
-    while let Some(chunk) = response.chunk().await.map_err(|e| format!("read body failed: {e}"))? {
-        if body.len() + chunk.len() > MAX_EXTRACT_BYTES {
-            return Err("response too large".to_string());
+/// Extract an HTML attribute's value from a single tag's raw text, matching the
+/// attribute name case-insensitively and handling double-quoted, single-quoted,
+/// and unquoted values. Returns None if the attribute is absent. ASCII-lowercasing
+/// preserves byte length, so indices from the lowercased copy map 1:1 onto `tag`.
+fn attr_value(tag: &str, name: &str) -> Option<String> {
+    let lower = tag.to_ascii_lowercase();
+    let bytes = tag.as_bytes();
+    let mut from = 0;
+    while let Some(rel) = lower[from..].find(name) {
+        let name_start = from + rel;
+        from = name_start + name.len();
+        // The name must begin at a word boundary so we don't match it as a
+        // substring of another attribute name or value.
+        if name_start != 0 && !bytes[name_start - 1].is_ascii_whitespace() {
+            continue;
         }
-        body.extend_from_slice(&chunk);
+        let mut i = from;
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i >= bytes.len() || bytes[i] != b'=' {
+            continue;
+        }
+        i += 1; // past '='
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i >= bytes.len() {
+            return None;
+        }
+        let quote = bytes[i];
+        if quote == b'"' || quote == b'\'' {
+            let vstart = i + 1;
+            let vend = tag[vstart..].find(quote as char).map(|r| vstart + r)?;
+            return Some(tag[vstart..vend].to_string());
+        }
+        // Unquoted: read until the next whitespace or the end of the tag.
+        let vstart = i;
+        let vend = tag[vstart..]
+            .find(|c: char| c.is_whitespace())
+            .map(|r| vstart + r)
+            .unwrap_or(tag.len());
+        return Some(tag[vstart..vend].to_string());
     }
-    let html = String::from_utf8_lossy(&body);
-    Ok(html_to_markdown(&html))
+    None
+}
+
+/// Scan raw HTML for a `<meta http-equiv="refresh" content="...; url=TARGET">`
+/// redirect and return the resolved absolute target URL. The scan runs on the
+/// raw HTML (not the parsed DOM) because such stubs frequently place the meta
+/// inside `<noscript>`, which html5ever surfaces as inert text rather than a real
+/// element. Matching is case-insensitive; the `url=` value may be double-quoted,
+/// single-quoted, or unquoted, and a relative target resolves against `base`.
+/// Returns None when there is no refresh directive or it carries no `url=` (a
+/// plain timed self-refresh is not a redirect target).
+fn meta_refresh_target(html: &str, base: &reqwest::Url) -> Option<reqwest::Url> {
+    let lower = html.to_ascii_lowercase();
+    let mut search_from = 0;
+    while search_from < lower.len() {
+        let Some(rel) = lower[search_from..].find("<meta") else { break };
+        let start = search_from + rel;
+        let end = html[start..].find('>').map(|r| start + r).unwrap_or(html.len());
+        let tag = &html[start..end];
+        search_from = (end + 1).min(html.len());
+
+        let is_refresh = attr_value(tag, "http-equiv")
+            .map(|v| v.trim().eq_ignore_ascii_case("refresh"))
+            .unwrap_or(false);
+        if !is_refresh {
+            continue;
+        }
+        let Some(content) = attr_value(tag, "content") else { continue };
+        let lower_content = content.to_ascii_lowercase();
+        let Some(url_pos) = lower_content.find("url=") else { continue };
+        let raw_target = content[url_pos + 4..].trim().trim_matches(|c| c == '\'' || c == '"');
+        if raw_target.is_empty() {
+            continue;
+        }
+        if let Ok(resolved) = base.join(raw_target) {
+            return Some(resolved);
+        }
+    }
+    None
+}
+
+/// Fetch a URL and extract readable markdown. Beyond the HTTP 3xx redirects the
+/// reqwest client follows, this also follows HTML `<meta http-equiv="refresh">`
+/// stub pages (e.g. baidu's HTTPS homepage, which meta-refreshes to its real
+/// HTTP page), re-validating each hop against the SSRF guard.
+pub async fn fetch_url(
+    client: &reqwest::Client,
+    url: &str,
+    allow_private: bool,
+) -> Result<ExtractedPage, String> {
+    // Cap on HTML-level meta-refresh hops. Guards against a stub that refreshes
+    // in a loop; a self-refresh to the same URL falls through to extraction.
+    const MAX_META_REFRESH_HOPS: usize = 3;
+
+    let mut current = validate_public_url(url, allow_private)?;
+    for _ in 0..=MAX_META_REFRESH_HOPS {
+        let mut response = client
+            .get(current.clone())
+            .header("User-Agent", "Mozilla/5.0 (compatible; KnowledgeCanvas/1.0)")
+            .send()
+            .await
+            .map_err(|e| format!("fetch failed: {e}"))?;
+        if !response.status().is_success() {
+            return Err(format!("fetch failed: HTTP {}", response.status()));
+        }
+        let mut body = Vec::new();
+        while let Some(chunk) =
+            response.chunk().await.map_err(|e| format!("read body failed: {e}"))?
+        {
+            if body.len() + chunk.len() > MAX_EXTRACT_BYTES {
+                return Err("response too large".to_string());
+            }
+            body.extend_from_slice(&chunk);
+        }
+        let html = String::from_utf8_lossy(&body);
+
+        if let Some(target) = meta_refresh_target(&html, &current) {
+            let validated = validate_public_url(target.as_str(), allow_private)?;
+            if validated != current {
+                current = validated;
+                continue;
+            }
+        }
+        return Ok(html_to_markdown(&html));
+    }
+    Err("too many meta-refresh redirects".to_string())
 }
 
 use crate::canvas::document::CanvasDocument;
@@ -377,76 +510,88 @@ mod url_tests {
 
     #[test]
     fn validate_public_url_accepts_public_http_and_https() {
-        assert!(validate_public_url("http://93.184.216.34/").is_ok());
-        assert!(validate_public_url("https://example.com/page").is_ok());
+        assert!(validate_public_url("http://93.184.216.34/", false).is_ok());
+        assert!(validate_public_url("https://example.com/page", false).is_ok());
     }
 
     #[test]
     fn validate_public_url_rejects_non_http_schemes() {
-        assert!(validate_public_url("file:///etc/passwd").is_err());
-        assert!(validate_public_url("ftp://example.com/x").is_err());
-        assert!(validate_public_url("gopher://example.com/").is_err());
+        assert!(validate_public_url("file:///etc/passwd", false).is_err());
+        assert!(validate_public_url("ftp://example.com/x", false).is_err());
+        assert!(validate_public_url("gopher://example.com/", false).is_err());
     }
 
     #[test]
     fn validate_public_url_rejects_localhost_and_loopback() {
-        assert!(validate_public_url("http://localhost/").is_err());
-        assert!(validate_public_url("http://127.0.0.1/").is_err());
-        assert!(validate_public_url("http://[::1]/").is_err());
+        assert!(validate_public_url("http://localhost/", false).is_err());
+        assert!(validate_public_url("http://127.0.0.1/", false).is_err());
+        assert!(validate_public_url("http://[::1]/", false).is_err());
     }
 
     #[test]
     fn validate_public_url_rejects_private_and_link_local() {
-        assert!(validate_public_url("http://10.0.0.1/").is_err());
-        assert!(validate_public_url("http://192.168.1.1/").is_err());
-        assert!(validate_public_url("http://172.16.5.4/").is_err());
+        assert!(validate_public_url("http://10.0.0.1/", false).is_err());
+        assert!(validate_public_url("http://192.168.1.1/", false).is_err());
+        assert!(validate_public_url("http://172.16.5.4/", false).is_err());
         // Cloud metadata endpoint (link-local).
-        assert!(validate_public_url("http://169.254.169.254/latest/meta-data/").is_err());
+        assert!(validate_public_url("http://169.254.169.254/latest/meta-data/", false).is_err());
     }
 
     #[test]
     fn validate_public_url_rejects_unspecified_and_mapped() {
-        assert!(validate_public_url("http://0.0.0.0/").is_err());
+        assert!(validate_public_url("http://0.0.0.0/", false).is_err());
         // IPv4-mapped IPv6 form of a loopback address.
-        assert!(validate_public_url("http://[::ffff:127.0.0.1]/").is_err());
+        assert!(validate_public_url("http://[::ffff:127.0.0.1]/", false).is_err());
     }
 
     #[test]
     fn validate_public_url_rejects_ipv4_special_use_ranges() {
         // Benchmarking 198.18.0.0/15.
-        assert!(validate_public_url("http://198.18.0.1/").is_err());
-        assert!(validate_public_url("http://198.19.255.255/").is_err());
+        assert!(validate_public_url("http://198.18.0.1/", false).is_err());
+        assert!(validate_public_url("http://198.19.255.255/", false).is_err());
         // Multicast 224.0.0.0/4.
-        assert!(validate_public_url("http://224.0.0.1/").is_err());
-        assert!(validate_public_url("http://239.255.255.255/").is_err());
+        assert!(validate_public_url("http://224.0.0.1/", false).is_err());
+        assert!(validate_public_url("http://239.255.255.255/", false).is_err());
         // Reserved / future use 240.0.0.0/4.
-        assert!(validate_public_url("http://240.0.0.1/").is_err());
-        assert!(validate_public_url("http://255.255.255.254/").is_err());
+        assert!(validate_public_url("http://240.0.0.1/", false).is_err());
+        assert!(validate_public_url("http://255.255.255.254/", false).is_err());
         // IETF protocol assignments 192.0.0.0/24.
-        assert!(validate_public_url("http://192.0.0.1/").is_err());
+        assert!(validate_public_url("http://192.0.0.1/", false).is_err());
         // 6to4 relay anycast 192.88.99.0/24.
-        assert!(validate_public_url("http://192.88.99.1/").is_err());
+        assert!(validate_public_url("http://192.88.99.1/", false).is_err());
     }
 
     #[test]
     fn validate_public_url_rejects_ipv6_special_use_ranges() {
         // Multicast ff00::/8.
-        assert!(validate_public_url("http://[ff02::1]/").is_err());
+        assert!(validate_public_url("http://[ff02::1]/", false).is_err());
         // Documentation 2001:db8::/32.
-        assert!(validate_public_url("http://[2001:db8::1]/").is_err());
+        assert!(validate_public_url("http://[2001:db8::1]/", false).is_err());
     }
 
     #[test]
     fn validate_public_url_still_accepts_ordinary_public_ips() {
         // Guard against the extended denylist over-blocking real public hosts.
-        assert!(validate_public_url("http://8.8.8.8/").is_ok());
-        assert!(validate_public_url("http://1.1.1.1/").is_ok());
-        assert!(validate_public_url("http://93.184.216.34/").is_ok());
+        assert!(validate_public_url("http://8.8.8.8/", false).is_ok());
+        assert!(validate_public_url("http://1.1.1.1/", false).is_ok());
+        assert!(validate_public_url("http://93.184.216.34/", false).is_ok());
+    }
+
+    #[test]
+    fn validate_public_url_allow_private_admits_blocked_hosts() {
+        // With allow_private, scheme + host validity are still enforced, but the
+        // IP/localhost screening is bypassed so fake-IP-proxy targets resolve.
+        assert!(validate_public_url("http://198.18.0.25/", true).is_ok());
+        assert!(validate_public_url("http://127.0.0.1/", true).is_ok());
+        assert!(validate_public_url("http://192.168.1.1/", true).is_ok());
+        assert!(validate_public_url("http://localhost/", true).is_ok());
+        // Scheme validation is not relaxed by allow_private.
+        assert!(validate_public_url("file:///etc/passwd", true).is_err());
     }
 
     #[test]
     fn screen_resolved_addrs_rejects_empty() {
-        assert!(screen_resolved_addrs(Vec::new()).is_err());
+        assert!(screen_resolved_addrs(Vec::new(), false).is_err());
     }
 
     #[test]
@@ -455,20 +600,76 @@ mod url_tests {
         // be rejected: this is the DNS-rebinding vector.
         let addrs: Vec<SocketAddr> =
             vec!["93.184.216.34:0".parse().unwrap(), "127.0.0.1:0".parse().unwrap()];
-        assert!(screen_resolved_addrs(addrs).is_err());
+        assert!(screen_resolved_addrs(addrs, false).is_err());
     }
 
     #[test]
     fn screen_resolved_addrs_rejects_link_local_metadata() {
         let addrs: Vec<SocketAddr> = vec!["169.254.169.254:0".parse().unwrap()];
-        assert!(screen_resolved_addrs(addrs).is_err());
+        assert!(screen_resolved_addrs(addrs, false).is_err());
     }
 
     #[test]
     fn screen_resolved_addrs_accepts_all_public() {
         let addrs: Vec<SocketAddr> =
             vec!["93.184.216.34:0".parse().unwrap(), "8.8.8.8:0".parse().unwrap()];
-        assert_eq!(screen_resolved_addrs(addrs.clone()).unwrap(), addrs);
+        assert_eq!(screen_resolved_addrs(addrs.clone(), false).unwrap(), addrs);
+    }
+
+    #[test]
+    fn screen_resolved_addrs_allow_private_admits_blocked_but_still_requires_addr() {
+        // allow_private lets fake-IP-proxy placeholders through...
+        let addrs: Vec<SocketAddr> = vec!["198.18.0.25:0".parse().unwrap()];
+        assert_eq!(screen_resolved_addrs(addrs.clone(), true).unwrap(), addrs);
+        // ...but an empty resolution is still an error.
+        assert!(screen_resolved_addrs(Vec::new(), true).is_err());
+    }
+
+    #[test]
+    fn meta_refresh_target_follows_noscript_stub() {
+        // Baidu's HTTPS homepage: a JS `location.replace` downgrade plus a
+        // `<noscript>`-wrapped meta-refresh to the HTTP page. We must find the
+        // meta even though it lives inside noscript (html5ever hides it from the
+        // DOM), so the scan runs over the raw HTML string.
+        let base = reqwest::Url::parse("https://www.baidu.com/").unwrap();
+        let html = r#"<html><head><script>location.replace(x)</script></head>
+            <body><noscript><meta http-equiv="refresh" content="0;url=http://www.baidu.com/"></noscript></body></html>"#;
+        let target = meta_refresh_target(html, &base).expect("should find meta refresh target");
+        assert_eq!(target.as_str(), "http://www.baidu.com/");
+    }
+
+    #[test]
+    fn meta_refresh_target_resolves_relative_and_is_case_insensitive() {
+        let base = reqwest::Url::parse("https://example.com/a/b").unwrap();
+        let html = r#"<META HTTP-EQUIV="Refresh" CONTENT="5; URL=/next/page">"#;
+        let target = meta_refresh_target(html, &base).unwrap();
+        assert_eq!(target.as_str(), "https://example.com/next/page");
+    }
+
+    #[test]
+    fn meta_refresh_target_handles_unquoted_and_single_quoted() {
+        let base = reqwest::Url::parse("https://example.com/").unwrap();
+        let single = r#"<meta http-equiv='refresh' content='0;url=https://example.com/x'>"#;
+        assert_eq!(meta_refresh_target(single, &base).unwrap().as_str(), "https://example.com/x");
+    }
+
+    #[test]
+    fn meta_refresh_target_none_when_not_a_redirect() {
+        let base = reqwest::Url::parse("https://example.com/").unwrap();
+        // No meta at all.
+        assert!(meta_refresh_target(
+            "<html><head><title>Hi</title></head><body><p>real content</p></body></html>",
+            &base
+        )
+        .is_none());
+        // A self-refresh (no url=) is not a redirect target.
+        assert!(meta_refresh_target(r#"<meta http-equiv="refresh" content="30">"#, &base).is_none());
+        // A non-refresh http-equiv must be ignored even if its value mentions url=.
+        assert!(meta_refresh_target(
+            r#"<meta http-equiv="content-type" content="text/html; url=http://evil/">"#,
+            &base
+        )
+        .is_none());
     }
 }
 

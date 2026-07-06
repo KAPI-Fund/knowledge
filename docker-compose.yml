@@ -47,6 +47,11 @@ services:
       # Bootstraps the first admin user on a fresh database. Change before any
       # non-local deployment.
       KNOWLEDGE_ADMIN_PASSWORD: admin
+      # Lets the URL-fetch node reach hosts that resolve into private/reserved
+      # ranges. Needed on hosts behind a fake-IP proxy (Clash/Mihomo/Surge),
+      # which maps every public domain to 198.18.0.0/16. Leave unset/false for
+      # untrusted deployments: it disables the fetch node's SSRF IP screening.
+      KNOWLEDGE_ALLOW_PRIVATE_FETCH: "true"
     ports:
       - "4001:4001"
     volumes:

@@ -721,10 +721,10 @@ async fn extract_url_handler(
     let principal = resolve_principal(&state, &headers).await?;
     require_csrf(&principal, &headers)?;
 
-    let client = crate::canvas::service::build_extractor_client()
+    let client = crate::canvas::service::build_extractor_client(state.allow_private_fetch)
         .map_err(|error| ApiError::internal(format!("http client init failed: {error}")))?;
 
-    match crate::canvas::service::fetch_url(&client, &body.url).await {
+    match crate::canvas::service::fetch_url(&client, &body.url, state.allow_private_fetch).await {
         Ok(page) => Ok(Json(json!({
             "status": "ok", "title": page.title, "markdown": page.markdown, "error": null
         }))),

@@ -45,6 +45,7 @@ pub async fn bootstrap_state(config: &AppConfig) -> anyhow::Result<AppState> {
         cache,
         project_root: config.project_root.clone(),
         session_ttl_hours: config.session_ttl_hours,
+        allow_private_fetch: config.allow_private_fetch,
     };
     tasks::recovery::recover_tasks(&state).await?;
     tasks::scheduler::spawn_scheduler(state.clone());

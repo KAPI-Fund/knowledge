@@ -8,6 +8,12 @@ pub struct AppConfig {
   pub project_root: String,
   pub session_ttl_hours: u64,
   pub admin_password: Option<String>,
+  // When true, the URL-extraction (fetch) node skips its SSRF IP screening and
+  // may connect to private/loopback/fake-IP addresses. Off by default; only meant
+  // for trusted single-user deployments behind a fake-IP proxy (e.g. Clash/Mihomo)
+  // that maps every public host into 198.18.0.0/15, which the guard otherwise
+  // rejects as non-public.
+  pub allow_private_fetch: bool,
 }
 
 impl AppConfig {
@@ -22,6 +28,7 @@ impl AppConfig {
         .to_string(),
       session_ttl_hours: 12,
       admin_password: Some("secret-password".to_string()),
+      allow_private_fetch: false,
     }
   }
 
@@ -46,6 +53,12 @@ impl AppConfig {
     });
     let admin_password = std::env::var("KNOWLEDGE_ADMIN_PASSWORD").ok();
 
+    // Accept the usual truthy spellings; anything else (or unset) leaves the SSRF
+    // guard on.
+    let allow_private_fetch = std::env::var("KNOWLEDGE_ALLOW_PRIVATE_FETCH")
+      .map(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+      .unwrap_or(false);
+
     Self {
       bind_addr,
       database_url,
@@ -53,6 +66,7 @@ impl AppConfig {
       project_root,
       session_ttl_hours: 12,
       admin_password,
+      allow_private_fetch,
     }
   }
 }
