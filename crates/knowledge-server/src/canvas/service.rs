@@ -112,6 +112,19 @@ pub fn build_analyze_prompt(node_prompt: &str, blocks: &[String]) -> String {
     prompt
 }
 
+/// Build the (system, user) prompt pair that synthesises a single web-search
+/// query from the node's guidance text and its upstream reference blocks.
+pub fn build_search_query_prompt(guidance: &str, blocks: &[String]) -> (String, String) {
+    let system =
+        "Output exactly one concise web search query and nothing else. Do not explain, quote, or add punctuation beyond the query itself."
+            .to_string();
+    let mut user = format!("Guidance: {guidance}\n\nSources:\n");
+    for (i, b) in blocks.iter().enumerate() {
+        user.push_str(&format!("--- Source {} ---\n{}\n\n", i + 1, b));
+    }
+    (system, user)
+}
+
 #[cfg(test)]
 mod context_tests {
     use super::*;
@@ -270,5 +283,14 @@ mod context_tests {
         assert_eq!(format_text_reference_block(&tnode("note", serde_json::json!({ "markdown": "  " }))), None);
         assert_eq!(format_text_reference_block(&tnode("search", serde_json::json!({}))), None);
         assert_eq!(format_text_reference_block(&tnode("kb", serde_json::json!({ "projectId": "p" }))), None);
+    }
+
+    #[test]
+    fn build_search_query_prompt_embeds_guidance_and_sources() {
+        let (system, user) = build_search_query_prompt("find recent news", &["block A".into(), "block B".into()]);
+        assert!(system.to_lowercase().contains("search query"));
+        assert!(user.contains("find recent news"));
+        assert!(user.contains("block A"));
+        assert!(user.contains("block B"));
     }
 }
