@@ -55,6 +55,14 @@ describe("SearchNode", () => {
     expect(screen.getByRole("button", { name: /search/i })).not.toBeDisabled();
   });
 
+  it("disables the button while running (the shared Run path sets status 'running')", () => {
+    // The unified Run path in page.tsx marks the node status 'running' while the
+    // SSE call is in flight -- the same word ai_analyze/ai_image use. Search must
+    // treat it as busy so the button can't be double-fired mid-run.
+    renderNode({ query: "cats", status: "running" });
+    expect(screen.getByRole("button", { name: /search/i })).toBeDisabled();
+  });
+
   it("renders both a source and a target handle (it is a consumer)", () => {
     const { container } = renderNode({ query: "cats" });
     expect(container.querySelectorAll(".react-flow__handle").length).toBe(2);
