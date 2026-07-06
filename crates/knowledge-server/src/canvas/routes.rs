@@ -161,12 +161,14 @@ async fn save_handler(
 ) -> Result<Json<CanvasResponse>, ApiError> {
     let principal = resolve_principal(&state, &headers).await?;
     require_csrf(&principal, &headers)?;
+    let pruned = body.document.prune_invalid_edges();
+    let document_text = serde_json::to_string(&pruned).unwrap_or_else(|_| "{}".to_string());
     let rec = store::update_canvas(
         &state.pool,
         &id,
         &principal.user_id,
         &body.title,
-        &body.document_text(),
+        &document_text,
     )
     .await?
     .ok_or_else(|| ApiError::not_found("canvas not found"))?;

@@ -68,6 +68,30 @@ impl CanvasDocument {
         self.nodes.iter().find(|n| n.id == node_id)
     }
 
+    /// Return a copy with illegal edges removed: self-loops, duplicates
+    /// (same source+target), edges whose target is not a consumer
+    /// (search/ai_analyze/ai_image), and dangling edges (missing endpoints).
+    /// Cycles are intentionally not pruned (front-end blocks them; runtime reads
+    /// only direct predecessors so a cycle is harmless).
+    pub fn prune_invalid_edges(&self) -> CanvasDocument {
+        let is_consumer =
+            |ty: Option<&str>| matches!(ty, Some("search" | "ai_analyze" | "ai_image"));
+
+        let mut seen: std::collections::HashSet<(String, String)> =
+            std::collections::HashSet::new();
+        let edges = self
+            .edges
+            .iter()
+            .filter(|e| e.source != e.target)
+            .filter(|e| self.node(&e.source).is_some() && self.node(&e.target).is_some())
+            .filter(|e| is_consumer(self.node(&e.target).map(|n| n.r#type.as_str())))
+            .filter(|e| seen.insert((e.source.clone(), e.target.clone())))
+            .cloned()
+            .collect();
+
+        CanvasDocument { nodes: self.nodes.clone(), edges, viewport: self.viewport.clone() }
+    }
+
     /// Upstream nodes feeding `node_id`, sorted top-to-bottom then left-to-right
     /// (y ascending, x ascending) so reference blocks assemble in reading order.
     pub fn ordered_incoming_sources(&self, node_id: &str) -> Vec<&CanvasNode> {
@@ -194,6 +218,33 @@ mod tests {
         let ids: Vec<&str> = doc.ordered_incoming_sources("t").iter().map(|n| n.id.as_str()).collect();
         // y ascending: hi_* (y=0) before low (y=300); within y=0, x ascending: hi_left before hi_right.
         assert_eq!(ids, vec!["hi_left", "hi_right", "low"]);
+    }
+
+    #[test]
+    fn prune_invalid_edges_removes_illegal_edges() {
+        let doc = CanvasDocument {
+            nodes: vec![
+                node_at("note1", "note", 0.0, 0.0),
+                node_at("an", "ai_analyze", 100.0, 0.0),
+                node_at("kb1", "kb", 0.0, 100.0),
+            ],
+            edges: vec![
+                // legal: note -> ai_analyze (consumer target)
+                CanvasEdge { id: "ok".into(), source: "note1".into(), target: "an".into(), ..Default::default() },
+                // self-loop
+                CanvasEdge { id: "self".into(), source: "an".into(), target: "an".into(), ..Default::default() },
+                // duplicate of "ok"
+                CanvasEdge { id: "dup".into(), source: "note1".into(), target: "an".into(), ..Default::default() },
+                // target not a consumer (kb cannot be a target)
+                CanvasEdge { id: "bad_target".into(), source: "note1".into(), target: "kb1".into(), ..Default::default() },
+                // dangling: ghost source
+                CanvasEdge { id: "dangling".into(), source: "ghost".into(), target: "an".into(), ..Default::default() },
+            ],
+            viewport: Viewport::default(),
+        };
+        let pruned = doc.prune_invalid_edges();
+        let ids: Vec<&str> = pruned.edges.iter().map(|e| e.id.as_str()).collect();
+        assert_eq!(ids, vec!["ok"]);
     }
 
     #[test]
