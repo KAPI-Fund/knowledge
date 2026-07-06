@@ -32,7 +32,6 @@ pub fn router() -> Router<AppState> {
         .route("/api/canvases/{id}/nodes/{node_id}/run", post(run_node_handler))
         .route("/api/canvases/{id}/chat", post(chat_handler))
         .route("/api/canvas/extract-url", post(extract_url_handler))
-        .route("/api/canvas/search", post(search_handler))
 }
 
 // ---------------------------------------------------------------------------
@@ -686,40 +685,8 @@ struct ExtractUrlRequest {
     url: String,
 }
 
-// ---------------------------------------------------------------------------
-// Web search: run a query and return results as markdown (in-place node fill)
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Deserialize)]
-struct SearchRequest {
-    query: String,
-}
-
-async fn search_handler(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(body): Json<SearchRequest>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let principal = resolve_principal(&state, &headers).await?;
-    require_csrf(&principal, &headers)?;
-
-    let query = body.query.trim();
-    if query.is_empty() {
-        return Err(ApiError::bad_request("search query must not be empty"));
-    }
-
-    match run_web_search_markdown(&state, query).await {
-        Ok(markdown) => Ok(Json(json!({
-            "status": "ok", "query": query, "markdown": markdown, "error": null
-        }))),
-        Err(error) => Ok(Json(json!({
-            "status": "error", "query": query, "markdown": "", "error": error
-        }))),
-    }
-}
-
-/// Run web search for `query` and format the hits as markdown. Shared by the
-/// REST search endpoint and the `/search` chat skill.
+/// Run web search for `query` and format the hits as markdown. Used by the
+/// `/search` chat skill and the search node SSE run path.
 async fn run_web_search_markdown(state: &AppState, query: &str) -> Result<String, String> {
     let config = crate::web_search::config::load_web_search_config(state)
         .await
@@ -882,12 +849,6 @@ mod tests {
         assert_eq!(node["data"]["prompt"], "summarize");
         assert_eq!(node["data"]["sourceNodeIds"][0], "a");
         assert_eq!(node["data"]["status"], "idle");
-    }
-
-    #[test]
-    fn search_request_deserializes_query() {
-        let req: SearchRequest = serde_json::from_str(r#"{"query":"cats"}"#).unwrap();
-        assert_eq!(req.query, "cats");
     }
 
     #[test]
