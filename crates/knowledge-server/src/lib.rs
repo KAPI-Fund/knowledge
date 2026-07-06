@@ -17,6 +17,7 @@ pub mod settings;
 pub mod tasks;
 pub mod tenancy;
 pub mod users;
+pub mod web_fetch;
 pub mod web_search;
 
 use app::state::AppState;
