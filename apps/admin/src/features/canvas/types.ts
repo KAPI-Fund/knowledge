@@ -15,6 +15,9 @@ export const canvasEdgeSchema = z.object({
   id: z.string(),
   source: z.string(),
   target: z.string(),
+  sourceHandle: z.string().optional(),
+  targetHandle: z.string().optional(),
+  kind: z.string().optional(),
 });
 export type CanvasEdge = z.infer<typeof canvasEdgeSchema>;
 
