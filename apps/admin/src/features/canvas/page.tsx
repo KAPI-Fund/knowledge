@@ -325,6 +325,11 @@ export function CanvasPage() {
       const position = latest
         ? { x: latest.x + latest.w + CHAIN_GAP, y: latest.y }
         : (suggestedPosition(payload) ?? placementOrigin(prev));
+      // sourceNodeIds is a transient wiring hint from /analyze; it drives the
+      // edges below but must not be persisted onto the node (the runtime never
+      // reads it and it would drift as the graph changes).
+      const persistedData = { ...(source.data ?? {}) };
+      delete persistedData.sourceNodeIds;
       const node: CanvasNode = {
         id,
         type: source.type,
@@ -334,7 +339,7 @@ export function CanvasPage() {
         h: size.h,
         // Stable creation number, assigned once and never renumbered (gaps are
         // left after deletions). Read back for display via data.index.
-        data: { ...(source.data ?? {}), index: nextNodeIndex(prev.nodes) },
+        data: { ...persistedData, index: nextNodeIndex(prev.nodes) },
       };
       const existingIds = new Set(prev.nodes.map((n) => n.id));
       const sourceIds = Array.isArray(source.data?.sourceNodeIds)

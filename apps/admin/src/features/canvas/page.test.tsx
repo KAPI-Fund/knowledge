@@ -246,6 +246,23 @@ describe("CanvasPage", () => {
     });
   });
 
+  it("does not persist sourceNodeIds onto the created node's data", async () => {
+    render(<CanvasPage />);
+    await waitFor(() => expect(chatProps.onSkillNode).toBeTypeOf("function"));
+    chatProps.onSkillNode?.({
+      node: { type: "ai_analyze", data: { prompt: "sum", sourceNodeIds: ["u1"] } },
+      x: 0,
+      y: 0,
+    });
+    await waitFor(() => expect((boardProps.document?.nodes ?? []).length).toBe(2));
+    const added = (boardProps.document?.nodes ?? []).find((n) => n.id !== "u1");
+    expect(added?.data).not.toHaveProperty("sourceNodeIds");
+    expect(added?.data?.prompt).toBe("sum");
+    // The edge is still wired from the referenced source.
+    const edges = boardProps.document?.edges ?? [];
+    expect(edges.some((e) => e.source === "u1" && e.target === added?.id)).toBe(true);
+  });
+
   it("derives the chat placement origin from the current viewport", async () => {
     const data = c1Data();
     canvasResult = { data: { ...data, document: { ...data.document, viewport: { x: -200, y: -100, zoom: 1 } } } };
