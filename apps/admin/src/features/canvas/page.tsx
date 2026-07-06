@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { uuid } from "@/lib/uuid";
 
-import { extractUrl, searchWeb } from "./api";
+import { extractUrl } from "./api";
 import { CanvasBoard } from "./canvas-board";
 import { CanvasToolbar } from "./canvas-toolbar";
 import { ChatPanel, type SkillNodePayload } from "./chat-panel";
@@ -284,36 +284,6 @@ export function CanvasPage() {
     [doc, patchNodeData],
   );
 
-  const runSearchNode = useCallback(
-    (nodeId: string) => {
-      const node = doc?.nodes.find((n) => n.id === nodeId);
-      const query = typeof node?.data.query === "string" ? node.data.query : "";
-      if (!query) {
-        return;
-      }
-      patchNodeData(nodeId, { status: "loading", error: null });
-      void searchWeb(query)
-        .then((result) => {
-          if (result.status === "ok") {
-            patchNodeData(nodeId, {
-              status: "idle",
-              error: null,
-              markdown: result.markdown,
-            });
-          } else {
-            patchNodeData(nodeId, { status: "error", error: result.error ?? "search failed" });
-          }
-        })
-        .catch((error: unknown) => {
-          patchNodeData(nodeId, {
-            status: "error",
-            error: error instanceof Error ? error.message : "search failed",
-          });
-        });
-    },
-    [doc, patchNodeData],
-  );
-
   // Rename persists on its own: autosave only watches the document, so a
   // title-only change would never be written. Push it straight through the
   // cache-synced save so the header, list, and server agree immediately.
@@ -396,7 +366,7 @@ export function CanvasPage() {
           <CanvasHeader title={title} status={status} hasDoc={!!doc} onRename={renameCanvas} onRetry={() => doc && void onSave(doc)} failedSaveTitle={failedSave?.title} onRetryFailed={retryFailedSave} actions={doc ? <CanvasToolbar onAdd={addSkillNode} /> : null} />
           {doc ? (
             <div className="min-h-0 flex-1">
-              <CanvasBoard key={canvasId} document={doc} onChange={setDoc} onRunNode={runNode} onFetchUrl={fetchUrlNode} onSearchNode={runSearchNode} onSelectionChange={setSelectedNodeIds} />
+              <CanvasBoard key={canvasId} document={doc} onChange={setDoc} onRunNode={runNode} onFetchUrl={fetchUrlNode} onSelectionChange={setSelectedNodeIds} />
             </div>
           ) : (
             <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">

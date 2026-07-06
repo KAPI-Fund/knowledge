@@ -13,14 +13,14 @@ beforeAll(() => {
   (globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = RO;
 });
 
-function renderNode(data: SearchNodeData, onSearch = vi.fn(), onQueryChange = vi.fn()) {
+function renderNode(data: SearchNodeData, onRun = vi.fn(), onQueryChange = vi.fn()) {
   return render(
     <ReactFlowProvider>
       <SearchNode
         data={data}
         nodeId="abcd-1234"
         onQueryChange={onQueryChange}
-        onSearch={onSearch}
+        onRun={onRun}
       />
     </ReactFlowProvider>,
   );
@@ -43,16 +43,16 @@ describe("SearchNode", () => {
     expect(screen.getByRole("button", { name: /retry/i })).toBeInTheDocument();
   });
 
-  it("calls onSearch when the button is clicked", () => {
-    const onSearch = vi.fn();
-    renderNode({ query: "cats" }, onSearch);
+  it("calls onRun when the button is clicked", () => {
+    const onRun = vi.fn();
+    renderNode({ query: "cats" }, onRun);
     fireEvent.click(screen.getByRole("button", { name: /search/i }));
-    expect(onSearch).toHaveBeenCalledTimes(1);
+    expect(onRun).toHaveBeenCalledTimes(1);
   });
 
-  it("disables the button with an empty query", () => {
+  it("keeps the button enabled with an empty query (upstream can supply one)", () => {
     renderNode({ query: "" });
-    expect(screen.getByRole("button", { name: /search/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /search/i })).not.toBeDisabled();
   });
 
   it("renders both a source and a target handle (it is a consumer)", () => {

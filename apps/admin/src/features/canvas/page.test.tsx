@@ -5,7 +5,6 @@ import { pendingSaveStore } from "./pending-save-store";
 import type { CanvasDocument } from "./types";
 
 const extractUrl = vi.fn();
-const searchWeb = vi.fn();
 const saveCanvas = vi.fn();
 const runCanvasNode = vi.fn();
 
@@ -29,7 +28,6 @@ beforeEach(() => {
   currentParams = { canvasId: "c1" };
   canvasResult = { data: c1Data() };
   extractUrl.mockReset();
-  searchWeb.mockReset();
   saveCanvas.mockReset();
   saveCanvas.mockResolvedValue(undefined);
   runCanvasNode.mockReset();
@@ -39,7 +37,6 @@ beforeEach(() => {
 vi.mock("react-router-dom", () => ({ useParams: () => currentParams }));
 vi.mock("./api", () => ({
   extractUrl: (url: string) => extractUrl(url),
-  searchWeb: (query: string) => searchWeb(query),
   saveCanvas: (id: string, body: unknown) => saveCanvas(id, body),
 }));
 vi.mock("./stream", () => ({
@@ -67,7 +64,6 @@ vi.mock("./chat-panel", () => ({
 
 let boardProps: {
   onFetchUrl?: (id: string) => void;
-  onSearchNode?: (id: string) => void;
   onRunNode?: (id: string) => void;
   onSelectionChange?: (ids: string[]) => void;
   document?: {
@@ -183,7 +179,7 @@ describe("CanvasPage", () => {
     await waitFor(() => expect(extractUrl).toHaveBeenCalledWith("https://x.test"));
   });
 
-  it("runs a search node through the search endpoint", async () => {
+  it("runs a search node through the unified run endpoint", async () => {
     canvasResult = {
       data: {
         ...c1Data(),
@@ -196,11 +192,12 @@ describe("CanvasPage", () => {
         },
       },
     };
-    searchWeb.mockResolvedValue({ status: "ok", query: "cats", markdown: "# results", error: null });
     render(<CanvasPage />);
-    await waitFor(() => expect(boardProps.onSearchNode).toBeTypeOf("function"));
-    boardProps.onSearchNode?.("s1");
-    await waitFor(() => expect(searchWeb).toHaveBeenCalledWith("cats"));
+    await waitFor(() => expect(boardProps.onRunNode).toBeTypeOf("function"));
+    boardProps.onRunNode?.("s1");
+    await waitFor(() =>
+      expect(runCanvasNode).toHaveBeenCalledWith("c1", "s1", expect.anything()),
+    );
   });
 
   it("creates reference edges when an analyze skill node references selected nodes", async () => {

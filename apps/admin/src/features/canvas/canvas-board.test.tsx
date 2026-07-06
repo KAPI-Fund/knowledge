@@ -50,7 +50,6 @@ describe("CanvasBoard", () => {
         onChange={() => {}}
         onRunNode={() => {}}
         onFetchUrl={() => {}}
-        onSearchNode={() => {}}
       />,
     );
     expect(screen.getByText("flow")).toBeInTheDocument();
@@ -64,7 +63,6 @@ describe("CanvasBoard", () => {
         onChange={onChange}
         onRunNode={() => {}}
         onFetchUrl={() => {}}
-        onSearchNode={() => {}}
       />,
     );
     // The board no longer wires onMoveEnd, so panning/zooming never triggers a

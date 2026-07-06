@@ -50,7 +50,6 @@ describe("CanvasBoard rendering", () => {
         onChange={vi.fn()}
         onRunNode={vi.fn()}
         onFetchUrl={vi.fn()}
-        onSearchNode={vi.fn()}
       />,
     );
     expect(container.querySelectorAll(".react-flow__node").length).toBe(1);
@@ -69,7 +68,6 @@ describe("CanvasBoard rendering", () => {
         onChange={vi.fn()}
         onRunNode={vi.fn()}
         onFetchUrl={vi.fn()}
-        onSearchNode={vi.fn()}
       />,
     );
     const node = container.querySelector<HTMLElement>(".react-flow__node");
@@ -95,7 +93,6 @@ describe("CanvasBoard rendering", () => {
         onChange={vi.fn()}
         onRunNode={vi.fn()}
         onFetchUrl={vi.fn()}
-        onSearchNode={vi.fn()}
       />,
     );
     // note contributes 1 (source), ai_analyze contributes 2 (source + target) = 3.
@@ -109,7 +106,6 @@ describe("CanvasBoard rendering", () => {
         onChange={vi.fn()}
         onRunNode={vi.fn()}
         onFetchUrl={vi.fn()}
-        onSearchNode={vi.fn()}
       />,
     );
     expect(container.querySelectorAll(".react-flow__node").length).toBe(1);
@@ -120,7 +116,6 @@ describe("CanvasBoard rendering", () => {
         onChange={vi.fn()}
         onRunNode={vi.fn()}
         onFetchUrl={vi.fn()}
-        onSearchNode={vi.fn()}
       />,
     );
     expect(container.querySelectorAll(".react-flow__node").length).toBe(2);
@@ -136,7 +131,7 @@ describe("CanvasBoard rendering", () => {
       viewport: { x: 0, y: 0, zoom: 1 },
     };
     const { getByText } = render(
-      <CanvasBoard document={doc} onChange={vi.fn()} onRunNode={vi.fn()} onFetchUrl={vi.fn()} onSearchNode={vi.fn()} />,
+      <CanvasBoard document={doc} onChange={vi.fn()} onRunNode={vi.fn()} onFetchUrl={vi.fn()} />,
     );
     expect(getByText("analyze-model")).toBeInTheDocument();
     expect(getByText("image-model")).toBeInTheDocument();

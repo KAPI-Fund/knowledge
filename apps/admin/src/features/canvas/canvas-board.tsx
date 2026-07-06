@@ -31,7 +31,6 @@ interface NodeCallbacks {
   onPatch: (patch: Record<string, unknown>) => void;
   onRun: () => void;
   onFetchUrl: () => void;
-  onSearch: () => void;
 }
 
 function callbacks(data: Record<string, unknown>): NodeCallbacks {
@@ -40,7 +39,6 @@ function callbacks(data: Record<string, unknown>): NodeCallbacks {
       onPatch: () => {},
       onRun: () => {},
       onFetchUrl: () => {},
-      onSearch: () => {},
     }
   );
 }
@@ -89,7 +87,7 @@ function SearchAdapter({ id, data, selected }: NodeProps) {
       index={indexOf(data)}
       selected={selected}
       onQueryChange={(query) => cb.onPatch({ query })}
-      onSearch={cb.onSearch}
+      onRun={cb.onRun}
     />
   );
 }
@@ -146,7 +144,6 @@ interface CanvasBoardProps {
   onChange: (next: CanvasDocument) => void;
   onRunNode: (nodeId: string) => void;
   onFetchUrl: (nodeId: string) => void;
-  onSearchNode: (nodeId: string) => void;
   onSelectionChange?: (nodeIds: string[]) => void;
 }
 
@@ -256,7 +253,7 @@ export function commitNodeGeometry(
   return { ...document, nodes, edges: pruneDanglingEdges(nodes, document.edges) };
 }
 
-export function CanvasBoard({ document, onChange, onRunNode, onFetchUrl, onSearchNode, onSelectionChange }: CanvasBoardProps) {
+export function CanvasBoard({ document, onChange, onRunNode, onFetchUrl, onSelectionChange }: CanvasBoardProps) {
   const settings = useSystemSettingsQuery().data;
   const analyzeModel = settings?.connections?.find((c) => c.isActive)?.model ?? null;
   const imageModel = settings?.image?.model ?? null;
@@ -305,11 +302,10 @@ export function CanvasBoard({ document, onChange, onRunNode, onFetchUrl, onSearc
             onPatch: (patch: Record<string, unknown>) => patchNode(n.id, patch),
             onRun: () => onRunNode(n.id),
             onFetchUrl: () => onFetchUrl(n.id),
-            onSearch: () => onSearchNode(n.id),
           } satisfies NodeCallbacks,
         },
       })),
-    [document.nodes, patchNode, onRunNode, onFetchUrl, onSearchNode, analyzeModel, imageModel, selectedIds],
+    [document.nodes, patchNode, onRunNode, onFetchUrl, analyzeModel, imageModel, selectedIds],
   );
 
   // React Flow's live node state. It owns positions during a drag so nodes follow

@@ -22,10 +22,10 @@ interface SearchNodeProps {
   index?: number;
   selected?: boolean;
   onQueryChange: (query: string) => void;
-  onSearch: () => void;
+  onRun: () => void;
 }
 
-export function SearchNode({ data, nodeId, index, selected, onQueryChange, onSearch }: SearchNodeProps) {
+export function SearchNode({ data, nodeId, index, selected, onQueryChange, onRun }: SearchNodeProps) {
   const status = data.status ?? "idle";
   const loading = status === "loading";
   const isError = status === "error";
@@ -42,8 +42,8 @@ export function SearchNode({ data, nodeId, index, selected, onQueryChange, onSea
           type="button"
           size="xs"
           variant={isError ? "destructive" : "default"}
-          onClick={onSearch}
-          disabled={loading || !data.query}
+          onClick={onRun}
+          disabled={loading}
         >
           {loading ? (
             <Loader2 className="size-3 animate-spin" />
