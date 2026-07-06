@@ -24,6 +24,16 @@ struct FirecrawlMetadata {
     title: Option<String>,
 }
 
+/// Cap upstream bodies interpolated into operator-facing error messages so a
+/// noisy Firecrawl response can't flood the canvas node error.
+fn truncate_body(body: &str) -> String {
+    const MAX: usize = 500;
+    match body.char_indices().nth(MAX) {
+        Some((idx, _)) => format!("{}…", &body[..idx]),
+        None => body.to_string(),
+    }
+}
+
 /// Scrape a URL via Firecrawl's /v1/scrape endpoint and return readable markdown.
 /// POST {base_url}/v1/scrape with { url, formats:["markdown"], onlyMainContent:true },
 /// Bearer auth when an api_key is present. Renders JS, so a 60s timeout.
@@ -61,12 +71,16 @@ pub async fn scrape(config: &FetchConfig, url: &str) -> Result<ExtractedPage, Ap
 
     if !status.is_success() {
         return Err(ApiError::bad_request(format!(
-            "firecrawl returned {status}: {body}"
+            "firecrawl returned {status}: {}",
+            truncate_body(&body)
         )));
     }
 
     let parsed: FirecrawlResponse = serde_json::from_str(&body).map_err(|err| {
-        ApiError::bad_request(format!("firecrawl response was not valid JSON: {err}; body: {body}"))
+        ApiError::bad_request(format!(
+            "firecrawl response was not valid JSON: {err}; body: {}",
+            truncate_body(&body)
+        ))
     })?;
 
     if parsed.success == Some(false) {
@@ -166,5 +180,26 @@ mod tests {
         let base = spawn_mock("500 Internal Server Error", r#"{"error":"boom"}"#).await;
         let err = scrape(&config_for(base), "https://example.com").await.unwrap_err();
         assert!(err.to_string().contains("500"));
+    }
+
+    #[test]
+    fn truncate_body_caps_long_input_and_appends_ellipsis() {
+        let long = "x".repeat(600);
+        let out = truncate_body(&long);
+        assert_eq!(out.chars().count(), 501); // 500 chars + ellipsis
+        assert!(out.ends_with('…'));
+    }
+
+    #[test]
+    fn truncate_body_leaves_short_input_untouched() {
+        assert_eq!(truncate_body("short body"), "short body");
+    }
+
+    #[test]
+    fn truncate_body_splits_on_a_char_boundary() {
+        // 600 multi-byte chars: naive byte slicing at 500 would panic mid-codepoint.
+        let long = "é".repeat(600);
+        let out = truncate_body(&long);
+        assert_eq!(out.chars().count(), 501);
     }
 }
