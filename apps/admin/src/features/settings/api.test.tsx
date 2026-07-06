@@ -46,6 +46,12 @@ const NEW_SHAPE = {
       ollama: { apiKeyConfigured: false, url: "https://ollama.com" },
     },
   },
+  fetch: {
+    provider: "firecrawl",
+    providers: {
+      firecrawl: { apiKeyConfigured: true, baseUrl: "https://api.firecrawl.dev" },
+    },
+  },
   defaults: { language: "en", defaultQueryLimit: 8 },
 };
 
@@ -62,6 +68,8 @@ describe("getSystemSettings", () => {
     expect(settings.image?.size).toBe("1024x1024");
     expect(settings.search?.provider).toBe("tavily");
     expect(settings.search?.providers.tavily?.apiKeyConfigured).toBe(true);
+    expect(settings.fetch?.provider).toBe("firecrawl");
+    expect(settings.fetch?.providers.firecrawl?.apiKeyConfigured).toBe(true);
     expect(settings.defaults?.defaultQueryLimit).toBe(8);
   });
 });
@@ -169,5 +177,35 @@ describe("updateSystemSettings capability blocks", () => {
     const body = JSON.parse(fetchMock.mock.calls[0][1]?.body as string);
     expect(body.image.clearApiKey).toBe(true);
     expect(body.image).not.toHaveProperty("apiKey");
+  });
+
+  it("sends a fetch block, keeping a typed key and dropping a blank one", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(okResponse());
+    await updateSystemSettings({
+      fetch: {
+        provider: "firecrawl",
+        providers: { firecrawl: { apiKey: "fc-1", baseUrl: "https://api.firecrawl.dev" } },
+      },
+    });
+    const body = JSON.parse(fetchMock.mock.calls[0][1]?.body as string);
+    expect(body.fetch).toMatchObject({
+      provider: "firecrawl",
+      providers: { firecrawl: { apiKey: "fc-1", baseUrl: "https://api.firecrawl.dev" } },
+    });
+    expect(Object.keys(body)).toEqual(["fetch"]);
+  });
+
+  it("drops a blank fetch apiKey so it means keep-stored, preserving null clears", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(okResponse());
+    await updateSystemSettings({
+      fetch: {
+        provider: "firecrawl",
+        providers: { firecrawl: { apiKey: "", baseUrl: null } },
+      },
+    });
+    const body = JSON.parse(fetchMock.mock.calls[0][1]?.body as string);
+    // Blank string dropped (keep stored); explicit null preserved (clear).
+    expect(body.fetch.providers.firecrawl).not.toHaveProperty("apiKey");
+    expect(body.fetch.providers.firecrawl.baseUrl).toBeNull();
   });
 });
