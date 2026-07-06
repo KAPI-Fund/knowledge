@@ -89,7 +89,12 @@ mod context_tests {
     }
 
     fn edge(id: &str, source: &str, target: &str) -> CanvasEdge {
-        CanvasEdge { id: id.to_string(), source: source.to_string(), target: target.to_string() }
+        CanvasEdge {
+            id: id.to_string(),
+            source: source.to_string(),
+            target: target.to_string(),
+            ..Default::default()
+        }
     }
 
     #[test]

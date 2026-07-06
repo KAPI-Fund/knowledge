@@ -27,11 +27,18 @@ pub struct CanvasNode {
 fn default_w() -> f64 { 280.0 }
 fn default_h() -> f64 { 160.0 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct CanvasEdge {
     pub id: String,
     pub source: String,
     pub target: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_handle: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_handle: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -102,9 +109,9 @@ mod tests {
         let doc = CanvasDocument {
             nodes: vec![node("a", "note"), node("b", "note"), node("c", "ai_analyze")],
             edges: vec![
-                CanvasEdge { id: "e1".into(), source: "a".into(), target: "c".into() },
-                CanvasEdge { id: "e2".into(), source: "b".into(), target: "c".into() },
-                CanvasEdge { id: "e3".into(), source: "a".into(), target: "b".into() },
+                CanvasEdge { id: "e1".into(), source: "a".into(), target: "c".into(), ..Default::default() },
+                CanvasEdge { id: "e2".into(), source: "b".into(), target: "c".into(), ..Default::default() },
+                CanvasEdge { id: "e3".into(), source: "a".into(), target: "b".into(), ..Default::default() },
             ],
             viewport: Viewport::default(),
         };
@@ -148,5 +155,35 @@ mod tests {
         let s = serde_json::to_string(&doc).unwrap();
         let back: CanvasDocument = serde_json::from_str(&s).unwrap();
         assert_eq!(back.nodes.len(), 0);
+    }
+
+    #[test]
+    fn edge_handles_roundtrip_and_omit_when_absent() {
+        // Absent optional fields must not appear in the JSON.
+        let bare = CanvasEdge {
+            id: "e1".into(),
+            source: "a".into(),
+            target: "b".into(),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&bare).unwrap();
+        assert!(!json.contains("sourceHandle"));
+        assert!(!json.contains("kind"));
+
+        // Present optional fields roundtrip through camelCase keys.
+        let full = CanvasEdge {
+            id: "e2".into(),
+            source: "a".into(),
+            target: "b".into(),
+            source_handle: Some("out".into()),
+            target_handle: Some("in".into()),
+            kind: Some("text".into()),
+        };
+        let json = serde_json::to_string(&full).unwrap();
+        assert!(json.contains("\"sourceHandle\":\"out\""));
+        assert!(json.contains("\"targetHandle\":\"in\""));
+        assert!(json.contains("\"kind\":\"text\""));
+        let back: CanvasEdge = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, full);
     }
 }
