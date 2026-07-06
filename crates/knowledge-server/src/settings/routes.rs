@@ -35,6 +35,8 @@ pub struct UpdateSettingsRequest {
   #[serde(default)]
   pub search: Option<SearchSettingsBlock>,
   #[serde(default)]
+  pub fetch: Option<FetchSettingsBlock>,
+  #[serde(default)]
   pub defaults: Option<DefaultsBlock>,
 }
 
@@ -79,6 +81,17 @@ pub struct SearchSettingsBlock {
     pub provider: Option<String>,
     /// Full per-provider config map (already merged client-side so switching
     /// providers retains each key). Stored verbatim into search_provider_configs.
+    #[serde(default)]
+    pub providers: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FetchSettingsBlock {
+    #[serde(default)]
+    pub provider: Option<String>,
+    /// Full per-provider config map (`{ firecrawl: { baseUrl, apiKey } }`), merged
+    /// client-side and stored verbatim into fetch_provider_configs.
     #[serde(default)]
     pub providers: Option<serde_json::Value>,
 }
@@ -135,10 +148,31 @@ fn redact_search_configs(configs: &serde_json::Value) -> serde_json::Value {
     serde_json::Value::Object(out)
 }
 
+/// Return the per-provider fetch config with the firecrawl apiKey replaced by an
+/// apiKeyConfigured boolean, so raw keys never leave the server. baseUrl passes
+/// through unchanged.
+fn redact_fetch_configs(configs: &serde_json::Value) -> serde_json::Value {
+    let mut out = serde_json::Map::new();
+    if let Some(fc) = configs.get("firecrawl") {
+        let mut block = serde_json::Map::new();
+        let configured = fc
+            .get("apiKey")
+            .and_then(serde_json::Value::as_str)
+            .map(|k| !k.trim().is_empty())
+            .unwrap_or(false);
+        block.insert("apiKeyConfigured".into(), serde_json::Value::Bool(configured));
+        if let Some(base) = fc.get("baseUrl") {
+            block.insert("baseUrl".into(), base.clone());
+        }
+        out.insert("firecrawl".into(), serde_json::Value::Object(block));
+    }
+    serde_json::Value::Object(out)
+}
+
 async fn build_settings_response(state: &AppState) -> Result<serde_json::Value, ApiError> {
-    let (language, default_query_limit, search_provider) =
-        sqlx::query_as::<_, (String, i64, String)>(
-            "SELECT language, default_query_limit, search_provider
+    let (language, default_query_limit, search_provider, fetch_provider) =
+        sqlx::query_as::<_, (String, i64, String, String)>(
+            "SELECT language, default_query_limit, search_provider, fetch_provider
              FROM system_settings WHERE id = 1",
         )
         .fetch_one(&state.pool)
@@ -157,15 +191,17 @@ async fn build_settings_response(state: &AppState) -> Result<serde_json::Value, 
         image_size,
         image_timeout_seconds,
         search_provider_configs,
+        fetch_provider_configs,
     ) = sqlx::query_as::<_, (
         bool, Option<String>, Option<String>, Option<String>, Option<i64>,
         Option<String>, Option<String>, Option<String>, String, Option<i64>,
+        serde_json::Value,
         serde_json::Value,
     )>(
         "SELECT embedding_enabled, embedding_base_url, embedding_api_key,
                 embedding_model, embedding_timeout_seconds,
                 image_base_url, image_api_key, image_model, image_size, image_timeout_seconds,
-                search_provider_configs
+                search_provider_configs, fetch_provider_configs
          FROM system_settings WHERE id = 1",
     )
     .fetch_one(&state.pool)
@@ -180,6 +216,8 @@ async fn build_settings_response(state: &AppState) -> Result<serde_json::Value, 
 
     // Redact api keys inside the search JSONB before returning it.
     let search_providers = redact_search_configs(&search_provider_configs);
+    // Same for the fetch JSONB (firecrawl apiKey -> apiKeyConfigured).
+    let fetch_providers = redact_fetch_configs(&fetch_provider_configs);
 
     Ok(json!({
         "connections": connections,
@@ -200,6 +238,10 @@ async fn build_settings_response(state: &AppState) -> Result<serde_json::Value, 
         "search": {
             "provider": search_provider,
             "providers": search_providers,
+        },
+        "fetch": {
+            "provider": fetch_provider,
+            "providers": fetch_providers,
         },
         "defaults": {
             "language": language,
@@ -320,16 +362,17 @@ async fn get_settings(
   Ok(Json(build_settings_response(&state).await?))
 }
 
-/// Deep-merge an incoming per-provider search-config map onto the stored one.
-/// For each provider present in `incoming`, overlay its fields onto the stored
-/// provider block, per-field:
+/// Deep-merge an incoming per-provider config map onto the stored one. Shared by
+/// the search and fetch provider blocks (both store a `{ provider: { field: ... } }`
+/// JSONB map with identical merge semantics). For each provider present in
+/// `incoming`, overlay its fields onto the stored provider block, per-field:
 /// - blank string (`""`) = KEEP the stored value (a blank apiKey box must not
 ///   wipe the stored key the client can't see — GET redacts stored keys),
 /// - explicit `null` = CLEAR the field (drops it so the provider default / unset
 ///   applies; this is the only way to remove a stored key or custom base URL),
 /// - any other value = SET it.
 /// Providers absent from `incoming` are left untouched.
-pub(crate) fn merge_search_provider_configs(
+pub(crate) fn merge_provider_configs(
     stored: &serde_json::Value,
     incoming: &serde_json::Value,
 ) -> serde_json::Value {
@@ -377,6 +420,17 @@ fn validate_search_provider(provider: &str) -> Result<(), ApiError> {
     }
 }
 
+/// Accept only the fetch selectors the canvas URL extractor can parse. Validated
+/// before any write, mirroring `validate_search_provider`.
+fn validate_fetch_provider(provider: &str) -> Result<(), ApiError> {
+    match provider {
+        "none" | "firecrawl" => Ok(()),
+        other => Err(ApiError::bad_request(format!(
+            "unknown fetch provider: {other}"
+        ))),
+    }
+}
+
 /// The default number of retrieval results must be a positive integer no larger
 /// than the search layer's hard cap (`MAX_RESULTS = 100` in knowledge-core). A
 /// zero/negative limit would silently return no context; anything above the cap
@@ -405,6 +459,9 @@ async fn update_settings(
   // an invalid request never produces a partial write.
   if let Some(provider) = payload.search.as_ref().and_then(|s| s.provider.as_ref()) {
       validate_search_provider(provider)?;
+  }
+  if let Some(provider) = payload.fetch.as_ref().and_then(|f| f.provider.as_ref()) {
+      validate_fetch_provider(provider)?;
   }
   if let Some(limit) = payload.defaults.as_ref().and_then(|d| d.default_query_limit) {
       validate_default_query_limit(limit)?;
@@ -503,8 +560,34 @@ async fn update_settings(
           .fetch_one(&mut *tx)
           .await
           .map_err(ApiError::from)?;
-          let merged = merge_search_provider_configs(&existing, incoming);
+          let merged = merge_provider_configs(&existing, incoming);
           sqlx::query("UPDATE system_settings SET search_provider_configs = $1 WHERE id = 1")
+              .bind(merged)
+              .execute(&mut *tx)
+              .await
+              .map_err(ApiError::from)?;
+      }
+  }
+
+  if let Some(fetch) = &payload.fetch {
+      if let Some(provider) = &fetch.provider {
+          sqlx::query("UPDATE system_settings SET fetch_provider = $1 WHERE id = 1")
+              .bind(provider)
+              .execute(&mut *tx)
+              .await
+              .map_err(ApiError::from)?;
+      }
+      // Same deep-merge semantics as search: preserve the stored firecrawl apiKey
+      // (redacted out of GET) when the client resends the block without it.
+      if let Some(incoming) = &fetch.providers {
+          let existing: serde_json::Value = sqlx::query_scalar(
+              "SELECT fetch_provider_configs FROM system_settings WHERE id = 1",
+          )
+          .fetch_one(&mut *tx)
+          .await
+          .map_err(ApiError::from)?;
+          let merged = merge_provider_configs(&existing, incoming);
+          sqlx::query("UPDATE system_settings SET fetch_provider_configs = $1 WHERE id = 1")
               .bind(merged)
               .execute(&mut *tx)
               .await
@@ -614,7 +697,7 @@ mod tests {
         assert_eq!(search.provider.as_deref(), Some("tavily"));
     }
 
-    use super::merge_search_provider_configs;
+    use super::merge_provider_configs;
 
     #[test]
     fn merge_overlays_incoming_fields_and_preserves_stored_key() {
@@ -627,7 +710,7 @@ mod tests {
         let incoming = json!({
             "tavily": { "baseUrl": "https://tavily.local" }
         });
-        let merged = merge_search_provider_configs(&stored, &incoming);
+        let merged = merge_provider_configs(&stored, &incoming);
         assert_eq!(merged["tavily"]["apiKey"], "stored-key");
         assert_eq!(merged["tavily"]["baseUrl"], "https://tavily.local");
     }
@@ -637,17 +720,17 @@ mod tests {
         use serde_json::json;
         let stored = json!({ "tavily": { "apiKey": "old" } });
         // Blank string means "keep": stored key survives.
-        let kept = merge_search_provider_configs(&stored, &json!({ "tavily": { "apiKey": "" } }));
+        let kept = merge_provider_configs(&stored, &json!({ "tavily": { "apiKey": "" } }));
         assert_eq!(kept["tavily"]["apiKey"], "old");
         // Non-blank string replaces.
-        let replaced = merge_search_provider_configs(&stored, &json!({ "tavily": { "apiKey": "new" } }));
+        let replaced = merge_provider_configs(&stored, &json!({ "tavily": { "apiKey": "new" } }));
         assert_eq!(replaced["tavily"]["apiKey"], "new");
     }
 
     #[test]
     fn merge_adds_provider_absent_from_stored() {
         use serde_json::json;
-        let merged = merge_search_provider_configs(
+        let merged = merge_provider_configs(
             &json!({}),
             &json!({ "searxng": { "url": "https://searx.local" } }),
         );
@@ -659,7 +742,7 @@ mod tests {
         use serde_json::json;
         let stored = json!({ "tavily": { "apiKey": "old", "baseUrl": "https://api.tavily.com" } });
         // Explicit null drops just that field; siblings untouched.
-        let merged = merge_search_provider_configs(
+        let merged = merge_provider_configs(
             &stored,
             &json!({ "tavily": { "apiKey": null } }),
         );
@@ -690,5 +773,49 @@ mod tests {
         assert!(validate_default_query_limit(0).is_err());
         assert!(validate_default_query_limit(-3).is_err());
         assert!(validate_default_query_limit(101).is_err());
+    }
+
+    use super::validate_fetch_provider;
+
+    #[test]
+    fn validate_fetch_provider_accepts_known_and_rejects_unknown() {
+        for ok in ["none", "firecrawl"] {
+            assert!(validate_fetch_provider(ok).is_ok(), "{ok} should be valid");
+        }
+        assert!(validate_fetch_provider("tavily").is_err());
+        assert!(validate_fetch_provider("").is_err());
+    }
+
+    use super::redact_fetch_configs;
+
+    #[test]
+    fn redact_fetch_configs_replaces_apikey_with_boolean_and_keeps_base_url() {
+        use serde_json::json;
+        let redacted = redact_fetch_configs(&json!({
+            "firecrawl": { "apiKey": "fc-secret", "baseUrl": "https://api.firecrawl.dev" }
+        }));
+        assert_eq!(redacted["firecrawl"]["apiKeyConfigured"], true);
+        assert_eq!(redacted["firecrawl"]["baseUrl"], "https://api.firecrawl.dev");
+        assert!(
+            redacted["firecrawl"].get("apiKey").is_none(),
+            "raw firecrawl apiKey must never be serialized"
+        );
+    }
+
+    #[test]
+    fn redact_fetch_configs_reports_blank_key_as_unconfigured() {
+        use serde_json::json;
+        let redacted = redact_fetch_configs(&json!({ "firecrawl": { "apiKey": "   " } }));
+        assert_eq!(redacted["firecrawl"]["apiKeyConfigured"], false);
+    }
+
+    #[test]
+    fn merge_provider_configs_handles_firecrawl_block() {
+        use serde_json::json;
+        let stored = json!({ "firecrawl": { "apiKey": "stored", "baseUrl": "https://api.firecrawl.dev" } });
+        // Client resends with a changed baseUrl and no apiKey (never saw it).
+        let merged = merge_provider_configs(&stored, &json!({ "firecrawl": { "baseUrl": "https://fc.local" } }));
+        assert_eq!(merged["firecrawl"]["apiKey"], "stored");
+        assert_eq!(merged["firecrawl"]["baseUrl"], "https://fc.local");
     }
 }
