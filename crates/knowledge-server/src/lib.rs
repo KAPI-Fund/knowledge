@@ -14,6 +14,7 @@ pub mod providers;
 pub mod query;
 pub mod retrieval;
 pub mod settings;
+pub mod skills;
 pub mod tasks;
 pub mod tenancy;
 pub mod users;
