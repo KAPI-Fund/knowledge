@@ -1244,3 +1244,17 @@ export type SkillMetadata = z.infer<typeof skillMetadataSchema>;
 export async function fetchSkills() {
   return apiFetch("/api/skills", { method: "GET" }, z.array(skillMetadataSchema));
 }
+
+const skillJobStatusSchema = z.object({
+  status: z.enum(["queued", "running", "done", "error"]),
+  result: z
+    .object({ assetId: z.string(), url: z.string(), title: z.string().optional() })
+    .nullish(),
+  error: z.object({ message: z.string() }).nullish(),
+});
+
+export type SkillJobStatus = z.infer<typeof skillJobStatusSchema>;
+
+export async function fetchSkillJob(id: string) {
+  return apiFetch(`/api/canvas-skill-jobs/${id}`, { method: "GET" }, skillJobStatusSchema);
+}
