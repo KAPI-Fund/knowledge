@@ -1,4 +1,3 @@
-pub mod deck_renderer;
 pub mod executor;
 pub mod document;
 pub mod routes;

@@ -3,11 +3,13 @@ use std::time::Duration;
 
 use tokio::sync::Semaphore;
 
+use crate::canvas::executor::{RenderProvider, RenderRequest};
 use crate::canvas::skill_jobs;
 use crate::skills::SkillRuntime;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
-const LEASE_SECONDS: i64 = 30;
+// 一次 CubeSandbox+codex 渲染可达数分钟；租约须覆盖真实执行墙钟(> sidecar HTTP 660s)。
+const LEASE_SECONDS: i64 = 900;
 const MAX_CONCURRENT: usize = 2;
 const WORKER_OWNER: &str = "canvas-skill-worker";
 
@@ -58,6 +60,25 @@ async fn run_one(state: crate::AppState, job: skill_jobs::SkillJob) {
     }
 }
 
+/// 从 active 连接与 job 输入组装 RenderRequest(纯函数，可单测)。
+fn build_render_request(
+    skill_id: &str,
+    selection: &str,
+    argument: &str,
+    active: &crate::providers::ActiveConnection,
+) -> RenderRequest {
+    RenderRequest {
+        skill_id: skill_id.to_string(),
+        selection: selection.to_string(),
+        argument: argument.to_string(),
+        provider: RenderProvider {
+            base_url: active.base_url.clone(),
+            api_key: active.api_key.clone(),
+            model: active.model.clone(),
+        },
+    }
+}
+
 async fn execute(
     state: &crate::AppState,
     job: &skill_jobs::SkillJob,
@@ -73,23 +94,19 @@ async fn execute(
     let selection = job.input.get("selection").and_then(|v| v.as_str()).unwrap_or_default();
     let argument = job.input.get("argument").and_then(|v| v.as_str()).unwrap_or_default();
 
-    // Reuse the same active-connection resolution as ingest.
     let connections =
         crate::providers::list_connections(&state.pool).await.map_err(|e| e.to_string())?;
     let active =
         crate::providers::resolve_active(&connections).ok_or("no active LLM connection")?;
-    let provider = crate::providers::ActiveConnection::from(active).provider();
+    let active = crate::providers::ActiveConnection::from(active);
 
-    let outcome =
-        crate::canvas::deck_renderer::render_deck(&descriptor, &provider, selection, argument)
-            .await
-            .map_err(|e| e.to_string())?;
+    let req = build_render_request(&descriptor.id, selection, argument, &active);
+    let rendered = state.executor.render(req).await?;
 
-    // Store deck.html as a text/html asset owned by the job creator.
     let asset = crate::assets::store::NewAsset::new(
         &job.created_by,
         "text/html",
-        outcome.deck_html.into_bytes(),
+        rendered.deck_html.into_bytes(),
     );
     let asset_id =
         crate::assets::store::insert_asset(&state.pool, &asset).await.map_err(|e| e.to_string())?;
@@ -100,4 +117,26 @@ async fn execute(
         "url": url,
         "title": "PPT",
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_render_request_maps_active_connection() {
+        let active = crate::providers::ActiveConnection {
+            base_url: "https://api.x/v1".into(),
+            api_key: "sk-9".into(),
+            model: "gpt-5.4".into(),
+            timeout_seconds: 30,
+        };
+        let req = build_render_request("guizang-ppt", "sel", "arg", &active);
+        assert_eq!(req.skill_id, "guizang-ppt");
+        assert_eq!(req.selection, "sel");
+        assert_eq!(req.argument, "arg");
+        assert_eq!(req.provider.base_url, "https://api.x/v1");
+        assert_eq!(req.provider.api_key, "sk-9");
+        assert_eq!(req.provider.model, "gpt-5.4");
+    }
 }

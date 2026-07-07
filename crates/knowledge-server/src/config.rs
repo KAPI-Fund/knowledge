@@ -8,6 +8,7 @@ pub struct AppConfig {
   pub project_root: String,
   pub session_ttl_hours: u64,
   pub admin_password: Option<String>,
+  pub skill_runner_url: String,
 }
 
 impl AppConfig {
@@ -22,6 +23,7 @@ impl AppConfig {
         .to_string(),
       session_ttl_hours: 12,
       admin_password: Some("secret-password".to_string()),
+      skill_runner_url: "http://127.0.0.1:4600".to_string(),
     }
   }
 
@@ -45,6 +47,8 @@ impl AppConfig {
         .to_string()
     });
     let admin_password = std::env::var("KNOWLEDGE_ADMIN_PASSWORD").ok();
+    let skill_runner_url = std::env::var("KNOWLEDGE_SKILL_RUNNER_URL")
+      .unwrap_or_else(|_| "http://127.0.0.1:4600".to_string());
 
     Self {
       bind_addr,
@@ -53,6 +57,7 @@ impl AppConfig {
       project_root,
       session_ttl_hours: 12,
       admin_password,
+      skill_runner_url,
     }
   }
 }

@@ -4,8 +4,8 @@ use serde::Deserialize;
 #[serde(rename_all = "kebab-case")]
 pub enum SkillRuntime {
     Builtin,
-    /// In-process bounded LLM loop (guizang-style): inline template + content,
-    /// call complete_text, produce a single HTML file. No Node, no subprocess.
+    /// 异步技能：在 CubeSandbox 微虚拟机里由 codex CLI 做 agentic 生成，
+    /// 产出单文件 HTML。经 canvas_skill_jobs 队列 + skill_worker + SkillExecutor 执行。
     LlmSkill,
 }
 

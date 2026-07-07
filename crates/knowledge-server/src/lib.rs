@@ -47,12 +47,17 @@ pub async fn bootstrap_state(config: &AppConfig) -> anyhow::Result<AppState> {
     let mut descriptors = skills::builtin_descriptors();
     descriptors.extend(skills::SkillRegistry::load_from_dir(std::path::Path::new(&skills_dir))?);
     let skill_registry = skills::SkillRegistry::new(descriptors);
+    let executor: std::sync::Arc<dyn crate::canvas::executor::SkillExecutor> =
+        std::sync::Arc::new(crate::canvas::executor::CubeExecutor::new(
+            config.skill_runner_url.clone(),
+        ));
     let state = AppState {
         pool,
         cache,
         project_root: config.project_root.clone(),
         session_ttl_hours: config.session_ttl_hours,
         skill_registry,
+        executor,
     };
     tasks::recovery::recover_tasks(&state).await?;
     tasks::scheduler::spawn_scheduler(state.clone());

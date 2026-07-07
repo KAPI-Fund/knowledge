@@ -31,6 +31,31 @@ pub trait SkillExecutor: Send + Sync {
     async fn render(&self, req: RenderRequest) -> Result<RenderedDeck, String>;
 }
 
+/// 调 skill-runner sidecar 的 POST /render 的生产实现。
+pub struct CubeExecutor {
+    base_url: String,
+    client: reqwest::Client,
+}
+
+impl CubeExecutor {
+    pub fn new(base_url: String) -> Self {
+        // HTTP 总超时须略大于 sidecar 的 RENDER_TIMEOUT(600s)，取 660s。
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(660))
+            .build()
+            .expect("build skill-runner http client");
+        Self { base_url: base_url.trim_end_matches('/').to_string(), client }
+    }
+}
+
+#[async_trait]
+impl SkillExecutor for CubeExecutor {
+    async fn render(&self, _req: RenderRequest) -> Result<RenderedDeck, String> {
+        // Task 4 填真实实现。
+        Err("skill runner not yet implemented".to_string())
+    }
+}
+
 #[cfg(test)]
 pub mod mock {
     use super::*;
