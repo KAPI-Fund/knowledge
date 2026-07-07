@@ -15,3 +15,5 @@ pdfium/
 upstream_llm_wiki/
 .superpowers/
 .secrets/
+services/skill-runner/skill-runner
+services/skill-runner/*.exe
