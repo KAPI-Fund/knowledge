@@ -11,6 +11,7 @@ use crate::chat;
 use crate::deep_research;
 use crate::projects;
 use crate::settings;
+use crate::skills;
 use crate::tenancy;
 use crate::users;
 use crate::web_search;
@@ -25,6 +26,7 @@ pub fn build_router(state: AppState) -> Router {
     .merge(deep_research::routes::router())
     .merge(projects::routes::router())
     .merge(settings::routes::router())
+    .merge(skills::routes::router())
     .merge(tenancy::grants::router())
     .merge(tenancy::orgs::router())
     .merge(tenancy::spaces_api::router())
