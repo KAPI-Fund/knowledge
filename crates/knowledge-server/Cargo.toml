@@ -24,6 +24,7 @@ sha2.workspace = true
 sqlx.workspace = true
 thiserror.workspace = true
 time.workspace = true
+toml = "0.8"
 tokio.workspace = true
 tokio-stream.workspace = true
 tracing.workspace = true

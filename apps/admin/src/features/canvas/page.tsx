@@ -17,6 +17,7 @@ import { useCanvas, useCanvasCacheSave, useSaveCanvas } from "./queries";
 import { runCanvasNode } from "./stream";
 import type { CanvasDocument, CanvasNode } from "./types";
 import { useAutosave, type SaveStatus } from "./use-autosave";
+import { useSkillJobPoll, type RunningSkillJob } from "./use-skill-job-poll";
 
 function emptyDoc(): CanvasDocument {
   return { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } };
@@ -363,6 +364,26 @@ export function CanvasPage() {
     });
   }, []);
 
+  // A skill node lands as an html placeholder carrying its jobId. Poll each
+  // running job and backfill the node when it finishes; autosave persists the
+  // patch on the same path as every other edit.
+  const runningSkillJobs: RunningSkillJob[] = (doc?.nodes ?? [])
+    .filter(
+      (n) => n.type === "html" && n.data?.status === "running" && typeof n.data?.jobId === "string",
+    )
+    .map((n) => ({ nodeId: n.id, jobId: n.data.jobId as string }));
+
+  useSkillJobPoll(runningSkillJobs, {
+    onDone: (nodeId, result) =>
+      patchNodeData(nodeId, {
+        status: "done",
+        assetId: result.assetId,
+        url: result.url,
+        title: result.title,
+      }),
+    onError: (nodeId, message) => patchNodeData(nodeId, { status: "error", error: message }),
+  });
+
   return (
     <div className="flex h-full min-h-0">
       <HistorySidebar
@@ -553,6 +574,9 @@ const NODE_SIZES: Record<CanvasNode["type"], { w: number; h: number }> = {
   ai_analyze: { w: 380, h: 360 },
   // Prompt on top + a (default square 1024x1024) generated image filling the rest.
   ai_image: { w: 340, h: 420 },
+  // Sandboxed iframe rendering a generated single-file HTML deck; sized to give the
+  // slide preview a usable viewport.
+  html: { w: 420, h: 340 },
 };
 
 function defaultSize(type: CanvasNode["type"]): { w: number; h: number } {

@@ -31,6 +31,7 @@ pub fn router() -> Router<AppState> {
         )
         .route("/api/canvases/{id}/nodes/{node_id}/run", post(run_node_handler))
         .route("/api/canvases/{id}/chat", post(chat_handler))
+        .route("/api/canvas-skill-jobs/{id}", get(get_skill_job_handler))
         .route("/api/canvas/extract-url", post(extract_url_handler))
 }
 
@@ -134,6 +135,14 @@ async fn create_handler(
     }))
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillJobStatus {
+    pub status: String,
+    pub result: Option<serde_json::Value>,
+    pub error: Option<serde_json::Value>,
+}
+
 async fn get_handler(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -150,6 +159,26 @@ async fn get_handler(
         document,
         created_at: rec.created_at,
         updated_at: rec.updated_at,
+    }))
+}
+
+async fn get_skill_job_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<SkillJobStatus>, ApiError> {
+    let principal = resolve_principal(&state, &headers).await?;
+    let job = crate::canvas::skill_jobs::get_job(&state.pool, &id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("unknown job"))?;
+    // Only the creator may poll; never leak existence to others.
+    if job.created_by != principal.user_id {
+        return Err(ApiError::not_found("unknown job"));
+    }
+    Ok(Json(SkillJobStatus {
+        status: job.status,
+        result: job.result,
+        error: job.error,
     }))
 }
 
@@ -229,27 +258,16 @@ fn now_rfc3339() -> String {
     OffsetDateTime::now_utc().format(&Rfc3339).unwrap_or_default()
 }
 
-/// A canvas-chat message is either a slash-command skill or a plain prompt.
-#[derive(Debug, PartialEq, Eq)]
-enum ChatCommand {
-    Search(String),
-    Image(String),
-    Analyze(String),
-    Plain(String),
-}
-
-impl ChatCommand {
-    fn parse(message: &str) -> ChatCommand {
-        let trimmed = message.trim();
-        if let Some(rest) = trimmed.strip_prefix("/search") {
-            ChatCommand::Search(rest.trim().to_string())
-        } else if let Some(rest) = trimmed.strip_prefix("/image") {
-            ChatCommand::Image(rest.trim().to_string())
-        } else if let Some(rest) = trimmed.strip_prefix("/analyze") {
-            ChatCommand::Analyze(rest.trim().to_string())
-        } else {
-            ChatCommand::Plain(trimmed.to_string())
-        }
+/// Split a chat message into (command, argument) when it starts with `/`.
+/// `/ppt swiss style` -> (Some("ppt"), "swiss style"); `hello` -> (None, "hello").
+fn parse_slash_command(message: &str) -> (Option<&str>, &str) {
+    let trimmed = message.trim_start();
+    let Some(rest) = trimmed.strip_prefix('/') else {
+        return (None, message.trim());
+    };
+    match rest.split_once(char::is_whitespace) {
+        Some((cmd, arg)) => (Some(cmd), arg.trim()),
+        None => (Some(rest.trim()), ""),
     }
 }
 
@@ -488,56 +506,17 @@ async fn chat_handler(
         }
     }
 
-    let command = ChatCommand::parse(&message);
+    let (command_opt, argument) = parse_slash_command(&message);
+    let argument = argument.to_string();
+    let descriptor = command_opt.and_then(|c| state.skill_registry.by_command(c).cloned());
     let user_id = principal.user_id.clone();
+    let canvas_id = id.clone();
     let stream_state = state.clone();
 
     let event_stream = async_stream::stream! {
-        match command {
-            ChatCommand::Search(query) => {
-                if query.is_empty() {
-                    yield Ok(sse_error("search query must not be empty"));
-                    return;
-                }
-                match run_search_skill(&stream_state, &query).await {
-                    Ok(node) => {
-                        yield Ok(
-                            Event::default().event(skill_node_event_name()).data(
-                                build_skill_node_done_payload(node, x, y).to_string(),
-                            ),
-                        );
-                        yield Ok(Event::default().event("done").data("{}".to_string()));
-                    }
-                    Err(message) => yield Ok(sse_error(&message)),
-                }
-            }
-            ChatCommand::Image(prompt) => {
-                if prompt.is_empty() {
-                    yield Ok(sse_error("image prompt must not be empty"));
-                    return;
-                }
-                match run_image_skill(&stream_state, &user_id, &prompt).await {
-                    Ok(node) => {
-                        yield Ok(
-                            Event::default().event(skill_node_event_name()).data(
-                                build_skill_node_done_payload(node, x, y).to_string(),
-                            ),
-                        );
-                        yield Ok(Event::default().event("done").data("{}".to_string()));
-                    }
-                    Err(message) => yield Ok(sse_error(&message)),
-                }
-            }
-            ChatCommand::Analyze(prompt) => {
-                let node = build_analyze_node(&prompt, &selected_ids);
-                yield Ok(
-                    Event::default()
-                        .event(skill_node_event_name())
-                        .data(build_skill_node_done_payload(node, x, y).to_string()),
-                );
-                yield Ok(Event::default().event("done").data("{}".to_string()));
-            }
-            ChatCommand::Plain(text) => {
+        match descriptor {
+            // No recognized slash command → plain chat over selected-node context.
+            None => {
                 let settings = match load_query_settings(&stream_state).await {
                     Ok(settings) => settings,
                     Err(error) => {
@@ -562,7 +541,7 @@ async fn chat_handler(
                     }
                 );
                 let messages =
-                    vec![ProviderChatMessage { role: "user".to_string(), content: text }];
+                    vec![ProviderChatMessage { role: "user".to_string(), content: message }];
 
                 let mut full_text = String::new();
                 match provider
@@ -598,6 +577,101 @@ async fn chat_handler(
                         .event("done")
                         .data(json!({ "content": full_text }).to_string()),
                 );
+            }
+            Some(descriptor) => {
+                // Any skill that requires a selection is blocked when none exists.
+                if descriptor.requires_selection() && selected_ids.is_empty() {
+                    yield Ok(sse_error("content empty"));
+                    return;
+                }
+                match descriptor.runtime {
+                    crate::skills::SkillRuntime::Builtin => match descriptor.command.as_str() {
+                        "search" => {
+                            if argument.is_empty() {
+                                yield Ok(sse_error("search query must not be empty"));
+                                return;
+                            }
+                            match run_search_skill(&stream_state, &argument).await {
+                                Ok(node) => {
+                                    yield Ok(
+                                        Event::default().event(skill_node_event_name()).data(
+                                            build_skill_node_done_payload(node, x, y).to_string(),
+                                        ),
+                                    );
+                                    yield Ok(Event::default().event("done").data("{}".to_string()));
+                                }
+                                Err(message) => yield Ok(sse_error(&message)),
+                            }
+                        }
+                        "image" => {
+                            if argument.is_empty() {
+                                yield Ok(sse_error("image prompt must not be empty"));
+                                return;
+                            }
+                            match run_image_skill(&stream_state, &user_id, &argument).await {
+                                Ok(node) => {
+                                    yield Ok(
+                                        Event::default().event(skill_node_event_name()).data(
+                                            build_skill_node_done_payload(node, x, y).to_string(),
+                                        ),
+                                    );
+                                    yield Ok(Event::default().event("done").data("{}".to_string()));
+                                }
+                                Err(message) => yield Ok(sse_error(&message)),
+                            }
+                        }
+                        "analyze" => {
+                            let node = build_analyze_node(&argument, &selected_ids);
+                            yield Ok(
+                                Event::default()
+                                    .event(skill_node_event_name())
+                                    .data(build_skill_node_done_payload(node, x, y).to_string()),
+                            );
+                            yield Ok(Event::default().event("done").data("{}".to_string()));
+                        }
+                        other => {
+                            yield Ok(sse_error(&format!("unknown builtin skill: {other}")));
+                        }
+                    },
+                    crate::skills::SkillRuntime::LlmSkill => {
+                        // Selection text reuses the same reader as plain chat context.
+                        let selection_text = plain_context.join("\n\n");
+                        let node_id = uuid::Uuid::new_v4().to_string();
+                        let input = json!({
+                            "selection": selection_text,
+                            "argument": argument,
+                        });
+                        let new_job = crate::canvas::skill_jobs::NewSkillJob {
+                            canvas_id,
+                            node_id,
+                            skill_id: descriptor.id.clone(),
+                            input,
+                            created_by: user_id.clone(),
+                        };
+                        let job_id = match crate::canvas::skill_jobs::create_job(
+                            &stream_state.pool,
+                            new_job,
+                        )
+                        .await
+                        {
+                            Ok(job_id) => job_id,
+                            Err(error) => {
+                                yield Ok(sse_error(&error.to_string()));
+                                return;
+                            }
+                        };
+                        let node = json!({
+                            "type": "html",
+                            "data": { "status": "running", "jobId": job_id }
+                        });
+                        yield Ok(
+                            Event::default().event(skill_node_event_name()).data(
+                                build_skill_node_done_payload(node, x, y).to_string(),
+                            ),
+                        );
+                        yield Ok(Event::default().event("done").data("{}".to_string()));
+                    }
+                }
             }
         }
     };
@@ -834,14 +908,10 @@ mod tests {
     }
 
     #[test]
-    fn chat_command_parse_recognizes_slash_skills() {
-        assert_eq!(ChatCommand::parse("/search cats"), ChatCommand::Search("cats".to_string()));
-        assert_eq!(ChatCommand::parse("/image a fox"), ChatCommand::Image("a fox".to_string()));
-        assert_eq!(ChatCommand::parse("/analyze"), ChatCommand::Analyze(String::new()));
-        assert_eq!(
-            ChatCommand::parse("just chatting"),
-            ChatCommand::Plain("just chatting".to_string())
-        );
+    fn parse_slash_command_splits_command_and_arg() {
+        assert_eq!(parse_slash_command("/ppt swiss"), (Some("ppt"), "swiss"));
+        assert_eq!(parse_slash_command("/ppt"), (Some("ppt"), ""));
+        assert_eq!(parse_slash_command("no command"), (None, "no command"));
     }
 
     #[test]

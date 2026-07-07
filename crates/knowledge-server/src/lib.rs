@@ -14,6 +14,7 @@ pub mod providers;
 pub mod query;
 pub mod retrieval;
 pub mod settings;
+pub mod skills;
 pub mod tasks;
 pub mod tenancy;
 pub mod users;
@@ -41,14 +42,21 @@ pub async fn bootstrap_state(config: &AppConfig) -> anyhow::Result<AppState> {
     db::migrate::run(&pool).await?;
     seed_admin_user(&pool, config).await?;
     let cache = CacheStore::connect(&config.redis_url).await?;
+    let skills_dir = std::env::var("KNOWLEDGE_SKILLS_DIR")
+        .unwrap_or_else(|_| "/app/skills".to_string());
+    let mut descriptors = skills::builtin_descriptors();
+    descriptors.extend(skills::SkillRegistry::load_from_dir(std::path::Path::new(&skills_dir))?);
+    let skill_registry = skills::SkillRegistry::new(descriptors);
     let state = AppState {
         pool,
         cache,
         project_root: config.project_root.clone(),
         session_ttl_hours: config.session_ttl_hours,
+        skill_registry,
     };
     tasks::recovery::recover_tasks(&state).await?;
     tasks::scheduler::spawn_scheduler(state.clone());
+    crate::canvas::skill_worker::spawn_skill_worker(state.clone());
     projects::source_watch::spawn_source_watch_scheduler(state.clone());
     Ok(state)
 }

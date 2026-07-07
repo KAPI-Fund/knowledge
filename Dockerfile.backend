@@ -28,9 +28,13 @@ WORKDIR /app
 
 COPY --from=builder /app/target/release/knowledge-server /usr/local/bin/knowledge-server
 
+# Bake the read-only skills baseline (skill registry source at runtime).
+COPY crates/knowledge-server/skills /app/skills
+
 ENV KNOWLEDGE_BIND_ADDR=0.0.0.0:4001
 ENV KNOWLEDGE_DATABASE_URL=postgres://postgres:postgres@postgres:5432/knowledge?sslmode=disable
 ENV KNOWLEDGE_REDIS_URL=redis://redis:6379/
+ENV KNOWLEDGE_SKILLS_DIR=/app/skills
 ENV KNOWLEDGE_PROVIDER_MODE=openai-compatible
 ENV KNOWLEDGE_PROVIDER_BASE_URL=https://backend.intelalloc.com
 ENV KNOWLEDGE_PROVIDER_MODEL=gpt-5.4
