@@ -48,6 +48,9 @@ services:
       # Bootstraps the first admin user on a fresh database. Change before any
       # non-local deployment.
       KNOWLEDGE_ADMIN_PASSWORD: admin
+      # skill-runner sidecar(跑在带 KVM 的 Linux 主机上,执行 CubeSandbox+codex)。
+      # 本地无 KVM 时 /ppt 会失败,属预期;配置真实地址后生效。
+      KNOWLEDGE_SKILL_RUNNER_URL: ${KNOWLEDGE_SKILL_RUNNER_URL:-http://host.docker.internal:4600}
     ports:
       - "4001:4001"
     volumes:
