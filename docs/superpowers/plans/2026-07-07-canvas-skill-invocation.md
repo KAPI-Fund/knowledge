@@ -583,16 +583,19 @@ fn now_rfc3339() -> String {
 pub async fn create_job(pool: &PgPool, job: NewSkillJob) -> Result<String, sqlx::Error> {
     let id = Uuid::new_v4().to_string();
     let now = now_rfc3339();
+    // Match tasks/store.rs: serialize JSONB payloads to a String and cast with
+    // `::jsonb` on the write side (the crate's sqlx build does not bind Value directly).
+    let input = serde_json::to_string(&job.input).unwrap_or_else(|_| "{}".to_string());
     sqlx::query(
         "INSERT INTO canvas_skill_jobs
            (id, canvas_id, node_id, skill_id, input, created_by, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $7)",
+         VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $7)",
     )
     .bind(&id)
     .bind(&job.canvas_id)
     .bind(&job.node_id)
     .bind(&job.skill_id)
-    .bind(&job.input)
+    .bind(&input)
     .bind(&job.created_by)
     .bind(&now)
     .execute(pool)
@@ -642,14 +645,15 @@ pub async fn acquire_next_job(
 
 pub async fn complete_job(pool: &PgPool, id: &str, result: Value) -> Result<(), sqlx::Error> {
     let now = now_rfc3339();
+    let result = serde_json::to_string(&result).unwrap_or_else(|_| "null".to_string());
     sqlx::query(
         "UPDATE canvas_skill_jobs
-         SET status = 'done', result = $2, error = NULL,
+         SET status = 'done', result = $2::jsonb, error = NULL,
              finished_at = $3, updated_at = $3, lease_owner = NULL, lease_expires_at = NULL
          WHERE id = $1",
     )
     .bind(id)
-    .bind(result)
+    .bind(&result)
     .bind(&now)
     .execute(pool)
     .await?;
@@ -658,14 +662,15 @@ pub async fn complete_job(pool: &PgPool, id: &str, result: Value) -> Result<(), 
 
 pub async fn fail_job(pool: &PgPool, id: &str, error: Value) -> Result<(), sqlx::Error> {
     let now = now_rfc3339();
+    let error = serde_json::to_string(&error).unwrap_or_else(|_| "null".to_string());
     sqlx::query(
         "UPDATE canvas_skill_jobs
-         SET status = 'error', error = $2,
+         SET status = 'error', error = $2::jsonb,
              finished_at = $3, updated_at = $3, lease_owner = NULL, lease_expires_at = NULL
          WHERE id = $1",
     )
     .bind(id)
-    .bind(error)
+    .bind(&error)
     .bind(&now)
     .execute(pool)
     .await?;
