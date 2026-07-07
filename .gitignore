@@ -14,3 +14,4 @@ pdfium/
 .claude/worktrees/
 upstream_llm_wiki/
 .superpowers/
+.secrets/
