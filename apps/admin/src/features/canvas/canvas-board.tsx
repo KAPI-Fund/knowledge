@@ -31,7 +31,6 @@ interface NodeCallbacks {
   onPatch: (patch: Record<string, unknown>) => void;
   onRun: () => void;
   onFetchUrl: () => void;
-  onSearch: () => void;
 }
 
 function callbacks(data: Record<string, unknown>): NodeCallbacks {
@@ -40,7 +39,6 @@ function callbacks(data: Record<string, unknown>): NodeCallbacks {
       onPatch: () => {},
       onRun: () => {},
       onFetchUrl: () => {},
-      onSearch: () => {},
     }
   );
 }
@@ -89,7 +87,7 @@ function SearchAdapter({ id, data, selected }: NodeProps) {
       index={indexOf(data)}
       selected={selected}
       onQueryChange={(query) => cb.onPatch({ query })}
-      onSearch={cb.onSearch}
+      onRun={cb.onRun}
     />
   );
 }
@@ -146,7 +144,6 @@ interface CanvasBoardProps {
   onChange: (next: CanvasDocument) => void;
   onRunNode: (nodeId: string) => void;
   onFetchUrl: (nodeId: string) => void;
-  onSearchNode: (nodeId: string) => void;
   onSelectionChange?: (nodeIds: string[]) => void;
 }
 
@@ -160,6 +157,56 @@ export function pruneDanglingEdges(
 ): CanvasDocument["edges"] {
   const ids = new Set(nodes.map((n) => n.id));
   return edges.filter((e) => ids.has(e.source) && ids.has(e.target));
+}
+
+const CONSUMER_TYPES = ["search", "ai_analyze", "ai_image"];
+
+// A connection is valid iff: the endpoints differ, the target is a consumer
+// (search/ai_analyze/ai_image), it does not duplicate an existing edge, and it
+// would not create a cycle (walking forward from target must not reach source).
+// React Flow calls this during a drag, so an illegal handle never highlights and
+// a release over it makes no edge (§3.2 "middle" blocking).
+export function isValidConnection(
+  nodes: { id: string; type?: string }[],
+  edges: { source: string; target: string }[],
+  conn: { source: string | null; target: string | null },
+): boolean {
+  const { source, target } = conn;
+  if (!source || !target || source === target) {
+    return false;
+  }
+  const targetNode = nodes.find((n) => n.id === target);
+  if (!targetNode || !CONSUMER_TYPES.includes(targetNode.type ?? "")) {
+    return false;
+  }
+  if (edges.some((e) => e.source === source && e.target === target)) {
+    return false;
+  }
+  const adjacency = new Map<string, string[]>();
+  for (const e of edges) {
+    const list = adjacency.get(e.source);
+    if (list) {
+      list.push(e.target);
+    } else {
+      adjacency.set(e.source, [e.target]);
+    }
+  }
+  const stack = [target];
+  const seen = new Set<string>();
+  while (stack.length > 0) {
+    const cur = stack.pop() as string;
+    if (cur === source) {
+      return false;
+    }
+    if (seen.has(cur)) {
+      continue;
+    }
+    seen.add(cur);
+    for (const next of adjacency.get(cur) ?? []) {
+      stack.push(next);
+    }
+  }
+  return true;
 }
 
 // True only for the change that *ends* a NodeResizer drag (`resizing === false`).
@@ -206,7 +253,7 @@ export function commitNodeGeometry(
   return { ...document, nodes, edges: pruneDanglingEdges(nodes, document.edges) };
 }
 
-export function CanvasBoard({ document, onChange, onRunNode, onFetchUrl, onSearchNode, onSelectionChange }: CanvasBoardProps) {
+export function CanvasBoard({ document, onChange, onRunNode, onFetchUrl, onSelectionChange }: CanvasBoardProps) {
   const settings = useSystemSettingsQuery().data;
   const analyzeModel = settings?.connections?.find((c) => c.isActive)?.model ?? null;
   const imageModel = settings?.image?.model ?? null;
@@ -255,11 +302,10 @@ export function CanvasBoard({ document, onChange, onRunNode, onFetchUrl, onSearc
             onPatch: (patch: Record<string, unknown>) => patchNode(n.id, patch),
             onRun: () => onRunNode(n.id),
             onFetchUrl: () => onFetchUrl(n.id),
-            onSearch: () => onSearchNode(n.id),
           } satisfies NodeCallbacks,
         },
       })),
-    [document.nodes, patchNode, onRunNode, onFetchUrl, onSearchNode, analyzeModel, imageModel, selectedIds],
+    [document.nodes, patchNode, onRunNode, onFetchUrl, analyzeModel, imageModel, selectedIds],
   );
 
   // React Flow's live node state. It owns positions during a drag so nodes follow
@@ -362,6 +408,11 @@ export function CanvasBoard({ document, onChange, onRunNode, onFetchUrl, onSearc
     [document, onChange, rfEdges],
   );
 
+  const validateConnection = useCallback(
+    (conn: Connection | Edge) => isValidConnection(rfNodes, rfEdges, conn),
+    [rfNodes, rfEdges],
+  );
+
   return (
     <div className="h-full w-full">
       <ReactFlowProvider>
@@ -372,6 +423,7 @@ export function CanvasBoard({ document, onChange, onRunNode, onFetchUrl, onSearc
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onConnect={onConnect}
+          isValidConnection={validateConnection}
           deleteKeyCode={["Delete", "Backspace"]}
           defaultViewport={document.viewport}
         >

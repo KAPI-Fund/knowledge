@@ -7,7 +7,7 @@ import { CompositionInput } from "@/components/ui/composition-input";
 import { NodeError } from "./node-error";
 import { NodeShell } from "./node-shell";
 
-export type SearchNodeStatus = "idle" | "loading" | "error";
+export type SearchNodeStatus = "idle" | "running" | "error";
 
 export interface SearchNodeData {
   query?: string;
@@ -22,12 +22,12 @@ interface SearchNodeProps {
   index?: number;
   selected?: boolean;
   onQueryChange: (query: string) => void;
-  onSearch: () => void;
+  onRun: () => void;
 }
 
-export function SearchNode({ data, nodeId, index, selected, onQueryChange, onSearch }: SearchNodeProps) {
+export function SearchNode({ data, nodeId, index, selected, onQueryChange, onRun }: SearchNodeProps) {
   const status = data.status ?? "idle";
-  const loading = status === "loading";
+  const running = status === "running";
   const isError = status === "error";
   return (
     <NodeShell
@@ -37,16 +37,15 @@ export function SearchNode({ data, nodeId, index, selected, onQueryChange, onSea
       index={index}
       selected={selected}
       status={status}
-      targetHandle={false}
       headerRight={
         <Button
           type="button"
           size="xs"
           variant={isError ? "destructive" : "default"}
-          onClick={onSearch}
-          disabled={loading || !data.query}
+          onClick={onRun}
+          disabled={running}
         >
-          {loading ? (
+          {running ? (
             <Loader2 className="size-3 animate-spin" />
           ) : (
             <Search className="size-3" />

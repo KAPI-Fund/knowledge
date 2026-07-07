@@ -24,6 +24,7 @@ export function KbNode({ data, nodeId, index, selected }: KbNodeProps) {
       index={index}
       selected={selected}
       status={data.noAccess ? "no-access" : "idle"}
+      targetHandle={false}
     >
       <div className="text-sm font-medium">
         {data.projectName ?? data.projectId ?? "Untitled"}

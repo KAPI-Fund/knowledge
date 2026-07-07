@@ -33,7 +33,7 @@ vi.mock("../settings/queries", () => ({
   }),
 }));
 
-import { CanvasBoard, commitNodeGeometry, isResizeEndChange, pruneDanglingEdges } from "./canvas-board";
+import { CanvasBoard, commitNodeGeometry, isResizeEndChange, isValidConnection, pruneDanglingEdges } from "./canvas-board";
 import type { CanvasDocument } from "./types";
 
 const emptyDoc = { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } };
@@ -50,7 +50,6 @@ describe("CanvasBoard", () => {
         onChange={() => {}}
         onRunNode={() => {}}
         onFetchUrl={() => {}}
-        onSearchNode={() => {}}
       />,
     );
     expect(screen.getByText("flow")).toBeInTheDocument();
@@ -64,7 +63,6 @@ describe("CanvasBoard", () => {
         onChange={onChange}
         onRunNode={() => {}}
         onFetchUrl={() => {}}
-        onSearchNode={() => {}}
       />,
     );
     // The board no longer wires onMoveEnd, so panning/zooming never triggers a
@@ -88,6 +86,44 @@ describe("pruneDanglingEdges", () => {
   it("drops edges that reference a removed node", () => {
     const kept = pruneDanglingEdges([node("a"), node("b")], edges);
     expect(kept.map((e) => e.id)).toEqual(["e1"]);
+  });
+});
+
+describe("isValidConnection", () => {
+  const nodes = [
+    { id: "note1", type: "note" },
+    { id: "an1", type: "ai_analyze" },
+    { id: "img1", type: "ai_image" },
+    { id: "s1", type: "search" },
+    { id: "kb1", type: "kb" },
+  ];
+
+  it("accepts a producer -> consumer edge", () => {
+    expect(isValidConnection(nodes, [], { source: "note1", target: "an1" })).toBe(true);
+  });
+
+  it("rejects a self-loop", () => {
+    expect(isValidConnection(nodes, [], { source: "an1", target: "an1" })).toBe(false);
+  });
+
+  it("rejects a target that is not a consumer", () => {
+    expect(isValidConnection(nodes, [], { source: "an1", target: "note1" })).toBe(false);
+    expect(isValidConnection(nodes, [], { source: "note1", target: "kb1" })).toBe(false);
+  });
+
+  it("rejects a duplicate edge", () => {
+    const edges = [{ source: "note1", target: "an1" }];
+    expect(isValidConnection(nodes, edges, { source: "note1", target: "an1" })).toBe(false);
+  });
+
+  it("rejects an edge that would form a cycle", () => {
+    // an1 -> img1 exists; adding img1 -> an1 would close a loop.
+    const edges = [{ source: "an1", target: "img1" }];
+    expect(isValidConnection(nodes, edges, { source: "img1", target: "an1" })).toBe(false);
+  });
+
+  it("rejects a null endpoint", () => {
+    expect(isValidConnection(nodes, [], { source: null, target: "an1" })).toBe(false);
   });
 });
 

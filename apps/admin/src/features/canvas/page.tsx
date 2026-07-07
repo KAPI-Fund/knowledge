@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { uuid } from "@/lib/uuid";
 
-import { extractUrl, searchWeb } from "./api";
+import { extractUrl } from "./api";
 import { CanvasBoard } from "./canvas-board";
 import { CanvasToolbar } from "./canvas-toolbar";
 import { ChatPanel, type SkillNodePayload } from "./chat-panel";
@@ -218,6 +218,14 @@ export function CanvasPage() {
                   if (n.id !== nodeId) {
                     return n;
                   }
+                  // Search results replace the node's markdown and are not
+                  // versioned (unlike analyze/image, which accumulate versions).
+                  if (n.type === "search") {
+                    return {
+                      ...n,
+                      data: { ...n.data, status: "idle", error: null, markdown: payload.markdown },
+                    };
+                  }
                   const versions = Array.isArray(n.data.versions)
                     ? (n.data.versions as unknown[])
                     : [];
@@ -284,36 +292,6 @@ export function CanvasPage() {
     [doc, patchNodeData],
   );
 
-  const runSearchNode = useCallback(
-    (nodeId: string) => {
-      const node = doc?.nodes.find((n) => n.id === nodeId);
-      const query = typeof node?.data.query === "string" ? node.data.query : "";
-      if (!query) {
-        return;
-      }
-      patchNodeData(nodeId, { status: "loading", error: null });
-      void searchWeb(query)
-        .then((result) => {
-          if (result.status === "ok") {
-            patchNodeData(nodeId, {
-              status: "idle",
-              error: null,
-              markdown: result.markdown,
-            });
-          } else {
-            patchNodeData(nodeId, { status: "error", error: result.error ?? "search failed" });
-          }
-        })
-        .catch((error: unknown) => {
-          patchNodeData(nodeId, {
-            status: "error",
-            error: error instanceof Error ? error.message : "search failed",
-          });
-        });
-    },
-    [doc, patchNodeData],
-  );
-
   // Rename persists on its own: autosave only watches the document, so a
   // title-only change would never be written. Push it straight through the
   // cache-synced save so the header, list, and server agree immediately.
@@ -347,6 +325,11 @@ export function CanvasPage() {
       const position = latest
         ? { x: latest.x + latest.w + CHAIN_GAP, y: latest.y }
         : (suggestedPosition(payload) ?? placementOrigin(prev));
+      // sourceNodeIds is a transient wiring hint from /analyze; it drives the
+      // edges below but must not be persisted onto the node (the runtime never
+      // reads it and it would drift as the graph changes).
+      const persistedData = { ...(source.data ?? {}) };
+      delete persistedData.sourceNodeIds;
       const node: CanvasNode = {
         id,
         type: source.type,
@@ -356,7 +339,7 @@ export function CanvasPage() {
         h: size.h,
         // Stable creation number, assigned once and never renumbered (gaps are
         // left after deletions). Read back for display via data.index.
-        data: { ...(source.data ?? {}), index: nextNodeIndex(prev.nodes) },
+        data: { ...persistedData, index: nextNodeIndex(prev.nodes) },
       };
       const existingIds = new Set(prev.nodes.map((n) => n.id));
       const sourceIds = Array.isArray(source.data?.sourceNodeIds)
@@ -396,7 +379,7 @@ export function CanvasPage() {
           <CanvasHeader title={title} status={status} hasDoc={!!doc} onRename={renameCanvas} onRetry={() => doc && void onSave(doc)} failedSaveTitle={failedSave?.title} onRetryFailed={retryFailedSave} actions={doc ? <CanvasToolbar onAdd={addSkillNode} /> : null} />
           {doc ? (
             <div className="min-h-0 flex-1">
-              <CanvasBoard key={canvasId} document={doc} onChange={setDoc} onRunNode={runNode} onFetchUrl={fetchUrlNode} onSearchNode={runSearchNode} onSelectionChange={setSelectedNodeIds} />
+              <CanvasBoard key={canvasId} document={doc} onChange={setDoc} onRunNode={runNode} onFetchUrl={fetchUrlNode} onSelectionChange={setSelectedNodeIds} />
             </div>
           ) : (
             <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">

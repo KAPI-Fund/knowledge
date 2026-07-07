@@ -18,7 +18,7 @@ use crate::canvas::store;
 use crate::http::error::ApiError;
 use crate::providers::{
     load_active_connection, load_image_config, ProviderChatMessage, ProviderChatStreamRequest,
-    ProviderImageRequest,
+    ProviderImageRequest, ProviderTextRequest,
 };
 use crate::query::load_query_settings;
 
@@ -32,7 +32,6 @@ pub fn router() -> Router<AppState> {
         .route("/api/canvases/{id}/nodes/{node_id}/run", post(run_node_handler))
         .route("/api/canvases/{id}/chat", post(chat_handler))
         .route("/api/canvas/extract-url", post(extract_url_handler))
-        .route("/api/canvas/search", post(search_handler))
 }
 
 // ---------------------------------------------------------------------------
@@ -162,12 +161,14 @@ async fn save_handler(
 ) -> Result<Json<CanvasResponse>, ApiError> {
     let principal = resolve_principal(&state, &headers).await?;
     require_csrf(&principal, &headers)?;
+    let pruned = body.document.prune_invalid_edges();
+    let document_text = serde_json::to_string(&pruned).unwrap_or_else(|_| "{}".to_string());
     let rec = store::update_canvas(
         &state.pool,
         &id,
         &principal.user_id,
         &body.title,
-        &body.document_text(),
+        &document_text,
     )
     .await?
     .ok_or_else(|| ApiError::not_found("canvas not found"))?;
@@ -209,6 +210,10 @@ pub fn build_analyze_done_payload(
 
 pub fn build_image_done_payload(version_id: &str, url: &str, created_at: &str) -> serde_json::Value {
     json!({ "versionId": version_id, "url": url, "createdAt": created_at })
+}
+
+pub fn build_search_done_payload(markdown: &str) -> serde_json::Value {
+    json!({ "markdown": markdown })
 }
 
 pub fn build_skill_node_done_payload(node: serde_json::Value, x: f64, y: f64) -> serde_json::Value {
@@ -279,8 +284,17 @@ async fn run_node_handler(
             return Err(ApiError::bad_request("image node has no prompt"));
         }
         load_image_config(&state).await?; // validate image config before streaming
+
+        let blocks =
+            assemble_reference_blocks(&state, &principal, &doc, &node_id, &node_prompt).await?;
+        let final_prompt = if blocks.is_empty() {
+            node_prompt.clone()
+        } else {
+            format!("{node_prompt}\n\n参考:\n{}", blocks.join("\n\n"))
+        };
+
         let user_id = principal.user_id.clone();
-        let prompt = node_prompt.clone();
+        let prompt = final_prompt;
         let stream_state = state.clone();
         let event_stream: std::pin::Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>> =
             Box::pin(async_stream::stream! {
@@ -307,39 +321,52 @@ async fn run_node_handler(
         return Ok(Sse::new(event_stream).keep_alive(KeepAlive::default()));
     }
 
-    // Note/URL/prior-analysis references.
-    let mut blocks = crate::canvas::service::collect_reference_blocks(&doc, &node_id);
+    if node.r#type == "search" {
+        let blocks =
+            assemble_reference_blocks(&state, &principal, &doc, &node_id, &node_prompt).await?;
+        let guidance = node.data.get("query").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
 
-    // KB nodes -> RAG, with a per-project permission check; excluded if no access.
-    for project_id in crate::canvas::service::referenced_kb_project_ids(&doc, &node_id) {
-        let role = crate::tenancy::access::project_access_role(
-            &state.pool,
-            &project_id,
-            &principal.user_id,
-        )
-        .await
-        .map_err(ApiError::from)?;
-        match role {
-            Some(_role) => {
-                let root =
-                    crate::projects::service::project_root_for_id(&state, &project_id).await?;
-                let assembled = crate::chat::context::assemble_chat_context(
-                    &state,
-                    &project_id,
-                    &root,
-                    &node_prompt,
-                    8,
-                )
-                .await?;
-                for b in assembled.context_blocks {
-                    blocks.push(format!("Knowledge base ({project_id}):\n{b}"));
+        let query = if blocks.is_empty() {
+            if guidance.is_empty() {
+                return Err(ApiError::bad_request("search node has no query"));
+            }
+            guidance
+        } else {
+            let (system_prompt, user_prompt) =
+                crate::canvas::service::build_search_query_prompt(&guidance, &blocks);
+            let provider = load_active_connection(&state).await?.provider();
+            let response = provider
+                .complete_text(ProviderTextRequest { system_prompt, user_prompt })
+                .await
+                // A provider/transport failure is server-side, not a client error.
+                .map_err(|e| ApiError::internal(e.message().to_string()))?;
+            let synthesized = response.text.lines().next().unwrap_or("").trim().to_string();
+            if synthesized.is_empty() {
+                return Err(ApiError::bad_request("could not synthesize a search query"));
+            }
+            synthesized
+        };
+
+        let stream_state = state.clone();
+        let event_stream: std::pin::Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>> =
+            Box::pin(async_stream::stream! {
+                match run_web_search_markdown(&stream_state, &query).await {
+                    Ok(markdown) => {
+                        yield Ok(
+                            Event::default().event("done").data(
+                                build_search_done_payload(&markdown).to_string(),
+                            ),
+                        );
+                    }
+                    Err(message) => yield Ok(sse_error(&message)),
                 }
-            }
-            None => {
-                blocks.push(format!("[Knowledge base {project_id}: no access, excluded]"));
-            }
-        }
+            });
+        return Ok(Sse::new(event_stream).keep_alive(KeepAlive::default()));
     }
+
+    // Ordered Note/URL/prior-analysis/search/image references + KB via RAG.
+    let blocks =
+        assemble_reference_blocks(&state, &principal, &doc, &node_id, &node_prompt).await?;
 
     let prompt = crate::canvas::service::build_analyze_prompt(&node_prompt, &blocks);
 
@@ -660,40 +687,8 @@ struct ExtractUrlRequest {
     url: String,
 }
 
-// ---------------------------------------------------------------------------
-// Web search: run a query and return results as markdown (in-place node fill)
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Deserialize)]
-struct SearchRequest {
-    query: String,
-}
-
-async fn search_handler(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(body): Json<SearchRequest>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let principal = resolve_principal(&state, &headers).await?;
-    require_csrf(&principal, &headers)?;
-
-    let query = body.query.trim();
-    if query.is_empty() {
-        return Err(ApiError::bad_request("search query must not be empty"));
-    }
-
-    match run_web_search_markdown(&state, query).await {
-        Ok(markdown) => Ok(Json(json!({
-            "status": "ok", "query": query, "markdown": markdown, "error": null
-        }))),
-        Err(error) => Ok(Json(json!({
-            "status": "error", "query": query, "markdown": "", "error": error
-        }))),
-    }
-}
-
-/// Run web search for `query` and format the hits as markdown. Shared by the
-/// REST search endpoint and the `/search` chat skill.
+/// Run web search for `query` and format the hits as markdown. Used by the
+/// `/search` chat skill and the search node SSE run path.
 async fn run_web_search_markdown(state: &AppState, query: &str) -> Result<String, String> {
     let config = crate::web_search::config::load_web_search_config(state)
         .await
@@ -711,6 +706,56 @@ async fn run_web_search_markdown(state: &AppState, query: &str) -> Result<String
         })
         .collect();
     Ok(crate::canvas::service::search_results_to_markdown(query, &entries))
+}
+
+/// Assemble reference blocks for `node_id` in spatial (y, then x) order. Text
+/// nodes format synchronously; KB nodes trigger RAG inline with a per-project
+/// permission check so every source obeys the same ordering.
+async fn assemble_reference_blocks(
+    state: &AppState,
+    principal: &Principal,
+    doc: &CanvasDocument,
+    node_id: &str,
+    node_prompt: &str,
+) -> Result<Vec<String>, ApiError> {
+    let mut blocks = Vec::new();
+    for src in doc.ordered_incoming_sources(node_id) {
+        if src.r#type == "kb" {
+            let Some(project_id) = src.data.get("projectId").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            let role = crate::tenancy::access::project_access_role(
+                &state.pool,
+                project_id,
+                &principal.user_id,
+            )
+            .await
+            .map_err(ApiError::from)?;
+            match role {
+                Some(_role) => {
+                    let root =
+                        crate::projects::service::project_root_for_id(state, project_id).await?;
+                    let assembled = crate::chat::context::assemble_chat_context(
+                        state,
+                        project_id,
+                        &root,
+                        node_prompt,
+                        8,
+                    )
+                    .await?;
+                    for b in assembled.context_blocks {
+                        blocks.push(format!("Knowledge base ({project_id}):\n{b}"));
+                    }
+                }
+                None => {
+                    blocks.push(format!("[Knowledge base {project_id}: no access, excluded]"));
+                }
+            }
+        } else if let Some(block) = crate::canvas::service::format_text_reference_block(src) {
+            blocks.push(block);
+        }
+    }
+    Ok(blocks)
 }
 
 async fn extract_url_handler(
@@ -809,12 +854,6 @@ mod tests {
     }
 
     #[test]
-    fn search_request_deserializes_query() {
-        let req: SearchRequest = serde_json::from_str(r#"{"query":"cats"}"#).unwrap();
-        assert_eq!(req.query, "cats");
-    }
-
-    #[test]
     fn chat_request_deserializes_camel_case_selected_ids() {
         let req: CanvasChatRequest = serde_json::from_str(
             r#"{"message":"hi","selectedNodeIds":["a","b"],"x":10.0,"y":20.0}"#,
@@ -859,5 +898,11 @@ mod tests {
         assert_eq!(versions[0]["id"], "v-1");
         assert_eq!(versions[0]["url"], "/api/assets/asset-1");
         assert_eq!(versions[0]["createdAt"], "2026-07-01T00:00:00Z");
+    }
+
+    #[test]
+    fn search_done_payload_carries_markdown() {
+        let payload = build_search_done_payload("Search results for \"cats\":\n- a");
+        assert_eq!(payload["markdown"], "Search results for \"cats\":\n- a");
     }
 }

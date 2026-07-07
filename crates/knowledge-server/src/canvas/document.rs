@@ -27,11 +27,18 @@ pub struct CanvasNode {
 fn default_w() -> f64 { 280.0 }
 fn default_h() -> f64 { 160.0 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct CanvasEdge {
     pub id: String,
     pub source: String,
     pub target: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_handle: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_handle: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -59,6 +66,44 @@ impl CanvasDocument {
 
     pub fn node(&self, node_id: &str) -> Option<&CanvasNode> {
         self.nodes.iter().find(|n| n.id == node_id)
+    }
+
+    /// Return a copy with illegal edges removed: self-loops, duplicates
+    /// (same source+target), edges whose target is not a consumer
+    /// (search/ai_analyze/ai_image), and dangling edges (missing endpoints).
+    /// Cycles are intentionally not pruned (front-end blocks them; runtime reads
+    /// only direct predecessors so a cycle is harmless).
+    pub fn prune_invalid_edges(&self) -> CanvasDocument {
+        let is_consumer =
+            |ty: Option<&str>| matches!(ty, Some("search" | "ai_analyze" | "ai_image"));
+
+        let mut seen: std::collections::HashSet<(String, String)> =
+            std::collections::HashSet::new();
+        let edges = self
+            .edges
+            .iter()
+            .filter(|e| e.source != e.target)
+            .filter(|e| self.node(&e.source).is_some() && self.node(&e.target).is_some())
+            .filter(|e| is_consumer(self.node(&e.target).map(|n| n.r#type.as_str())))
+            .filter(|e| seen.insert((e.source.clone(), e.target.clone())))
+            .cloned()
+            .collect();
+
+        CanvasDocument { nodes: self.nodes.clone(), edges, viewport: self.viewport.clone() }
+    }
+
+    /// Upstream nodes feeding `node_id`, sorted top-to-bottom then left-to-right
+    /// (y ascending, x ascending) so reference blocks assemble in reading order.
+    pub fn ordered_incoming_sources(&self, node_id: &str) -> Vec<&CanvasNode> {
+        let mut sources: Vec<&CanvasNode> = self
+            .incoming_source_ids(node_id)
+            .iter()
+            .filter_map(|src| self.node(src))
+            .collect();
+        sources.sort_by(|a, b| {
+            a.y.total_cmp(&b.y).then(a.x.total_cmp(&b.x))
+        });
+        sources
     }
 }
 
@@ -102,9 +147,9 @@ mod tests {
         let doc = CanvasDocument {
             nodes: vec![node("a", "note"), node("b", "note"), node("c", "ai_analyze")],
             edges: vec![
-                CanvasEdge { id: "e1".into(), source: "a".into(), target: "c".into() },
-                CanvasEdge { id: "e2".into(), source: "b".into(), target: "c".into() },
-                CanvasEdge { id: "e3".into(), source: "a".into(), target: "b".into() },
+                CanvasEdge { id: "e1".into(), source: "a".into(), target: "c".into(), ..Default::default() },
+                CanvasEdge { id: "e2".into(), source: "b".into(), target: "c".into(), ..Default::default() },
+                CanvasEdge { id: "e3".into(), source: "a".into(), target: "b".into(), ..Default::default() },
             ],
             viewport: Viewport::default(),
         };
@@ -148,5 +193,87 @@ mod tests {
         let s = serde_json::to_string(&doc).unwrap();
         let back: CanvasDocument = serde_json::from_str(&s).unwrap();
         assert_eq!(back.nodes.len(), 0);
+    }
+
+    fn node_at(id: &str, ty: &str, x: f64, y: f64) -> CanvasNode {
+        CanvasNode { id: id.to_string(), r#type: ty.to_string(), x, y, w: 280.0, h: 160.0, data: serde_json::json!({}) }
+    }
+
+    #[test]
+    fn ordered_incoming_sources_sorts_by_y_then_x() {
+        let doc = CanvasDocument {
+            nodes: vec![
+                node_at("t", "ai_analyze", 500.0, 500.0),
+                node_at("low", "note", 0.0, 300.0),       // lower on canvas
+                node_at("hi_right", "note", 200.0, 0.0),  // top, right
+                node_at("hi_left", "note", 0.0, 0.0),     // top, left (same y as hi_right)
+            ],
+            edges: vec![
+                CanvasEdge { id: "e1".into(), source: "low".into(), target: "t".into(), ..Default::default() },
+                CanvasEdge { id: "e2".into(), source: "hi_right".into(), target: "t".into(), ..Default::default() },
+                CanvasEdge { id: "e3".into(), source: "hi_left".into(), target: "t".into(), ..Default::default() },
+            ],
+            viewport: Viewport::default(),
+        };
+        let ids: Vec<&str> = doc.ordered_incoming_sources("t").iter().map(|n| n.id.as_str()).collect();
+        // y ascending: hi_* (y=0) before low (y=300); within y=0, x ascending: hi_left before hi_right.
+        assert_eq!(ids, vec!["hi_left", "hi_right", "low"]);
+    }
+
+    #[test]
+    fn prune_invalid_edges_removes_illegal_edges() {
+        let doc = CanvasDocument {
+            nodes: vec![
+                node_at("note1", "note", 0.0, 0.0),
+                node_at("an", "ai_analyze", 100.0, 0.0),
+                node_at("kb1", "kb", 0.0, 100.0),
+            ],
+            edges: vec![
+                // legal: note -> ai_analyze (consumer target)
+                CanvasEdge { id: "ok".into(), source: "note1".into(), target: "an".into(), ..Default::default() },
+                // self-loop
+                CanvasEdge { id: "self".into(), source: "an".into(), target: "an".into(), ..Default::default() },
+                // duplicate of "ok"
+                CanvasEdge { id: "dup".into(), source: "note1".into(), target: "an".into(), ..Default::default() },
+                // target not a consumer (kb cannot be a target)
+                CanvasEdge { id: "bad_target".into(), source: "note1".into(), target: "kb1".into(), ..Default::default() },
+                // dangling: ghost source
+                CanvasEdge { id: "dangling".into(), source: "ghost".into(), target: "an".into(), ..Default::default() },
+            ],
+            viewport: Viewport::default(),
+        };
+        let pruned = doc.prune_invalid_edges();
+        let ids: Vec<&str> = pruned.edges.iter().map(|e| e.id.as_str()).collect();
+        assert_eq!(ids, vec!["ok"]);
+    }
+
+    #[test]
+    fn edge_handles_roundtrip_and_omit_when_absent() {
+        // Absent optional fields must not appear in the JSON.
+        let bare = CanvasEdge {
+            id: "e1".into(),
+            source: "a".into(),
+            target: "b".into(),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&bare).unwrap();
+        assert!(!json.contains("sourceHandle"));
+        assert!(!json.contains("kind"));
+
+        // Present optional fields roundtrip through camelCase keys.
+        let full = CanvasEdge {
+            id: "e2".into(),
+            source: "a".into(),
+            target: "b".into(),
+            source_handle: Some("out".into()),
+            target_handle: Some("in".into()),
+            kind: Some("text".into()),
+        };
+        let json = serde_json::to_string(&full).unwrap();
+        assert!(json.contains("\"sourceHandle\":\"out\""));
+        assert!(json.contains("\"targetHandle\":\"in\""));
+        assert!(json.contains("\"kind\":\"text\""));
+        let back: CanvasEdge = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, full);
     }
 }

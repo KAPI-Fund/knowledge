@@ -50,7 +50,6 @@ describe("CanvasBoard rendering", () => {
         onChange={vi.fn()}
         onRunNode={vi.fn()}
         onFetchUrl={vi.fn()}
-        onSearchNode={vi.fn()}
       />,
     );
     expect(container.querySelectorAll(".react-flow__node").length).toBe(1);
@@ -69,7 +68,6 @@ describe("CanvasBoard rendering", () => {
         onChange={vi.fn()}
         onRunNode={vi.fn()}
         onFetchUrl={vi.fn()}
-        onSearchNode={vi.fn()}
       />,
     );
     const node = container.querySelector<HTMLElement>(".react-flow__node");
@@ -78,19 +76,27 @@ describe("CanvasBoard rendering", () => {
   });
 
   it("renders source and target handles so edges can be drawn by hand", () => {
-    // Each redesigned node composes NodeShell, which renders a target handle
-    // (left) and a source handle (right). Without handles users can only get
-    // edges from /analyze auto-wiring, never by dragging between nodes.
+    // A pure producer (note: source only) plus a consumer (ai_analyze: source +
+    // target). Without both handle kinds users could only get edges from /analyze
+    // auto-wiring, never by dragging between nodes.
+    const doc: CanvasDocument = {
+      nodes: [
+        { id: "n1", type: "note", x: 0, y: 0, w: 280, h: 160, data: {} },
+        { id: "a1", type: "ai_analyze", x: 400, y: 0, w: 360, h: 320, data: {} },
+      ],
+      edges: [],
+      viewport: { x: 0, y: 0, zoom: 1 },
+    };
     const { container } = render(
       <CanvasBoard
-        document={docWith(2)}
+        document={doc}
         onChange={vi.fn()}
         onRunNode={vi.fn()}
         onFetchUrl={vi.fn()}
-        onSearchNode={vi.fn()}
       />,
     );
-    expect(container.querySelectorAll(".react-flow__handle").length).toBeGreaterThanOrEqual(4);
+    // note contributes 1 (source), ai_analyze contributes 2 (source + target) = 3.
+    expect(container.querySelectorAll(".react-flow__handle").length).toBeGreaterThanOrEqual(3);
   });
 
   it("renders the added node after the document prop grows", () => {
@@ -100,7 +106,6 @@ describe("CanvasBoard rendering", () => {
         onChange={vi.fn()}
         onRunNode={vi.fn()}
         onFetchUrl={vi.fn()}
-        onSearchNode={vi.fn()}
       />,
     );
     expect(container.querySelectorAll(".react-flow__node").length).toBe(1);
@@ -111,7 +116,6 @@ describe("CanvasBoard rendering", () => {
         onChange={vi.fn()}
         onRunNode={vi.fn()}
         onFetchUrl={vi.fn()}
-        onSearchNode={vi.fn()}
       />,
     );
     expect(container.querySelectorAll(".react-flow__node").length).toBe(2);
@@ -127,7 +131,7 @@ describe("CanvasBoard rendering", () => {
       viewport: { x: 0, y: 0, zoom: 1 },
     };
     const { getByText } = render(
-      <CanvasBoard document={doc} onChange={vi.fn()} onRunNode={vi.fn()} onFetchUrl={vi.fn()} onSearchNode={vi.fn()} />,
+      <CanvasBoard document={doc} onChange={vi.fn()} onRunNode={vi.fn()} onFetchUrl={vi.fn()} />,
     );
     expect(getByText("analyze-model")).toBeInTheDocument();
     expect(getByText("image-model")).toBeInTheDocument();
