@@ -48,11 +48,45 @@ impl CubeExecutor {
     }
 }
 
+/// sidecar 失败时的结构化错误 body 形状（尽力解析，失败则用状态码）。
+#[derive(Debug, Deserialize)]
+struct RunnerError {
+    #[serde(default)]
+    stage: Option<String>,
+    #[serde(default)]
+    message: Option<String>,
+}
+
 #[async_trait]
 impl SkillExecutor for CubeExecutor {
-    async fn render(&self, _req: RenderRequest) -> Result<RenderedDeck, String> {
-        // Task 4 填真实实现。
-        Err("skill runner not yet implemented".to_string())
+    async fn render(&self, req: RenderRequest) -> Result<RenderedDeck, String> {
+        let url = format!("{}/render", self.base_url);
+        let resp = self
+            .client
+            .post(&url)
+            .json(&req)
+            .send()
+            .await
+            .map_err(|e| format!("skill runner unavailable: {e}"))?;
+
+        let status = resp.status();
+        if status.is_success() {
+            return resp
+                .json::<RenderedDeck>()
+                .await
+                .map_err(|e| format!("skill runner returned malformed body: {e}"));
+        }
+
+        let body = resp.text().await.unwrap_or_default();
+        let detail = serde_json::from_str::<RunnerError>(&body)
+            .ok()
+            .map(|e| {
+                let stage = e.stage.unwrap_or_else(|| "unknown".into());
+                let msg = e.message.unwrap_or_else(|| body.clone());
+                format!("{stage}: {msg}")
+            })
+            .unwrap_or_else(|| format!("HTTP {status}: {body}"));
+        Err(format!("skill render failed ({detail})"))
     }
 }
 
@@ -95,6 +129,64 @@ pub mod mock {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::{routing::post, Json, Router};
+
+    async fn spawn_stub(handler: Router) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, handler).await.unwrap();
+        });
+        format!("http://{addr}")
+    }
+
+    #[tokio::test]
+    async fn cube_executor_posts_and_parses_rendered_deck() {
+        let app = Router::new().route(
+            "/render",
+            post(|Json(req): Json<RenderRequest>| async move {
+                assert_eq!(req.skill_id, "guizang-ppt");
+                Json(RenderedDeck { deck_html: "<!DOCTYPE html><html>ok</html>".into() })
+            }),
+        );
+        let base = spawn_stub(app).await;
+        let exec = CubeExecutor::new(base);
+        let req = RenderRequest {
+            skill_id: "guizang-ppt".into(),
+            selection: "s".into(),
+            argument: "".into(),
+            provider: RenderProvider {
+                base_url: "https://api.x/v1".into(),
+                api_key: "sk".into(),
+                model: "m".into(),
+            },
+        };
+        let out = exec.render(req).await.unwrap();
+        assert!(out.deck_html.contains("ok"));
+    }
+
+    #[tokio::test]
+    async fn cube_executor_maps_5xx_to_error_string() {
+        let app = Router::new().route(
+            "/render",
+            post(|| async {
+                (
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "stage": "codex", "message": "boom" })),
+                )
+            }),
+        );
+        let base = spawn_stub(app).await;
+        let exec = CubeExecutor::new(base);
+        let req = RenderRequest {
+            skill_id: "guizang-ppt".into(),
+            selection: "s".into(),
+            argument: "".into(),
+            provider: RenderProvider { base_url: "u".into(), api_key: "k".into(), model: "m".into() },
+        };
+        let err = exec.render(req).await.unwrap_err();
+        assert!(err.contains("codex") || err.contains("boom"), "got: {err}");
+    }
 
     #[test]
     fn render_request_serde_round_trips() {
