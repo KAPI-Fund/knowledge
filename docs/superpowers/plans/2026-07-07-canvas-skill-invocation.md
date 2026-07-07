@@ -37,8 +37,8 @@
 -- project_tasks (which is project-bound); mirrors only the scheduler *pattern*
 -- (lease + status machine), not that table.
 CREATE TABLE canvas_skill_jobs (
-    id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    canvas_id         UUID NOT NULL,
+    id                TEXT PRIMARY KEY NOT NULL DEFAULT (gen_random_uuid()::text),
+    canvas_id         TEXT NOT NULL,
     node_id           TEXT NOT NULL,
     skill_id          TEXT NOT NULL,
     status            TEXT NOT NULL DEFAULT 'queued'
@@ -46,13 +46,13 @@ CREATE TABLE canvas_skill_jobs (
     input             JSONB NOT NULL DEFAULT '{}'::jsonb,
     result            JSONB,
     error             JSONB,
-    created_by        UUID NOT NULL,
-    created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
-    started_at        TIMESTAMPTZ,
-    finished_at       TIMESTAMPTZ,
+    created_by        TEXT NOT NULL,
+    created_at        TEXT NOT NULL,
+    updated_at        TEXT NOT NULL,
+    started_at        TEXT,
+    finished_at       TEXT,
     lease_owner       TEXT,
-    lease_expires_at  TIMESTAMPTZ
+    lease_expires_at  TEXT
 );
 
 CREATE INDEX canvas_skill_jobs_queued_idx
