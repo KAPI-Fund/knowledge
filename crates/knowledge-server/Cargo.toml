@@ -24,6 +24,7 @@ sha2.workspace = true
 sqlx.workspace = true
 thiserror.workspace = true
 time.workspace = true
+async-trait = "0.1"
 toml = "0.8"
 tokio.workspace = true
 tokio-stream.workspace = true
