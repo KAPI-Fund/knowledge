@@ -535,46 +535,67 @@ git commit -m "feat(skills): GET /api/skills metadata endpoint"
 
 - [ ] **Step 1: Write the store**
 
-Model the SQL on `tasks/store.rs` (`acquire_next_task` uses a CTE with `FOR UPDATE SKIP LOCKED`; confirm exact column list before writing). Create `skill_jobs.rs`:
+Model the SQL on `tasks/store.rs` (`acquire_next_task` uses a CTE with `FOR UPDATE SKIP LOCKED`; confirm exact column list before writing). **Follow the TEXT convention (see Conventions section):** every id/timestamp is `TEXT`/`String`, ids come from `Uuid::new_v4().to_string()`, timestamps are Rust-computed RFC3339 strings — **no SQL `now()` / `make_interval()`**. `input`/`result`/`error` are `JSONB`, decoded as `serde_json::Value` (crate has sqlx `json` feature — the read side below relies on it, so the write side may bind `Value` directly). Create `skill_jobs.rs`:
 
 ```rust
 use serde_json::Value;
 use sqlx::PgPool;
+use time::format_description::well_known::Rfc3339;
+use time::OffsetDateTime;
 use uuid::Uuid;
 
 #[derive(Debug, Clone)]
 pub struct SkillJob {
-    pub id: Uuid,
-    pub canvas_id: Uuid,
+    pub id: String,
+    pub canvas_id: String,
     pub node_id: String,
     pub skill_id: String,
     pub status: String,
     pub input: Value,
     pub result: Option<Value>,
     pub error: Option<Value>,
+    pub created_by: String,
 }
 
 #[derive(Debug, Clone)]
 pub struct NewSkillJob {
-    pub canvas_id: Uuid,
+    pub canvas_id: String,
     pub node_id: String,
     pub skill_id: String,
     pub input: Value,
-    pub created_by: Uuid,
+    pub created_by: String,
 }
 
-pub async fn create_job(pool: &PgPool, job: NewSkillJob) -> Result<Uuid, sqlx::Error> {
-    let id: Uuid = sqlx::query_scalar(
-        "INSERT INTO canvas_skill_jobs (canvas_id, node_id, skill_id, input, created_by)
-         VALUES ($1, $2, $3, $4, $5)
-         RETURNING id",
+// Column tuple shared by acquire_next_job + get_job reads (matches the SELECT/RETURNING order).
+type JobRow = (String, String, String, String, String, Value, Option<Value>, Option<Value>, String);
+
+fn row_to_job(row: JobRow) -> SkillJob {
+    let (id, canvas_id, node_id, skill_id, status, input, result, error, created_by) = row;
+    SkillJob { id, canvas_id, node_id, skill_id, status, input, result, error, created_by }
+}
+
+fn now_rfc3339() -> String {
+    OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .expect("format current time as RFC3339")
+}
+
+pub async fn create_job(pool: &PgPool, job: NewSkillJob) -> Result<String, sqlx::Error> {
+    let id = Uuid::new_v4().to_string();
+    let now = now_rfc3339();
+    sqlx::query(
+        "INSERT INTO canvas_skill_jobs
+           (id, canvas_id, node_id, skill_id, input, created_by, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $7)",
     )
-    .bind(job.canvas_id)
+    .bind(&id)
+    .bind(&job.canvas_id)
     .bind(&job.node_id)
     .bind(&job.skill_id)
     .bind(&job.input)
-    .bind(job.created_by)
-    .fetch_one(pool)
+    .bind(&job.created_by)
+    .bind(&now)
+    .execute(pool)
     .await?;
     Ok(id)
 }
@@ -585,7 +606,14 @@ pub async fn acquire_next_job(
     owner: &str,
     lease_seconds: i64,
 ) -> Result<Option<SkillJob>, sqlx::Error> {
-    let row = sqlx::query_as::<_, (Uuid, Uuid, String, String, String, Value, Option<Value>, Option<Value>)>(
+    let now = now_rfc3339();
+    let lease_expires_at = OffsetDateTime::now_utc()
+        .checked_add(time::Duration::seconds(lease_seconds))
+        .expect("compute lease expiry")
+        .format(&Rfc3339)
+        .expect("format lease expiry as RFC3339");
+
+    let row = sqlx::query_as::<_, JobRow>(
         "WITH next_job AS (
              SELECT id FROM canvas_skill_jobs
              WHERE status = 'queued'
@@ -595,63 +623,64 @@ pub async fn acquire_next_job(
          )
          UPDATE canvas_skill_jobs j
          SET status = 'running',
-             started_at = COALESCE(j.started_at, now()),
-             updated_at = now(),
+             started_at = COALESCE(j.started_at, $2),
+             updated_at = $2,
              lease_owner = $1,
-             lease_expires_at = now() + make_interval(secs => $2)
+             lease_expires_at = $3
          FROM next_job
          WHERE j.id = next_job.id
-         RETURNING j.id, j.canvas_id, j.node_id, j.skill_id, j.status, j.input, j.result, j.error",
+         RETURNING j.id, j.canvas_id, j.node_id, j.skill_id, j.status, j.input, j.result, j.error, j.created_by",
     )
     .bind(owner)
-    .bind(lease_seconds as f64)
+    .bind(&now)
+    .bind(&lease_expires_at)
     .fetch_optional(pool)
     .await?;
 
-    Ok(row.map(|(id, canvas_id, node_id, skill_id, status, input, result, error)| SkillJob {
-        id, canvas_id, node_id, skill_id, status, input, result, error,
-    }))
+    Ok(row.map(row_to_job))
 }
 
-pub async fn complete_job(pool: &PgPool, id: Uuid, result: Value) -> Result<(), sqlx::Error> {
+pub async fn complete_job(pool: &PgPool, id: &str, result: Value) -> Result<(), sqlx::Error> {
+    let now = now_rfc3339();
     sqlx::query(
         "UPDATE canvas_skill_jobs
          SET status = 'done', result = $2, error = NULL,
-             finished_at = now(), updated_at = now(), lease_owner = NULL, lease_expires_at = NULL
+             finished_at = $3, updated_at = $3, lease_owner = NULL, lease_expires_at = NULL
          WHERE id = $1",
     )
     .bind(id)
     .bind(result)
+    .bind(&now)
     .execute(pool)
     .await?;
     Ok(())
 }
 
-pub async fn fail_job(pool: &PgPool, id: Uuid, error: Value) -> Result<(), sqlx::Error> {
+pub async fn fail_job(pool: &PgPool, id: &str, error: Value) -> Result<(), sqlx::Error> {
+    let now = now_rfc3339();
     sqlx::query(
         "UPDATE canvas_skill_jobs
          SET status = 'error', error = $2,
-             finished_at = now(), updated_at = now(), lease_owner = NULL, lease_expires_at = NULL
+             finished_at = $3, updated_at = $3, lease_owner = NULL, lease_expires_at = NULL
          WHERE id = $1",
     )
     .bind(id)
     .bind(error)
+    .bind(&now)
     .execute(pool)
     .await?;
     Ok(())
 }
 
-pub async fn get_job(pool: &PgPool, id: Uuid) -> Result<Option<SkillJob>, sqlx::Error> {
-    let row = sqlx::query_as::<_, (Uuid, Uuid, String, String, String, Value, Option<Value>, Option<Value>)>(
-        "SELECT id, canvas_id, node_id, skill_id, status, input, result, error
+pub async fn get_job(pool: &PgPool, id: &str) -> Result<Option<SkillJob>, sqlx::Error> {
+    let row = sqlx::query_as::<_, JobRow>(
+        "SELECT id, canvas_id, node_id, skill_id, status, input, result, error, created_by
          FROM canvas_skill_jobs WHERE id = $1",
     )
     .bind(id)
     .fetch_optional(pool)
     .await?;
-    Ok(row.map(|(id, canvas_id, node_id, skill_id, status, input, result, error)| SkillJob {
-        id, canvas_id, node_id, skill_id, status, input, result, error,
-    }))
+    Ok(row.map(row_to_job))
 }
 ```
 
@@ -1054,7 +1083,7 @@ async fn execute(state: &crate::AppState, job: &skill_jobs::SkillJob) -> Result<
 
     // Store deck.html as a text/html asset owned by the job creator.
     let asset = crate::assets::store::NewAsset::new(
-        job.created_by,
+        job.created_by.clone(),
         "text/html".to_string(),
         outcome.deck_html.into_bytes(),
     );
@@ -1070,7 +1099,7 @@ async fn execute(state: &crate::AppState, job: &skill_jobs::SkillJob) -> Result<
 ```
 
 Implementer notes:
-- `SkillJob` in Task 5 does not carry `created_by`; add a `created_by: Uuid` field to `SkillJob` and select it in `acquire_next_job` so the asset owner is correct. Update Task 5's struct + queries accordingly (add `created_by` to both the `RETURNING` and the `SELECT`, and to the tuple types).
+- `SkillJob` (Task 5) already carries `created_by: String` (baked in during T5 reconciliation); `render_job` receives `job: &skill_jobs::SkillJob`, so pass `job.created_by.clone()` into `NewAsset::new`. Confirm `NewAsset::new`'s owner param type is `String` (per `assets/store.rs`); if it takes `&str`, pass `&job.created_by` instead.
 - `ActiveConnection::from(active).provider()` returns an `OpenAiCompatibleProvider` (same call `load_ingest_provider` uses). Pass `&provider` straight into `render_deck`; no raw-cred accessors needed.
 
 - [ ] **Step 2: Spawn the worker in `bootstrap_state`**
@@ -1107,9 +1136,8 @@ git commit -m "feat(canvas): skill worker (lease loop + concurrency cap) + spawn
 use axum::extract::{Path, State};
 use axum::Json;
 use serde::Serialize;
-use uuid::Uuid;
 
-use crate::error::ApiError; // confirm the crate's error type/name
+use crate::http::error::ApiError; // TEXT-convention codebase: this is the error type (see tasks/store.rs)
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1121,17 +1149,18 @@ pub struct SkillJobStatus {
 
 pub async fn get_skill_job(
     State(state): State<crate::AppState>,
-    // confirm the auth extractor used elsewhere for current user id
+    // confirm the auth extractor used elsewhere for current user id (user.id is a String)
     user: crate::auth::CurrentUser,
-    Path(id): Path<Uuid>,
+    Path(id): Path<String>,
 ) -> Result<Json<SkillJobStatus>, ApiError> {
-    let job = crate::canvas::skill_jobs::get_job(&state.pool, id)
+    let job = crate::canvas::skill_jobs::get_job(&state.pool, &id)
         .await?
-        .ok_or_else(ApiError::not_found)?;
+        .ok_or_else(|| ApiError::not_found("unknown job"))?;
 
     // Ownership: only the creator may poll. Adjust if canvas-level ACL is required.
+    // Use the same not_found (never leak existence to non-owners).
     if job.created_by != user.id {
-        return Err(ApiError::not_found());
+        return Err(ApiError::not_found("unknown job"));
     }
 
     Ok(Json(SkillJobStatus {
@@ -1141,6 +1170,8 @@ pub async fn get_skill_job(
     }))
 }
 ```
+
+**Note:** confirm `ApiError`'s exact not-found constructor name/signature — `tasks/store.rs` uses `ApiError::bad_request("unknown task")` for a missing row, so if there is no `not_found`, use `ApiError::bad_request("unknown job")` for both branches (consistent non-leaking response). `get_job` returns `sqlx::Error` on the wire, so rely on the existing `impl From<sqlx::Error> for ApiError` (the `?` on the `.await`).
 
 - [ ] **Step 2: Mount the route**
 
