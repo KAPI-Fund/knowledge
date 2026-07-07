@@ -110,4 +110,15 @@ mod tests {
             assert_eq!(d.runtime, SkillRuntime::Builtin);
         }
     }
+
+    #[test]
+    fn loads_vendored_guizang_ppt_skill() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("skills");
+        let skills = SkillRegistry::load_from_dir(&dir).expect("load skills dir");
+        let reg = SkillRegistry::new(skills);
+        let ppt = reg.by_command("ppt").expect("ppt skill present");
+        assert_eq!(ppt.id, "guizang-ppt");
+        assert_eq!(ppt.runtime, SkillRuntime::LlmSkill);
+        assert!(ppt.requires_selection());
+    }
 }
