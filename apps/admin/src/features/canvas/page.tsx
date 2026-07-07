@@ -553,6 +553,9 @@ const NODE_SIZES: Record<CanvasNode["type"], { w: number; h: number }> = {
   ai_analyze: { w: 380, h: 360 },
   // Prompt on top + a (default square 1024x1024) generated image filling the rest.
   ai_image: { w: 340, h: 420 },
+  // Sandboxed iframe rendering a generated single-file HTML deck; sized to give the
+  // slide preview a usable viewport.
+  html: { w: 420, h: 340 },
 };
 
 function defaultSize(type: CanvasNode["type"]): { w: number; h: number } {

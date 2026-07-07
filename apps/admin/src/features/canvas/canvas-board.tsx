@@ -21,6 +21,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSystemSettingsQuery } from "../settings/queries";
 import { AiAnalyzeNode, type AiAnalyzeNodeData } from "./node-types/ai-analyze";
 import { AiImageNode, type AiImageNodeData } from "./node-types/ai-image";
+import { HtmlNode, type HtmlNodeData } from "./node-types/html";
 import { KbNode, type KbNodeData } from "./node-types/kb";
 import { NoteNode, type NoteNodeData } from "./node-types/note";
 import { SearchNode, type SearchNodeData } from "./node-types/search";
@@ -130,6 +131,17 @@ function ImageAdapter({ id, data, selected }: NodeProps) {
   );
 }
 
+function HtmlAdapter({ id, data, selected }: NodeProps) {
+  return (
+    <HtmlNode
+      data={data as unknown as HtmlNodeData}
+      nodeId={id}
+      index={indexOf(data)}
+      selected={selected}
+    />
+  );
+}
+
 const nodeTypes: NodeTypes = {
   note: NoteAdapter,
   url: UrlAdapter,
@@ -137,6 +149,7 @@ const nodeTypes: NodeTypes = {
   kb: KbAdapter,
   ai_analyze: AnalyzeAdapter,
   ai_image: ImageAdapter,
+  html: HtmlAdapter,
 };
 
 interface CanvasBoardProps {
