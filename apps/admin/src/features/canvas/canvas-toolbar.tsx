@@ -79,18 +79,16 @@ export function CanvasToolbar({ onAdd }: CanvasToolbarProps) {
                 Pick a knowledge base you can access to add it to the canvas.
               </DialogDescription>
             </DialogHeader>
-            <div className="px-6 pb-6">
-              <KbProjectPicker
-                onPick={(project) => {
-                  onAdd({
-                    node: { type: "kb", data: { projectId: project.id, projectName: project.name } },
-                    x: 0,
-                    y: 0,
-                  });
-                  setKbOpen(false);
-                }}
-              />
-            </div>
+            <KbProjectPicker
+              onPick={(project) => {
+                onAdd({
+                  node: { type: "kb", data: { projectId: project.id, projectName: project.name } },
+                  x: 0,
+                  y: 0,
+                });
+                setKbOpen(false);
+              }}
+            />
           </DialogContent>
         </Dialog>
       ) : null}
