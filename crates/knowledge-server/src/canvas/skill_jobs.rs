@@ -61,6 +61,29 @@ pub async fn create_job(pool: &PgPool, job: NewSkillJob) -> Result<String, sqlx:
     Ok(id)
 }
 
+/// Requeue jobs left mid-flight by a worker that died before completing them.
+///
+/// The lease held by a live worker never expires into a second worker (the lease is
+/// shorter than a configurable provider timeout, so live reclaim would double-execute
+/// the render). Instead we reclaim only at startup: any job still `running` when the
+/// process boots has no owner, so it is safe to requeue and clear its lease. Mirrors
+/// [`crate::tasks::recovery::recover_tasks`].
+pub async fn recover_skill_jobs(pool: &PgPool) -> Result<(), sqlx::Error> {
+    let now = now_rfc3339();
+    sqlx::query(
+        "UPDATE canvas_skill_jobs
+         SET status = 'queued',
+             updated_at = $1,
+             lease_owner = NULL,
+             lease_expires_at = NULL
+         WHERE status IN ('queued', 'running')",
+    )
+    .bind(&now)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 /// Lease the oldest queued job for `owner`, marking it running for `lease_seconds`.
 pub async fn acquire_next_job(
     pool: &PgPool,

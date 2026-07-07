@@ -56,6 +56,7 @@ pub async fn bootstrap_state(config: &AppConfig) -> anyhow::Result<AppState> {
     };
     tasks::recovery::recover_tasks(&state).await?;
     tasks::scheduler::spawn_scheduler(state.clone());
+    crate::canvas::skill_jobs::recover_skill_jobs(&state.pool).await?;
     crate::canvas::skill_worker::spawn_skill_worker(state.clone());
     projects::source_watch::spawn_source_watch_scheduler(state.clone());
     Ok(state)
