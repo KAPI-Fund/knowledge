@@ -8,4 +8,5 @@ pub struct AppState {
     pub cache: CacheStore,
     pub project_root: String,
     pub session_ttl_hours: u64,
+    pub skill_registry: crate::skills::SkillRegistry,
 }

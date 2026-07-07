@@ -4,6 +4,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 pub use descriptor::{InputSource, SkillDescriptor, SkillRuntime};
+use descriptor::{InputSpec, OutputSpec};
 
 /// In-memory registry of skills scanned from the skills directory at startup.
 #[derive(Debug, Clone, Default)]
@@ -59,6 +60,36 @@ impl SkillRegistry {
     }
 }
 
+/// The three formerly-hardcoded chat commands, folded into the registry as
+/// builtin records so dispatch is uniform (no per-skill if-branches).
+pub fn builtin_descriptors() -> Vec<SkillDescriptor> {
+    fn builtin(
+        id: &str,
+        command: &str,
+        name: &str,
+        description: &str,
+        node_type: &str,
+        source: InputSource,
+    ) -> SkillDescriptor {
+        SkillDescriptor {
+            id: id.to_string(),
+            command: command.to_string(),
+            name: name.to_string(),
+            description: description.to_string(),
+            runtime: SkillRuntime::Builtin,
+            entry: None,
+            input: InputSpec { source, required: false, argument_hint: None },
+            output: OutputSpec { node_type: node_type.to_string(), r#async: false },
+            dir: std::path::PathBuf::new(),
+        }
+    }
+    vec![
+        builtin("web-search", "search", "Web search", "Search the web and add a note", "search", InputSource::Argument),
+        builtin("ai-image", "image", "Image", "Generate an image from a prompt", "ai_image", InputSource::Argument),
+        builtin("ai-analyze", "analyze", "Analyze", "Analyze selected nodes", "ai_analyze", InputSource::Selection),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -68,5 +99,14 @@ mod tests {
         let dir = std::path::Path::new("/nonexistent/skills/dir/xyz");
         let skills = SkillRegistry::load_from_dir(dir).expect("no error");
         assert!(skills.is_empty());
+    }
+
+    #[test]
+    fn builtins_cover_the_three_legacy_commands() {
+        let reg = SkillRegistry::new(builtin_descriptors());
+        for cmd in ["search", "image", "analyze"] {
+            let d = reg.by_command(cmd).unwrap_or_else(|| panic!("missing {cmd}"));
+            assert_eq!(d.runtime, SkillRuntime::Builtin);
+        }
     }
 }
