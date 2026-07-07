@@ -31,6 +31,7 @@ pub fn router() -> Router<AppState> {
         )
         .route("/api/canvases/{id}/nodes/{node_id}/run", post(run_node_handler))
         .route("/api/canvases/{id}/chat", post(chat_handler))
+        .route("/api/canvas-skill-jobs/{id}", get(get_skill_job_handler))
         .route("/api/canvas/extract-url", post(extract_url_handler))
 }
 
@@ -134,6 +135,14 @@ async fn create_handler(
     }))
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillJobStatus {
+    pub status: String,
+    pub result: Option<serde_json::Value>,
+    pub error: Option<serde_json::Value>,
+}
+
 async fn get_handler(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -150,6 +159,26 @@ async fn get_handler(
         document,
         created_at: rec.created_at,
         updated_at: rec.updated_at,
+    }))
+}
+
+async fn get_skill_job_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<SkillJobStatus>, ApiError> {
+    let principal = resolve_principal(&state, &headers).await?;
+    let job = crate::canvas::skill_jobs::get_job(&state.pool, &id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("unknown job"))?;
+    // Only the creator may poll; never leak existence to others.
+    if job.created_by != principal.user_id {
+        return Err(ApiError::not_found("unknown job"));
+    }
+    Ok(Json(SkillJobStatus {
+        status: job.status,
+        result: job.result,
+        error: job.error,
     }))
 }
 
