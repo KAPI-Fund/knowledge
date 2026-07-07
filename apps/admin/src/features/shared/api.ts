@@ -1229,3 +1229,18 @@ export async function runWebSearch(input: { query: string; maxResults?: number }
     webSearchResponseSchema,
   );
 }
+
+const skillMetadataSchema = z.object({
+  command: z.string(),
+  name: z.string(),
+  description: z.string(),
+  requiresSelection: z.boolean(),
+  argumentHint: z.string().nullable().optional(),
+  outputNodeType: z.string(),
+});
+
+export type SkillMetadata = z.infer<typeof skillMetadataSchema>;
+
+export async function fetchSkills() {
+  return apiFetch("/api/skills", { method: "GET" }, z.array(skillMetadataSchema));
+}
