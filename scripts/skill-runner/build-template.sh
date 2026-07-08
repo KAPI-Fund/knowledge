@@ -20,11 +20,15 @@ echo ">> pushing $IMAGE"
 docker push "$IMAGE"
 
 echo ">> registering CubeSandbox template"
-# --expose-port/--probe 端口按 CubeSandbox 部署实际调整。
+# sandbox-code 的 envd 代理同时监听 49999 与 49983,两个端口都要暴露;
+# --probe 49999 让模板就绪探针打在 agent 端口上。--with-cube-ca=false 与
+# CubeSandbox 官方 sandbox-code 模板创建用法一致。
 cubemastercli tpl create-from-image \
   --image "$IMAGE" \
+  --with-cube-ca=false \
   --writable-layer-size 1G \
   --expose-port 49999 \
+  --expose-port 49983 \
   --probe 49999
 
 echo ">> done. 取输出里的 template_id,填进 skill-runner 的 CUBE_TEMPLATE_ID。"

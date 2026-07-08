@@ -12,7 +12,7 @@ func TestRenderCodexConfig(t *testing.T) {
 		`model_provider = "knowledge"`,
 		`base_url = "https://api.x/v1"`,
 		`env_key = "PROVIDER_API_KEY"`,
-		`wire_api = "chat"`,
+		`wire_api = "responses"`,
 		`requires_openai_auth = false`,
 	} {
 		if !contains(cfg, want) {

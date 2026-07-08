@@ -19,7 +19,7 @@ model_provider = "knowledge"
 name = "knowledge"
 base_url = "%s"
 env_key = "PROVIDER_API_KEY"
-wire_api = "chat"
+wire_api = "responses"
 requires_openai_auth = false
 `, p.Model, p.BaseURL)
 }

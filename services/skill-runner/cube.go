@@ -2,9 +2,14 @@ package main
 
 import (
 	"context"
+	"time"
 
 	cubesandbox "github.com/tencentcloud/CubeSandbox/sdk/go"
 )
+
+// sandboxTTL 是微 VM 的存活上限,必须大于 renderTimeout,否则 CubeMaster 会在
+// codex 还在跑时按默认 300s TTL 杀掉沙箱,流式连接被切断报 "unexpected EOF"。
+const sandboxTTL = renderTimeout + 60*time.Second
 
 // cubeFactory 用官方 SDK 每次 Create 一个真实微 VM。
 type cubeFactory struct {
@@ -19,7 +24,7 @@ func newCubeFactory(templateID string) (SandboxFactory, error) {
 }
 
 func (f *cubeFactory) Create(ctx context.Context) (Sandbox, error) {
-	sb, err := f.client.Create(ctx, cubesandbox.CreateOptions{TemplateID: f.templateID})
+	sb, err := f.client.Create(ctx, cubesandbox.CreateOptions{TemplateID: f.templateID, Timeout: sandboxTTL})
 	if err != nil {
 		return nil, err
 	}
