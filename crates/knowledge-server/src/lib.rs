@@ -44,8 +44,8 @@ pub async fn bootstrap_state(config: &AppConfig) -> anyhow::Result<AppState> {
     let cache = CacheStore::connect(&config.redis_url).await?;
     let skills_dir = std::env::var("KNOWLEDGE_SKILLS_DIR")
         .unwrap_or_else(|_| "/app/skills".to_string());
-    let mut descriptors = skills::builtin_descriptors();
-    descriptors.extend(skills::SkillRegistry::load_from_dir(std::path::Path::new(&skills_dir))?);
+    let descriptors =
+        skills::SkillRegistry::load_from_dir(std::path::Path::new(&skills_dir))?;
     let skill_registry = skills::SkillRegistry::new(descriptors);
     let executor: std::sync::Arc<dyn crate::canvas::executor::SkillExecutor> =
         std::sync::Arc::new(crate::canvas::executor::CubeExecutor::new(

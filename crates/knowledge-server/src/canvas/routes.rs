@@ -584,94 +584,43 @@ async fn chat_handler(
                     yield Ok(sse_error("content empty"));
                     return;
                 }
-                match descriptor.runtime {
-                    crate::skills::SkillRuntime::Builtin => match descriptor.command.as_str() {
-                        "search" => {
-                            if argument.is_empty() {
-                                yield Ok(sse_error("search query must not be empty"));
-                                return;
-                            }
-                            match run_search_skill(&stream_state, &argument).await {
-                                Ok(node) => {
-                                    yield Ok(
-                                        Event::default().event(skill_node_event_name()).data(
-                                            build_skill_node_done_payload(node, x, y).to_string(),
-                                        ),
-                                    );
-                                    yield Ok(Event::default().event("done").data("{}".to_string()));
-                                }
-                                Err(message) => yield Ok(sse_error(&message)),
-                            }
-                        }
-                        "image" => {
-                            if argument.is_empty() {
-                                yield Ok(sse_error("image prompt must not be empty"));
-                                return;
-                            }
-                            match run_image_skill(&stream_state, &user_id, &argument).await {
-                                Ok(node) => {
-                                    yield Ok(
-                                        Event::default().event(skill_node_event_name()).data(
-                                            build_skill_node_done_payload(node, x, y).to_string(),
-                                        ),
-                                    );
-                                    yield Ok(Event::default().event("done").data("{}".to_string()));
-                                }
-                                Err(message) => yield Ok(sse_error(&message)),
-                            }
-                        }
-                        "analyze" => {
-                            let node = build_analyze_node(&argument, &selected_ids);
-                            yield Ok(
-                                Event::default()
-                                    .event(skill_node_event_name())
-                                    .data(build_skill_node_done_payload(node, x, y).to_string()),
-                            );
-                            yield Ok(Event::default().event("done").data("{}".to_string()));
-                        }
-                        other => {
-                            yield Ok(sse_error(&format!("unknown builtin skill: {other}")));
-                        }
-                    },
-                    crate::skills::SkillRuntime::LlmSkill => {
-                        // Selection text reuses the same reader as plain chat context.
-                        let selection_text = plain_context.join("\n\n");
-                        let node_id = uuid::Uuid::new_v4().to_string();
-                        let input = json!({
-                            "selection": selection_text,
-                            "argument": argument,
-                        });
-                        let new_job = crate::canvas::skill_jobs::NewSkillJob {
-                            canvas_id,
-                            node_id,
-                            skill_id: descriptor.id.clone(),
-                            input,
-                            created_by: user_id.clone(),
-                        };
-                        let job_id = match crate::canvas::skill_jobs::create_job(
-                            &stream_state.pool,
-                            new_job,
-                        )
-                        .await
-                        {
-                            Ok(job_id) => job_id,
-                            Err(error) => {
-                                yield Ok(sse_error(&error.to_string()));
-                                return;
-                            }
-                        };
-                        let node = json!({
-                            "type": "html",
-                            "data": { "status": "running", "jobId": job_id }
-                        });
-                        yield Ok(
-                            Event::default().event(skill_node_event_name()).data(
-                                build_skill_node_done_payload(node, x, y).to_string(),
-                            ),
-                        );
-                        yield Ok(Event::default().event("done").data("{}".to_string()));
+                // Only LlmSkill descriptors reach dispatch (e.g. `/ppt`): create an
+                // async skill job and emit a running node the worker fills in later.
+                let selection_text = plain_context.join("\n\n");
+                let node_id = uuid::Uuid::new_v4().to_string();
+                let input = json!({
+                    "selection": selection_text,
+                    "argument": argument,
+                });
+                let new_job = crate::canvas::skill_jobs::NewSkillJob {
+                    canvas_id,
+                    node_id,
+                    skill_id: descriptor.id.clone(),
+                    input,
+                    created_by: user_id.clone(),
+                };
+                let job_id = match crate::canvas::skill_jobs::create_job(
+                    &stream_state.pool,
+                    new_job,
+                )
+                .await
+                {
+                    Ok(job_id) => job_id,
+                    Err(error) => {
+                        yield Ok(sse_error(&error.to_string()));
+                        return;
                     }
-                }
+                };
+                let node = json!({
+                    "type": "html",
+                    "data": { "status": "running", "jobId": job_id }
+                });
+                yield Ok(
+                    Event::default().event(skill_node_event_name()).data(
+                        build_skill_node_done_payload(node, x, y).to_string(),
+                    ),
+                );
+                yield Ok(Event::default().event("done").data("{}".to_string()));
             }
         }
     };
@@ -679,17 +628,7 @@ async fn chat_handler(
     Ok(Sse::new(event_stream).keep_alive(KeepAlive::default()))
 }
 
-/// `/search` skill: run web search and return a `note` node carrying the
-/// results as markdown (no URL of its own).
-async fn run_search_skill(state: &AppState, query: &str) -> Result<serde_json::Value, String> {
-    let markdown = run_web_search_markdown(state, query).await?;
-    Ok(json!({
-        "type": "note",
-        "data": { "title": format!("Search: {query}"), "markdown": markdown }
-    }))
-}
-
-/// `/image` skill: generate an image, persist it as an asset, and return an
+/// Generate an image, persist it as an asset, and return an
 /// `ai_image` node referencing the asset by id + url.
 async fn run_image_skill(
     state: &AppState,
@@ -736,22 +675,6 @@ fn build_image_node(
     })
 }
 
-/// `/analyze` skill: build an idle `ai_analyze` node referencing the selected
-/// nodes; the client wires the reference edges.
-fn build_analyze_node(prompt: &str, selected_ids: &[String]) -> serde_json::Value {
-    json!({
-        "type": "ai_analyze",
-        "data": {
-            "prompt": prompt,
-            "versions": [],
-            "activeVersionId": null,
-            "status": "idle",
-            "error": null,
-            "sourceNodeIds": selected_ids
-        }
-    })
-}
-
 // ---------------------------------------------------------------------------
 // URL extraction: fetch a page and return readable markdown
 // ---------------------------------------------------------------------------
@@ -762,7 +685,7 @@ struct ExtractUrlRequest {
 }
 
 /// Run web search for `query` and format the hits as markdown. Used by the
-/// `/search` chat skill and the search node SSE run path.
+/// search node SSE run path.
 async fn run_web_search_markdown(state: &AppState, query: &str) -> Result<String, String> {
     let config = crate::web_search::config::load_web_search_config(state)
         .await
@@ -912,15 +835,6 @@ mod tests {
         assert_eq!(parse_slash_command("/ppt swiss"), (Some("ppt"), "swiss"));
         assert_eq!(parse_slash_command("/ppt"), (Some("ppt"), ""));
         assert_eq!(parse_slash_command("no command"), (None, "no command"));
-    }
-
-    #[test]
-    fn build_analyze_node_references_selected_ids() {
-        let node = build_analyze_node("summarize", &["a".to_string(), "b".to_string()]);
-        assert_eq!(node["type"], "ai_analyze");
-        assert_eq!(node["data"]["prompt"], "summarize");
-        assert_eq!(node["data"]["sourceNodeIds"][0], "a");
-        assert_eq!(node["data"]["status"], "idle");
     }
 
     #[test]
