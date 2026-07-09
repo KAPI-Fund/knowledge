@@ -122,6 +122,102 @@ describe("ChatPanel slash menu", () => {
   });
 });
 
+describe("ChatPanel slash menu keyboard navigation", () => {
+  it("moves the highlight with ArrowDown / ArrowUp", () => {
+    render(
+      <ChatPanel
+        canvasId="c1"
+        selectedNodeIds={["a"]}
+        onSkillNode={() => {}}
+        placementOrigin={origin}
+        onBeforeSend={async () => true}
+      />,
+    );
+    const input = screen.getByPlaceholderText("Ask a question");
+    fireEvent.change(input, { target: { value: "/" } });
+
+    const ppt = screen.getByRole("option", { name: /PPT 生成/ });
+    const search = screen.getByRole("option", { name: /Web search/ });
+    // First item starts highlighted.
+    expect(ppt).toHaveAttribute("data-selected", "true");
+
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(search).toHaveAttribute("data-selected", "true");
+    expect(ppt).not.toHaveAttribute("data-selected", "true");
+
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+    expect(ppt).toHaveAttribute("data-selected", "true");
+  });
+
+  it("chooses the highlighted command with Enter", () => {
+    render(
+      <ChatPanel
+        canvasId="c1"
+        selectedNodeIds={["a"]}
+        onSkillNode={() => {}}
+        placementOrigin={origin}
+        onBeforeSend={async () => true}
+      />,
+    );
+    const input = screen.getByPlaceholderText("Ask a question") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "/" } });
+    fireEvent.keyDown(input, { key: "ArrowDown" }); // move to /search
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(input.value).toBe("/search ");
+  });
+
+  it("does not send a message when Enter chooses a command", () => {
+    render(
+      <ChatPanel
+        canvasId="c1"
+        selectedNodeIds={["a"]}
+        onSkillNode={() => {}}
+        placementOrigin={origin}
+        onBeforeSend={async () => true}
+      />,
+    );
+    const input = screen.getByPlaceholderText("Ask a question");
+    fireEvent.change(input, { target: { value: "/" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(streamCanvasChat).not.toHaveBeenCalled();
+  });
+
+  it("closes the menu with Escape", () => {
+    render(
+      <ChatPanel
+        canvasId="c1"
+        selectedNodeIds={["a"]}
+        onSkillNode={() => {}}
+        placementOrigin={origin}
+        onBeforeSend={async () => true}
+      />,
+    );
+    const input = screen.getByPlaceholderText("Ask a question");
+    fireEvent.change(input, { target: { value: "/" } });
+    expect(screen.getByText("/ppt")).toBeInTheDocument();
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(screen.queryByText("/ppt")).not.toBeInTheDocument();
+  });
+
+  it("does not choose a blocked command on Enter", () => {
+    render(
+      <ChatPanel
+        canvasId="c1"
+        selectedNodeIds={[]}
+        onSkillNode={() => {}}
+        placementOrigin={origin}
+        onBeforeSend={async () => true}
+      />,
+    );
+    const input = screen.getByPlaceholderText("Ask a question") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "/" } });
+    // Highlight starts on /ppt which requires a selection (blocked here).
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(input.value).toBe("/");
+    expect(screen.getByText("/ppt")).toBeInTheDocument();
+  });
+});
+
 describe("ChatPanel skill submit", () => {
   it("calls onSkillNode when a search skill returns a node", async () => {
     const onSkillNode = vi.fn();

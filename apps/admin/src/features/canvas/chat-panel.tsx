@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import { uuid } from "@/lib/uuid";
+import type { SkillMetadata } from "../shared/api";
 
 import { streamCanvasChat } from "./stream";
 import { useSkillsQuery } from "./use-skills-query";
@@ -49,6 +50,7 @@ export function ChatPanel({
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [menuDismissed, setMenuDismissed] = useState(false);
+  const [highlightedIndex, setHighlightedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const skills = useSkillsQuery();
@@ -71,10 +73,25 @@ export function ChatPanel({
     (skill) => `/${skill.command}` === input.trimEnd().split(" ")[0],
   );
 
+  // A skill needing a selection can't be chosen when nothing is selected.
+  const isBlocked = (skill: SkillMetadata) => skill.requiresSelection && !hasSelection;
+
+  // Reset the highlight to the top whenever the visible matches change.
+  useEffect(() => {
+    setHighlightedIndex(0);
+  }, [commandToken, menuOpen]);
+
   const chooseSkill = (command: string) => {
     setInput(`/${command} `);
     setMenuDismissed(true);
     inputRef.current?.focus();
+  };
+
+  const chooseHighlighted = () => {
+    const skill = matches[highlightedIndex];
+    if (skill && !isBlocked(skill)) {
+      chooseSkill(skill.command);
+    }
   };
 
   const appendAssistantDelta = (id: string, text: string) => {
@@ -169,11 +186,20 @@ export function ChatPanel({
         >
           {menuOpen ? (
             <div className="absolute bottom-full left-0 right-0 mb-2 overflow-hidden rounded-md border border-border bg-popover shadow-md">
-              <Command shouldFilter={false}>
+              <Command
+                shouldFilter={false}
+                value={matches[highlightedIndex]?.command ?? ""}
+                onValueChange={(value) => {
+                  const index = matches.findIndex((skill) => skill.command === value);
+                  if (index >= 0) {
+                    setHighlightedIndex(index);
+                  }
+                }}
+              >
                 <CommandList>
                   <CommandEmpty>无匹配技能</CommandEmpty>
                   {matches.map((skill) => {
-                    const blocked = skill.requiresSelection && !hasSelection;
+                    const blocked = isBlocked(skill);
                     return (
                       <CommandItem
                         key={skill.command}
@@ -204,6 +230,24 @@ export function ChatPanel({
             value={input}
             onChange={(event) => setInput(event.target.value)}
             onKeyDown={(event) => {
+              if (menuOpen && matches.length > 0) {
+                if (event.key === "ArrowDown") {
+                  event.preventDefault();
+                  setHighlightedIndex((i) => (i + 1) % matches.length);
+                  return;
+                }
+                if (event.key === "ArrowUp") {
+                  event.preventDefault();
+                  setHighlightedIndex((i) => (i - 1 + matches.length) % matches.length);
+                  return;
+                }
+                if (event.key === "Enter") {
+                  // Choose the highlighted command instead of submitting the form.
+                  event.preventDefault();
+                  chooseHighlighted();
+                  return;
+                }
+              }
               if (event.key === "Escape" && menuOpen) {
                 event.preventDefault();
                 setMenuDismissed(true);
