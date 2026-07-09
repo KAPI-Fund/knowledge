@@ -11,6 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select } from "@/components/ui/select";
 import {
   useGrantCandidatesQuery,
@@ -89,33 +90,35 @@ export function ManageAccessDialog({
         <div className="flex flex-col gap-4">
           <div className="rounded-lg border border-border">
             {grantees.data?.members.length ? (
-              <ul className="divide-y divide-border">
-                {grantees.data.members.map((member) => (
-                  <li
-                    key={member.userId}
-                    className="flex items-center justify-between gap-2 px-3 py-2"
-                  >
-                    <div className="flex min-w-0 items-center gap-2">
-                      <span className="truncate text-sm font-medium">{member.username}</span>
-                      <Badge variant={ROLE_VARIANT[member.role] ?? "outline"}>
-                        {member.role}
-                      </Badge>
-                    </div>
-                    {member.role === "owner" ? null : (
-                      <Button
-                        type="button"
-                        size="icon-sm"
-                        variant="ghost"
-                        aria-label={`Remove ${member.username}`}
-                        onClick={() => removeGrantee(member.userId)}
-                        className="text-muted-foreground hover:text-destructive"
-                      >
-                        <Trash2 className="size-4" />
-                      </Button>
-                    )}
-                  </li>
-                ))}
-              </ul>
+              <ScrollArea className="max-h-64">
+                <ul className="divide-y divide-border">
+                  {grantees.data.members.map((member) => (
+                    <li
+                      key={member.userId}
+                      className="flex items-center justify-between gap-2 px-3 py-2"
+                    >
+                      <div className="flex min-w-0 items-center gap-2">
+                        <span className="truncate text-sm font-medium">{member.username}</span>
+                        <Badge variant={ROLE_VARIANT[member.role] ?? "outline"}>
+                          {member.role}
+                        </Badge>
+                      </div>
+                      {member.role === "owner" ? null : (
+                        <Button
+                          type="button"
+                          size="icon-sm"
+                          variant="ghost"
+                          aria-label={`Remove ${member.username}`}
+                          onClick={() => removeGrantee(member.userId)}
+                          className="text-muted-foreground hover:text-destructive"
+                        >
+                          <Trash2 className="size-4" />
+                        </Button>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </ScrollArea>
             ) : (
               <p className="px-3 py-6 text-center text-sm text-muted-foreground">
                 No members have access yet.

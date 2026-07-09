@@ -58,9 +58,10 @@ describe("lint page", () => {
       projectId: "project-1",
       mode: "structural",
     });
-    expect(await screen.findByText("broken-link")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "broken-link" })).toBeInTheDocument();
+    expect(screen.getByText("Issue Detail")).toBeInTheDocument();
     expect(screen.getByText("wiki/concepts/attention.md")).toBeInTheDocument();
-    expect(screen.getByText("Broken link: [[missing-page]] - target page not found.")).toBeInTheDocument();
+    expect(screen.getAllByText("Broken link: [[missing-page]] - target page not found.")).toHaveLength(2);
   });
 
   it("runs semantic lint and renders semantic issues", async () => {
@@ -103,8 +104,10 @@ describe("lint page", () => {
       projectId: "project-1",
       mode: "semantic",
     });
-    expect(await screen.findByRole("heading", { name: "semantic" })).toBeInTheDocument();
-    expect(screen.getByText("[contradiction] Two pages describe attention with conflicting scope.")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "semantic" })).toBeInTheDocument();
+    expect(
+      screen.getAllByText("[contradiction] Two pages describe attention with conflicting scope."),
+    ).toHaveLength(2);
     expect(screen.getByText("wiki/concepts/attention.md")).toBeInTheDocument();
     expect(screen.getByText("wiki/concepts/attention-mechanism.md")).toBeInTheDocument();
   });

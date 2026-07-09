@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/switch";
 import type { ProviderConnection } from "../../shared/api";
 import {
@@ -233,11 +234,13 @@ export function LlmConnectionsSection() {
         {connections.length === 0 && !draft ? (
           <p className="text-sm text-muted-foreground">No connections configured yet.</p>
         ) : null}
-        <ul className="grid gap-2">
-          {connections.map((c) => (
-            <ConnectionRow key={c.id} connection={c} />
-          ))}
-        </ul>
+        <ScrollArea className="max-h-[420px] pr-2">
+          <ul className="grid gap-2">
+            {connections.map((c) => (
+              <ConnectionRow key={c.id} connection={c} />
+            ))}
+          </ul>
+        </ScrollArea>
         {draft ? (
           <div className="rounded-lg border border-dashed p-3">
             <ConnectionForm fields={draft} onChange={setDraft} />

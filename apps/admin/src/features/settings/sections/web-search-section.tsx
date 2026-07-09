@@ -4,6 +4,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -331,19 +332,21 @@ export function WebSearchSection() {
             </Alert>
           ) : null}
           {runWebSearch.data?.results.length ? (
-            <ul className="grid gap-3">
-              {runWebSearch.data.results.map((result) => (
-                <li key={result.url} className="rounded border p-3">
-                  <a className="font-medium" href={result.url} rel="noreferrer" target="_blank">
-                    {result.title}
-                  </a>
-                  {result.source ? (
-                    <p className="text-xs text-muted-foreground">{result.source}</p>
-                  ) : null}
-                  {result.snippet ? <p className="mt-1 text-sm">{result.snippet}</p> : null}
-                </li>
-              ))}
-            </ul>
+            <ScrollArea className="max-h-72 pr-2">
+              <ul className="grid gap-3">
+                {runWebSearch.data.results.map((result) => (
+                  <li key={result.url} className="rounded border p-3">
+                    <a className="font-medium" href={result.url} rel="noreferrer" target="_blank">
+                      {result.title}
+                    </a>
+                    {result.source ? (
+                      <p className="text-xs text-muted-foreground">{result.source}</p>
+                    ) : null}
+                    {result.snippet ? <p className="mt-1 text-sm">{result.snippet}</p> : null}
+                  </li>
+                ))}
+              </ul>
+            </ScrollArea>
           ) : null}
         </div>
       </CardContent>

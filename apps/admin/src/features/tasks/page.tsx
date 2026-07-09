@@ -123,13 +123,13 @@ export function TasksPage() {
   );
 
   return (
-    <div className="grid gap-4">
+    <div className="flex h-full min-h-0 flex-col gap-4">
       <PageHeader
         description="Inspect queued work, retry failed jobs, and examine task payloads."
         title="Tasks"
       />
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1.4fr)_380px]">
-        <div className="grid gap-3">
+      <div className="grid min-h-0 flex-1 gap-6 xl:grid-cols-[minmax(0,1.4fr)_380px]">
+        <div className="flex min-h-0 flex-col gap-3">
           {tasks.error ? (
             <RouteStatePane
               description={normalizeAppError(tasks.error).message}
@@ -142,18 +142,19 @@ export function TasksPage() {
               data={taskList}
               emptyMessage="No tasks have been queued for this project yet."
               isLoading={tasks.isLoading}
+              fillHeight
             />
           )}
         </div>
 
-        <Card>
+        <Card className="flex min-h-0 flex-col">
           <CardHeader>
             <CardTitle>Task Detail</CardTitle>
             <CardDescription>
               Selected task payload, status, and execution metadata.
             </CardDescription>
           </CardHeader>
-          <CardContent className="grid gap-4">
+          <CardContent className="grid min-h-0 flex-1 gap-4 overflow-auto">
             {!selectedTaskId ? (
               <EmptyState
                 description="Select a task from the table to inspect its payload and result."

@@ -1,6 +1,7 @@
 import { AlertTriangle, Lightbulb, Link2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { knowledgeGapKey } from "./graph-insights";
 import type { KnowledgeGap, SurprisingConnection } from "./types";
 
@@ -41,37 +42,39 @@ export function GraphInsightsPanel({
           {surprising.length === 0 ? (
             <p className="text-xs text-muted-foreground">No surprising connections in the current view.</p>
           ) : (
-            <ul className="grid gap-2">
-              {surprising.map((item) => {
-                const active = highlightedNodes.has(item.source.id) && highlightedNodes.has(item.target.id);
-                return (
-                  <li key={item.key}>
-                    <div
-                      className={`rounded-md border p-2 ${active ? "border-sky-400 bg-sky-50" : ""}`}
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <button
-                          className="text-left font-medium hover:underline"
-                          onClick={() => onHighlight(new Set([item.source.id, item.target.id]))}
-                          type="button"
-                        >
-                          {item.source.label} → {item.target.label}
-                        </button>
-                        <button
-                          aria-label="Dismiss insight"
-                          className="text-muted-foreground hover:text-foreground"
-                          onClick={() => onDismiss(item.key, new Set([item.source.id, item.target.id]))}
-                          type="button"
-                        >
-                          <X className="h-3 w-3" />
-                        </button>
+            <ScrollArea className="max-h-56 pr-2">
+              <ul className="grid gap-2">
+                {surprising.map((item) => {
+                  const active = highlightedNodes.has(item.source.id) && highlightedNodes.has(item.target.id);
+                  return (
+                    <li key={item.key}>
+                      <div
+                        className={`rounded-md border p-2 ${active ? "border-sky-400 bg-sky-50" : ""}`}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <button
+                            className="text-left font-medium hover:underline"
+                            onClick={() => onHighlight(new Set([item.source.id, item.target.id]))}
+                            type="button"
+                          >
+                            {item.source.label} → {item.target.label}
+                          </button>
+                          <button
+                            aria-label="Dismiss insight"
+                            className="text-muted-foreground hover:text-foreground"
+                            onClick={() => onDismiss(item.key, new Set([item.source.id, item.target.id]))}
+                            type="button"
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </div>
+                        <p className="mt-1 text-xs text-muted-foreground">{item.reasons.join("; ")}</p>
                       </div>
-                      <p className="mt-1 text-xs text-muted-foreground">{item.reasons.join("; ")}</p>
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
+                    </li>
+                  );
+                })}
+              </ul>
+            </ScrollArea>
           )}
         </section>
 
@@ -83,36 +86,38 @@ export function GraphInsightsPanel({
           {gaps.length === 0 ? (
             <p className="text-xs text-muted-foreground">No knowledge gaps detected in the current view.</p>
           ) : (
-            <ul className="grid gap-2">
-              {gaps.map((gap) => {
-                const key = knowledgeGapKey(gap);
-                return (
-                  <li key={key}>
-                    <div className="rounded-md border p-2">
-                      <div className="flex items-start justify-between gap-2">
-                        <button
-                          className="text-left font-medium hover:underline"
-                          onClick={() => onHighlight(new Set(gap.nodeIds))}
-                          type="button"
-                        >
-                          {gap.title}
-                        </button>
-                        <button
-                          aria-label="Dismiss insight"
-                          className="text-muted-foreground hover:text-foreground"
-                          onClick={() => onDismiss(key, new Set(gap.nodeIds))}
-                          type="button"
-                        >
-                          <X className="h-3 w-3" />
-                        </button>
+            <ScrollArea className="max-h-56 pr-2">
+              <ul className="grid gap-2">
+                {gaps.map((gap) => {
+                  const key = knowledgeGapKey(gap);
+                  return (
+                    <li key={key}>
+                      <div className="rounded-md border p-2">
+                        <div className="flex items-start justify-between gap-2">
+                          <button
+                            className="text-left font-medium hover:underline"
+                            onClick={() => onHighlight(new Set(gap.nodeIds))}
+                            type="button"
+                          >
+                            {gap.title}
+                          </button>
+                          <button
+                            aria-label="Dismiss insight"
+                            className="text-muted-foreground hover:text-foreground"
+                            onClick={() => onDismiss(key, new Set(gap.nodeIds))}
+                            type="button"
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </div>
+                        <p className="mt-1 text-xs text-muted-foreground">{gap.description}</p>
+                        <p className="mt-1 text-xs text-muted-foreground/80">{gap.suggestion}</p>
                       </div>
-                      <p className="mt-1 text-xs text-muted-foreground">{gap.description}</p>
-                      <p className="mt-1 text-xs text-muted-foreground/80">{gap.suggestion}</p>
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
+                    </li>
+                  );
+                })}
+              </ul>
+            </ScrollArea>
           )}
         </section>
       </CardContent>

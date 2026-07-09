@@ -1,9 +1,11 @@
-import { useState } from "react";
+import type { ColumnDef } from "@tanstack/react-table";
+import { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 
 import { ProjectFileLink } from "../shared/file-links";
 
 import { EmptyState } from "@/components/layout/empty-state";
+import { DataTable } from "@/components/shared/data-table";
 import { PageHeader } from "@/components/shared/page-header";
 import { StatusPill } from "@/components/shared/status-pill";
 import { Button } from "@/components/ui/button";
@@ -13,6 +15,8 @@ import { Input } from "@/components/ui/input";
 import { useProjectTasksQuery } from "../tasks/queries";
 
 import { useCreateDeepResearchTaskMutation } from "./queries";
+
+type ResearchTask = NonNullable<ReturnType<typeof useProjectTasksQuery>["data"]>[number];
 
 function renderTaskResult(
   task: { result?: unknown; error?: unknown },
@@ -63,9 +67,60 @@ export function DeepResearchPage() {
   const createTask = useCreateDeepResearchTaskMutation();
   const tasksQuery = useProjectTasksQuery(projectId);
   const tasks = (tasksQuery.data ?? []).filter((task) => task.taskType === "project.deep_research");
+  const [selectedId, setSelectedId] = useState("");
+
+  useEffect(() => {
+    if (!selectedId && tasks[0]?.id) {
+      setSelectedId(tasks[0].id);
+    }
+  }, [selectedId, tasks]);
+
+  const selected = tasks.find((task) => task.id === selectedId) ?? null;
+
+  const columns = useMemo<ColumnDef<ResearchTask>[]>(
+    () => [
+      {
+        accessorKey: "status",
+        header: "Status",
+        cell: ({ row }) => <StatusPill value={row.original.status} />,
+      },
+      {
+        accessorKey: "title",
+        header: "Title",
+        cell: ({ row }) => (
+          <button
+            className="text-left font-medium text-foreground underline-offset-4 hover:underline"
+            onClick={() => setSelectedId(row.original.id)}
+            type="button"
+          >
+            {row.original.title}
+          </button>
+        ),
+      },
+      {
+        accessorKey: "updatedAt",
+        header: "Updated",
+        cell: ({ row }) => (
+          <span className="text-sm text-muted-foreground">{row.original.updatedAt ?? "—"}</span>
+        ),
+      },
+      {
+        id: "actions",
+        header: "",
+        cell: ({ row }) => (
+          <div className="flex justify-end">
+            <Button onClick={() => setSelectedId(row.original.id)} size="sm" variant="outline">
+              Inspect
+            </Button>
+          </div>
+        ),
+      },
+    ],
+    [],
+  );
 
   return (
-    <div className="grid gap-6">
+    <div className="flex h-full min-h-0 flex-col gap-6">
       <PageHeader
         description="Run a deep research task: fan-out search queries against the configured provider, synthesize a wiki page, save it under wiki/queries/."
         title="Deep Research"
@@ -120,30 +175,41 @@ export function DeepResearchPage() {
         </CardContent>
       </Card>
 
-      {tasks.length ? (
-        <div className="grid gap-3">
-          {tasks.map((task) => (
-            <Card key={task.id}>
-              <CardHeader>
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div className="space-y-1">
-                    <CardTitle>{task.title}</CardTitle>
-                    <CardDescription>
-                      Updated {task.updatedAt ?? "—"} · created {task.createdAt ?? "—"}
-                    </CardDescription>
-                  </div>
-                  <StatusPill value={task.status} />
+      <div className="grid min-h-0 flex-1 gap-6 xl:grid-cols-[minmax(0,1.4fr)_380px]">
+        <DataTable
+          columns={columns}
+          data={tasks}
+          emptyMessage="No research tasks yet for this project."
+          isLoading={tasksQuery.isLoading}
+          fillHeight
+        />
+
+        <Card className="flex min-h-0 flex-col">
+          <CardHeader>
+            <CardTitle>Research Detail</CardTitle>
+            <CardDescription>Selected research task status and result.</CardDescription>
+          </CardHeader>
+          <CardContent className="grid min-h-0 flex-1 gap-4 overflow-auto">
+            {selected ? (
+              <div className="grid gap-3">
+                <div className="flex flex-wrap items-center gap-3">
+                  <StatusPill value={selected.status} />
+                  <span className="text-sm font-medium">{selected.title}</span>
                 </div>
-              </CardHeader>
-              <CardContent className="grid gap-2 text-sm">
-                {renderTaskResult(task, projectId)}
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-      ) : (
-        <EmptyState description="No research tasks yet for this project." title="No research" />
-      )}
+                <p className="text-xs text-muted-foreground">
+                  Updated {selected.updatedAt ?? "—"} · created {selected.createdAt ?? "—"}
+                </p>
+                <div className="grid gap-2 text-sm">{renderTaskResult(selected, projectId)}</div>
+              </div>
+            ) : (
+              <EmptyState
+                description="Select a research task from the table to inspect its result."
+                title="No task selected"
+              />
+            )}
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }

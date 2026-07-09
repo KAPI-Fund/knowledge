@@ -28,6 +28,10 @@ type DataTableProps<TData, TValue> = {
   emptyMessage?: string;
   isLoading?: boolean;
   pageSize?: number;
+  // When true the table fills its parent's height and the rows scroll inside a
+  // bounded box (sticky header, pagination pinned to the bottom) instead of
+  // growing the page. Use inside a height-constrained flex/grid cell.
+  fillHeight?: boolean;
 };
 
 export function DataTable<TData, TValue>({
@@ -36,6 +40,7 @@ export function DataTable<TData, TValue>({
   emptyMessage = "No results.",
   isLoading = false,
   pageSize = 10,
+  fillHeight = false,
 }: DataTableProps<TData, TValue>) {
   const [sorting, setSorting] = useState<SortingState>([]);
 
@@ -53,10 +58,15 @@ export function DataTable<TData, TValue>({
   const rows = table.getRowModel().rows;
 
   return (
-    <div className="grid gap-3">
-      <div className="overflow-hidden rounded-md border border-border">
+    <div className={cn("grid gap-3", fillHeight && "flex h-full min-h-0 flex-col")}>
+      <div
+        className={cn(
+          "rounded-md border border-border",
+          fillHeight ? "min-h-0 flex-1 overflow-auto" : "overflow-hidden",
+        )}
+      >
         <Table>
-          <TableHeader>
+          <TableHeader className={cn(fillHeight && "sticky top-0 z-10")}>
             {table.getHeaderGroups().map((headerGroup) => (
               <TableRow className="bg-muted hover:bg-muted" key={headerGroup.id}>
                 {headerGroup.headers.map((header) => {

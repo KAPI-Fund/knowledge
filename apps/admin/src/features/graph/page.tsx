@@ -132,7 +132,7 @@ function GraphView({ projectId }: { projectId: string }) {
   const graphError = graph.error ? normalizeAppError(graph.error) : null;
 
   return (
-    <div className="grid gap-6">
+    <div className="flex h-full min-h-0 flex-col gap-6">
       <PageHeader
         description="Explore the project knowledge graph: search, filter, and inspect node neighborhoods."
         title="Graph"
@@ -199,8 +199,8 @@ function GraphView({ projectId }: { projectId: string }) {
       ) : graph.isLoading && !graph.data ? (
         <RouteStatePane description="Loading project graph." state="loading" title="Graph" />
       ) : (
-        <div className="graph-layout">
-          <div ref={graphContainerRef} className="relative h-[680px] overflow-hidden rounded-lg border">
+        <div className="graph-layout min-h-0 flex-1">
+          <div ref={graphContainerRef} className="relative h-[680px] overflow-hidden rounded-lg border xl:h-full xl:min-h-0">
             {searched.nodes.length > 0 ? (
               <>
                 <GraphCanvas
@@ -255,7 +255,7 @@ function GraphView({ projectId }: { projectId: string }) {
             ) : null}
           </div>
 
-          <div className="grid gap-6">
+          <div className="grid gap-6 xl:h-full xl:min-h-0 xl:overflow-y-auto xl:pr-1">
             {filters.hiddenNodeIds.size > 0 ? (
               <div className="rounded-lg border p-3 text-xs">
                 <div className="mb-2 font-medium text-muted-foreground">Hidden nodes</div>
