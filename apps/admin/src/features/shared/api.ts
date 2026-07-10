@@ -1033,6 +1033,77 @@ export async function createLintTask(input: {
   );
 }
 
+const lintItemSchema = z.object({
+  id: z.string(),
+  issueType: z.string(),
+  severity: z.string(),
+  page: z.string(),
+  detail: z.string(),
+  affectedPages: z.array(z.string()).optional(),
+  brokenTarget: z.string().optional(),
+  suggestedTarget: z.string().optional(),
+  suggestedSource: z.string().optional(),
+  mode: z.string(),
+  createdAt: z.string(),
+});
+
+export type LintItem = z.infer<typeof lintItemSchema>;
+
+export async function listLintItems(projectId: string) {
+  const response = await apiFetch(
+    `/api/projects/${projectId}/lint-items`,
+    { method: "GET" },
+    z.object({ items: z.array(lintItemSchema) }),
+  );
+  return response.items;
+}
+
+export async function fixLintItem(input: { projectId: string; itemId: string }) {
+  return apiFetch(
+    `/api/projects/${input.projectId}/lint-items/${input.itemId}/fix`,
+    { method: "POST", headers: csrfHeader() },
+    z.object({
+      action: z.string(),
+      changedPaths: z.array(z.string()).optional(),
+    }),
+  );
+}
+
+export async function deleteLintOrphan(input: { projectId: string; itemId: string }) {
+  return apiFetch(
+    `/api/projects/${input.projectId}/lint-items/${input.itemId}/delete-orphan`,
+    { method: "POST", headers: csrfHeader() },
+    z.object({
+      deletedPaths: z.array(z.string()),
+      rewrittenFiles: z.number(),
+    }),
+  );
+}
+
+export async function dismissLintItems(input: { projectId: string; ids: string[] }) {
+  return apiFetch(
+    `/api/projects/${input.projectId}/lint-items:dismiss`,
+    {
+      method: "POST",
+      headers: csrfHeader(),
+      body: JSON.stringify({ ids: input.ids }),
+    },
+    z.object({ dismissedIds: z.array(z.string()) }),
+  );
+}
+
+export async function sendLintItemsToReview(input: { projectId: string; ids: string[] }) {
+  return apiFetch(
+    `/api/projects/${input.projectId}/lint-items:send-to-review`,
+    {
+      method: "POST",
+      headers: csrfHeader(),
+      body: JSON.stringify({ ids: input.ids }),
+    },
+    z.object({ reviewIds: z.array(z.string()) }),
+  );
+}
+
 export async function retryProjectTask(input: { projectId: string; taskId: string }) {
   return apiFetch(
     `/api/projects/${input.projectId}/tasks/${input.taskId}/retry`,

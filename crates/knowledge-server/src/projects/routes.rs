@@ -34,7 +34,12 @@ use knowledge_core::project::files::{
 use knowledge_core::project::dedup_store::{
     add_not_duplicate, load_dedup_store, load_not_duplicates, save_dedup_store,
 };
-use knowledge_core::project::reviews::load_reviews;
+use knowledge_core::project::lint_fixes::{
+    append_wikilink, ensure_broken_link_stub, rewrite_wikilink_target,
+};
+use knowledge_core::project::lint_items::{LintItem, load_lint_items, remove_lint_items};
+use knowledge_core::project::reviews::{ReviewItem, ReviewOption, load_reviews, save_reviews};
+use knowledge_core::project::root::ProjectRoot;
 use knowledge_core::project::wiki_pages::{
     WikiPageError, delete_wiki_pages_with_refs, save_wiki_page,
 };
@@ -127,6 +132,26 @@ pub fn router() -> Router<AppState> {
             "/api/projects/{project_id}/lint-tasks",
             post(create_lint_task_handler),
         )
+        .route(
+            "/api/projects/{project_id}/lint-items",
+            get(list_lint_items_handler),
+        )
+        .route(
+            "/api/projects/{project_id}/lint-items/{item_id}/fix",
+            post(fix_lint_item_handler),
+        )
+        .route(
+            "/api/projects/{project_id}/lint-items/{item_id}/delete-orphan",
+            post(delete_lint_orphan_handler),
+        )
+        .route(
+            "/api/projects/{project_id}/lint-items:dismiss",
+            post(dismiss_lint_items_handler),
+        )
+        .route(
+            "/api/projects/{project_id}/lint-items:send-to-review",
+            post(send_lint_items_to_review_handler),
+        )
         .route("/api/projects/{project_id}/ingest", post(ingest_handler))
         .route(
             "/api/projects/{project_id}/reviews",
@@ -214,6 +239,12 @@ struct SaveFileContentRequest {
 #[serde(rename_all = "camelCase")]
 struct DeleteWikiPagesRequest {
     paths: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LintItemIdsRequest {
+    ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1257,6 +1288,425 @@ async fn create_lint_task_handler(
           "status": task.status
         })),
     ))
+}
+
+async fn list_lint_items_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(project_id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let _session = authorized_principal(&state, &headers, Some(&project_id)).await?;
+    let root = project_root_for_id(&state, &project_id).await?;
+    let store = load_lint_items(&root).map_err(|error| ApiError::bad_request(error.to_string()))?;
+    Ok(Json(json!({ "items": store.items })))
+}
+
+fn read_wiki_page_content(root: &ProjectRoot, wiki_rel: &str) -> Result<String, ApiError> {
+    let path = root
+        .safe_join(wiki_rel)
+        .map_err(|_| ApiError::not_found("page not found"))?;
+    std::fs::read_to_string(path).map_err(|_| ApiError::not_found("page not found"))
+}
+
+async fn write_wiki_page_with_history(
+    state: &AppState,
+    project_id: &str,
+    root: &ProjectRoot,
+    user_id: &str,
+    wiki_rel: &str,
+    content: &str,
+) -> Result<(), ApiError> {
+    if let Err(error) = record_disk_version(
+        &state.pool,
+        project_id,
+        root,
+        wiki_rel,
+        "baseline",
+        "before.lint.fix",
+    )
+    .await
+    {
+        tracing::warn!(?error, path = %wiki_rel, "failed to record baseline file version");
+    }
+    let saved = save_wiki_page(root, wiki_rel, content).map_err(map_wiki_page_error)?;
+    if let Err(error) = record_disk_version(
+        &state.pool,
+        project_id,
+        root,
+        &saved.path,
+        user_id,
+        "lint.fix",
+    )
+    .await
+    {
+        tracing::warn!(?error, path = %saved.path, "failed to record file version");
+    }
+    Ok(())
+}
+
+// Ported from upstream_llm_wiki/src/components/lint/lint-view.tsx
+// addLintItemToReview (L124-168); desktop absolute paths become
+// project-relative ones.
+fn lint_item_to_review(item: &LintItem) -> ReviewItem {
+    let id = format!("lint-{}", uuid::Uuid::new_v4());
+    let open_option = ReviewOption {
+        label: "Open & Edit".to_string(),
+        action: format!("open:{}", item.page),
+    };
+    let skip_option = ReviewOption {
+        label: "Skip".to_string(),
+        action: "Skip".to_string(),
+    };
+    match item.issue_type.as_str() {
+        "broken-link" => ReviewItem {
+            id,
+            status: "open".to_string(),
+            review_type: "confirm".to_string(),
+            title: format!("Fix broken link in {}", item.page),
+            description: item.detail.clone(),
+            source_path: None,
+            affected_pages: Some(vec![item.page.clone()]),
+            search_queries: None,
+            options: vec![
+                open_option,
+                ReviewOption {
+                    label: "Delete Page".to_string(),
+                    action: format!("delete:wiki/{}", item.page),
+                },
+                skip_option,
+            ],
+        },
+        "orphan" | "no-outlinks" => ReviewItem {
+            id,
+            status: "open".to_string(),
+            review_type: "suggestion".to_string(),
+            title: format!("Add cross-references to {}", item.page),
+            description: if item.issue_type == "no-outlinks" {
+                "This page has no outbound [[wikilinks]]. Consider adding cross-references to related entities and concepts.".to_string()
+            } else {
+                item.detail.clone()
+            },
+            source_path: None,
+            affected_pages: Some(vec![item.page.clone()]),
+            search_queries: None,
+            options: vec![open_option, skip_option],
+        },
+        _ => ReviewItem {
+            id,
+            status: "open".to_string(),
+            review_type: "confirm".to_string(),
+            title: item.detail.chars().take(80).collect(),
+            description: item.detail.clone(),
+            source_path: None,
+            affected_pages: if item.affected_pages.is_empty() {
+                Some(vec![item.page.clone()])
+            } else {
+                Some(item.affected_pages.clone())
+            },
+            search_queries: None,
+            options: vec![open_option, skip_option],
+        },
+    }
+}
+
+fn append_reviews(root: &ProjectRoot, reviews: Vec<ReviewItem>) -> Result<Vec<String>, ApiError> {
+    let mut store =
+        load_reviews(root).map_err(|error| ApiError::bad_request(error.to_string()))?;
+    let mut review_ids = Vec::new();
+    for review in reviews {
+        review_ids.push(review.id.clone());
+        store.reviews.push(review);
+    }
+    save_reviews(root, &store).map_err(|error| ApiError::bad_request(error.to_string()))?;
+    Ok(review_ids)
+}
+
+async fn fix_lint_item_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((project_id, item_id)): Path<(String, String)>,
+) -> Result<impl IntoResponse, ApiError> {
+    let session = authorized_principal_with_role(
+        &state,
+        &headers,
+        &project_id,
+        crate::tenancy::access::AccessRole::Editor,
+    )
+    .await?;
+    validate_csrf(&headers, &session)?;
+    let root = project_root_for_id(&state, &project_id).await?;
+    let store = load_lint_items(&root).map_err(|error| ApiError::bad_request(error.to_string()))?;
+    let item = store
+        .items
+        .iter()
+        .find(|item| item.id == item_id)
+        .cloned()
+        .ok_or_else(|| ApiError::not_found("lint item not found"))?;
+
+    // Ported from upstream_llm_wiki/src/components/lint/lint-view.tsx
+    // handleFix (L170-237); items without a deterministic fix fall back
+    // to a review item exactly like upstream.
+    let mut changed_paths: Vec<String> = Vec::new();
+    let fixed = match item.issue_type.as_str() {
+        "orphan" if item.suggested_source.is_some() => {
+            let suggested_source = item.suggested_source.as_deref().unwrap_or_default();
+            let source_rel = format!("wiki/{suggested_source}");
+            let content = read_wiki_page_content(&root, &source_rel)?;
+            let updated = append_wikilink(&content, &item.page);
+            write_wiki_page_with_history(
+                &state,
+                &project_id,
+                &root,
+                &session.user_id,
+                &source_rel,
+                &updated,
+            )
+            .await?;
+            changed_paths.push(source_rel);
+            true
+        }
+        "broken-link" if item.broken_target.is_some() => {
+            let broken_target = item.broken_target.as_deref().unwrap_or_default();
+            let page_rel = format!("wiki/{}", item.page);
+            let content = read_wiki_page_content(&root, &page_rel)?;
+            let updated = match item.suggested_target.as_deref() {
+                Some(suggested_target) => {
+                    rewrite_wikilink_target(&content, broken_target, suggested_target)
+                }
+                None => {
+                    let stub = ensure_broken_link_stub(&root, broken_target)
+                        .map_err(map_wiki_page_error)?;
+                    if stub.created {
+                        changed_paths.push(format!("wiki/{}", stub.relative_path));
+                    }
+                    rewrite_wikilink_target(&content, broken_target, &stub.relative_path)
+                }
+            };
+            write_wiki_page_with_history(
+                &state,
+                &project_id,
+                &root,
+                &session.user_id,
+                &page_rel,
+                &updated,
+            )
+            .await?;
+            changed_paths.push(page_rel);
+            true
+        }
+        "no-outlinks" if item.suggested_target.is_some() => {
+            let suggested_target = item.suggested_target.as_deref().unwrap_or_default();
+            let page_rel = format!("wiki/{}", item.page);
+            let content = read_wiki_page_content(&root, &page_rel)?;
+            let updated = append_wikilink(&content, suggested_target);
+            write_wiki_page_with_history(
+                &state,
+                &project_id,
+                &root,
+                &session.user_id,
+                &page_rel,
+                &updated,
+            )
+            .await?;
+            changed_paths.push(page_rel);
+            true
+        }
+        _ => false,
+    };
+
+    if !fixed {
+        append_reviews(&root, vec![lint_item_to_review(&item)])?;
+    }
+    remove_lint_items(&root, &[item.id.clone()])
+        .map_err(|error| ApiError::internal(error.to_string()))?;
+
+    append_audit_log(
+        &state,
+        CreateAuditLog {
+            project_id: Some(project_id),
+            actor_id: session.user_id,
+            action: if fixed {
+                "lint.fixed".to_string()
+            } else {
+                "lint.sent_to_review".to_string()
+            },
+            target_type: "lint_item".to_string(),
+            target_id: item.id.clone(),
+            task_id: None,
+            summary: if fixed {
+                format!("Fixed {} lint issue on {}", item.issue_type, item.page)
+            } else {
+                format!("Sent {} lint issue on {} to review", item.issue_type, item.page)
+            },
+            metadata: json!({
+              "issueType": item.issue_type,
+              "page": item.page,
+              "changedPaths": changed_paths
+            }),
+        },
+    )
+    .await?;
+
+    if fixed {
+        Ok(Json(json!({ "action": "fixed", "changedPaths": changed_paths })))
+    } else {
+        Ok(Json(json!({ "action": "sent-to-review" })))
+    }
+}
+
+async fn delete_lint_orphan_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((project_id, item_id)): Path<(String, String)>,
+) -> Result<impl IntoResponse, ApiError> {
+    let session = authorized_principal_with_role(
+        &state,
+        &headers,
+        &project_id,
+        crate::tenancy::access::AccessRole::Editor,
+    )
+    .await?;
+    validate_csrf(&headers, &session)?;
+    let root = project_root_for_id(&state, &project_id).await?;
+    let store = load_lint_items(&root).map_err(|error| ApiError::bad_request(error.to_string()))?;
+    let item = store
+        .items
+        .iter()
+        .find(|item| item.id == item_id)
+        .cloned()
+        .ok_or_else(|| ApiError::not_found("lint item not found"))?;
+    if item.issue_type != "orphan" {
+        return Err(ApiError::bad_request(
+            "only orphan lint items can delete their page",
+        ));
+    }
+
+    // upstream lint-view.tsx handleDeleteOrphan (L239-265): full cascade
+    // delete because related: arrays and index.md can still reference an
+    // orphan page even without body wikilinks.
+    let page_rel = format!("wiki/{}", item.page);
+    let result =
+        delete_wiki_pages_with_refs(&root, &[page_rel]).map_err(map_wiki_page_error)?;
+    delete_pages(&state.pool, &project_id, &result.deleted_paths).await?;
+    remove_lint_items(&root, &[item.id.clone()])
+        .map_err(|error| ApiError::internal(error.to_string()))?;
+
+    append_audit_log(
+        &state,
+        CreateAuditLog {
+            project_id: Some(project_id),
+            actor_id: session.user_id,
+            action: "lint.orphan_deleted".to_string(),
+            target_type: "lint_item".to_string(),
+            target_id: item.id.clone(),
+            task_id: None,
+            summary: format!("Deleted orphan page {}", item.page),
+            metadata: json!({
+              "page": item.page,
+              "deletedPaths": result.deleted_paths,
+              "rewrittenFiles": result.rewritten_files
+            }),
+        },
+    )
+    .await?;
+
+    Ok(Json(json!({
+      "deletedPaths": result.deleted_paths,
+      "rewrittenFiles": result.rewritten_files
+    })))
+}
+
+async fn dismiss_lint_items_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(project_id): Path<String>,
+    Json(payload): Json<LintItemIdsRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let session = authorized_principal_with_role(
+        &state,
+        &headers,
+        &project_id,
+        crate::tenancy::access::AccessRole::Editor,
+    )
+    .await?;
+    validate_csrf(&headers, &session)?;
+    if payload.ids.is_empty() {
+        return Err(ApiError::bad_request("ids must not be empty"));
+    }
+    let root = project_root_for_id(&state, &project_id).await?;
+    let removed = remove_lint_items(&root, &payload.ids)
+        .map_err(|error| ApiError::internal(error.to_string()))?;
+    let dismissed_ids = removed.iter().map(|item| item.id.clone()).collect::<Vec<_>>();
+
+    append_audit_log(
+        &state,
+        CreateAuditLog {
+            project_id: Some(project_id),
+            actor_id: session.user_id,
+            action: "lint.dismissed".to_string(),
+            target_type: "lint_item".to_string(),
+            target_id: "batch".to_string(),
+            task_id: None,
+            summary: format!("Dismissed {} lint items", dismissed_ids.len()),
+            metadata: json!({ "dismissedIds": dismissed_ids }),
+        },
+    )
+    .await?;
+
+    Ok(Json(json!({ "dismissedIds": dismissed_ids })))
+}
+
+async fn send_lint_items_to_review_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(project_id): Path<String>,
+    Json(payload): Json<LintItemIdsRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let session = authorized_principal_with_role(
+        &state,
+        &headers,
+        &project_id,
+        crate::tenancy::access::AccessRole::Editor,
+    )
+    .await?;
+    validate_csrf(&headers, &session)?;
+    if payload.ids.is_empty() {
+        return Err(ApiError::bad_request("ids must not be empty"));
+    }
+    let root = project_root_for_id(&state, &project_id).await?;
+    let store = load_lint_items(&root).map_err(|error| ApiError::bad_request(error.to_string()))?;
+    let selected = store
+        .items
+        .iter()
+        .filter(|item| payload.ids.iter().any(|id| id == &item.id))
+        .cloned()
+        .collect::<Vec<_>>();
+    if selected.is_empty() {
+        return Err(ApiError::not_found("no matching lint items"));
+    }
+
+    let reviews = selected.iter().map(lint_item_to_review).collect::<Vec<_>>();
+    let review_ids = append_reviews(&root, reviews)?;
+    let selected_ids = selected.iter().map(|item| item.id.clone()).collect::<Vec<_>>();
+    remove_lint_items(&root, &selected_ids)
+        .map_err(|error| ApiError::internal(error.to_string()))?;
+
+    append_audit_log(
+        &state,
+        CreateAuditLog {
+            project_id: Some(project_id),
+            actor_id: session.user_id,
+            action: "lint.sent_to_review".to_string(),
+            target_type: "lint_item".to_string(),
+            target_id: "batch".to_string(),
+            task_id: None,
+            summary: format!("Sent {} lint items to review", selected_ids.len()),
+            metadata: json!({ "lintItemIds": selected_ids, "reviewIds": review_ids }),
+        },
+    )
+    .await?;
+
+    Ok(Json(json!({ "reviewIds": review_ids })))
 }
 
 async fn ingest_handler(

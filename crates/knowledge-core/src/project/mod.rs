@@ -4,6 +4,8 @@ pub mod files;
 pub mod enrich;
 pub mod ingest_sanitize;
 pub mod lint;
+pub mod lint_fixes;
+pub mod lint_items;
 pub mod multimodal;
 pub mod page_merge;
 pub mod query_save;

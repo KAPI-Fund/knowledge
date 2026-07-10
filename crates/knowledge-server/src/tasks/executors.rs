@@ -43,6 +43,7 @@ use knowledge_core::project::wiki_pages::{delete_wiki_pages_with_refs, save_wiki
 use knowledge_core::project::lint::{
   build_semantic_lint_prompt, parse_semantic_lint_response, run_structural_lint,
 };
+use knowledge_core::project::lint_items::{LintItem, replace_items_for_mode};
 use knowledge_core::project::research::{
   render_research_page, RenderResearchPageInput, RenderResearchReference,
 };
@@ -311,8 +312,31 @@ async fn run_delete_source_executor(
 async fn run_lint_executor(state: &AppState, task: &TaskRecord) -> Result<Value, ApiError> {
   let root = project_root_for_id(state, &task.project_id).await?;
   let mode = read_string(&task.payload, "mode")?;
+  let created_at = OffsetDateTime::now_utc()
+    .format(&Rfc3339)
+    .map_err(|error| ApiError::internal(error.to_string()))?;
+
   if mode == "structural" {
     let result = run_structural_lint(&root).map_err(|error| ApiError::bad_request(error.to_string()))?;
+    let items = result
+      .issues
+      .iter()
+      .map(|issue| LintItem {
+        id: uuid::Uuid::new_v4().to_string(),
+        issue_type: issue.issue_type.clone(),
+        severity: issue.severity.clone(),
+        page: issue.page.clone(),
+        detail: issue.detail.clone(),
+        affected_pages: Vec::new(),
+        broken_target: issue.broken_target.clone(),
+        suggested_target: issue.suggested_target.clone(),
+        suggested_source: issue.suggested_source.clone(),
+        mode: "structural".to_string(),
+        created_at: created_at.clone(),
+      })
+      .collect::<Vec<_>>();
+    replace_items_for_mode(&root, "structural", items)
+      .map_err(|error| ApiError::internal(error.to_string()))?;
     return serde_json::to_value(result).map_err(|error| ApiError::internal(error.to_string()));
   }
 
@@ -333,6 +357,25 @@ async fn run_lint_executor(state: &AppState, task: &TaskRecord) -> Result<Value,
       .map_err(TaskExecutionError::from_provider_error)
       .map_err(TaskExecutionError::into_api_error)?;
     let result = parse_semantic_lint_response(&response.text);
+    let items = result
+      .issues
+      .iter()
+      .map(|issue| LintItem {
+        id: uuid::Uuid::new_v4().to_string(),
+        issue_type: issue.issue_type.clone(),
+        severity: issue.severity.clone(),
+        page: issue.page.clone(),
+        detail: issue.detail.clone(),
+        affected_pages: issue.affected_pages.clone(),
+        broken_target: None,
+        suggested_target: None,
+        suggested_source: None,
+        mode: "semantic".to_string(),
+        created_at: created_at.clone(),
+      })
+      .collect::<Vec<_>>();
+    replace_items_for_mode(&root, "semantic", items)
+      .map_err(|error| ApiError::internal(error.to_string()))?;
     return serde_json::to_value(result).map_err(|error| ApiError::internal(error.to_string()));
   }
 
