@@ -460,7 +460,7 @@ const statusLabels: Record<SaveStatus, { text: string; className: string }> = {
   idle: { text: "", className: "text-muted-foreground" },
   pending: { text: "Unsaved...", className: "text-muted-foreground" },
   saving: { text: "Saving...", className: "text-muted-foreground" },
-  saved: { text: "Saved", className: "text-emerald-600" },
+  saved: { text: "Saved", className: "text-emerald-600 dark:text-emerald-400" },
   error: { text: "Save failed - Retry", className: "text-destructive" },
 };
 

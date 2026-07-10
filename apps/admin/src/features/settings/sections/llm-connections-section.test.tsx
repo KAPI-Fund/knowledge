@@ -83,10 +83,10 @@ describe("LlmConnectionsSection", () => {
     const user = userEvent.setup();
     deleteConnection.mockResolvedValue({});
     settingsData.mockReturnValue(twoConnections());
-    vi.spyOn(window, "confirm").mockReturnValue(true);
     render(<LlmConnectionsSection />);
     const row = screen.getByText("Local vLLM").closest("li") as HTMLElement;
-    await user.click(within(row).getByRole("button", { name: /delete/i }));
+    await user.click(within(row).getByRole("button", { name: /^delete$/i }));
+    await user.click(await screen.findByRole("button", { name: "Delete connection" }));
     expect(deleteConnection).toHaveBeenCalledWith("c2");
   });
 

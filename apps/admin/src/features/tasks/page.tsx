@@ -1,10 +1,12 @@
 import type { ColumnDef } from "@tanstack/react-table";
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
+import { toast } from "sonner";
 
 import { EmptyState } from "@/components/layout/empty-state";
 import { RouteStatePane } from "@/components/layout/route-state-pane";
-import { DataTable } from "@/components/shared/data-table";
+import { ConfirmDialog } from "@/components/shared/confirm-dialog";
+import { DataTable, type FacetedFilterConfig } from "@/components/shared/data-table";
 import { PageHeader } from "@/components/shared/page-header";
 import { StatusPill } from "@/components/shared/status-pill";
 import { Button } from "@/components/ui/button";
@@ -21,12 +23,26 @@ import {
 
 type ProjectTask = NonNullable<ReturnType<typeof useProjectTasksQuery>["data"]>[number];
 
+const STATUS_FILTER: FacetedFilterConfig = {
+  columnId: "status",
+  title: "Status",
+  options: [
+    { label: "Queued", value: "queued" },
+    { label: "Running", value: "running" },
+    { label: "Retry waiting", value: "retry_waiting" },
+    { label: "Succeeded", value: "succeeded" },
+    { label: "Failed", value: "failed" },
+    { label: "Cancelled", value: "cancelled" },
+  ],
+};
+
 export function TasksPage() {
   const { projectId = "" } = useParams();
   const tasks = useProjectTasksQuery(projectId);
   const retryTask = useRetryTaskMutation();
   const cancelTask = useCancelTaskMutation();
   const [selectedTaskId, setSelectedTaskId] = useState("");
+  const [cancelTarget, setCancelTarget] = useState<ProjectTask | null>(null);
 
   const taskList = tasks.data ?? [];
 
@@ -45,6 +61,7 @@ export function TasksPage() {
         accessorKey: "status",
         header: "Status",
         cell: ({ row }) => <StatusPill value={row.original.status} />,
+        filterFn: (row, id, value: string[]) => value.includes(row.getValue(id)),
       },
       {
         accessorKey: "title",
@@ -100,18 +117,21 @@ export function TasksPage() {
               Inspect
             </Button>
             <Button
-              onClick={() => retryTask.mutateAsync({ projectId, taskId: row.original.id })}
+              onClick={async () => {
+                try {
+                  await retryTask.mutateAsync({ projectId, taskId: row.original.id });
+                  toast.success("Task queued for retry.");
+                } catch (error) {
+                  toast.error(normalizeAppError(error).message);
+                }
+              }}
               size="sm"
               variant="secondary"
             >
               Retry
             </Button>
             {!["completed", "succeeded", "failed", "cancelled"].includes(row.original.status) ? (
-              <Button
-                onClick={() => cancelTask.mutateAsync({ projectId, taskId: row.original.id })}
-                size="sm"
-                variant="outline"
-              >
+              <Button onClick={() => setCancelTarget(row.original)} size="sm" variant="outline">
                 Cancel
               </Button>
             ) : null}
@@ -141,6 +161,7 @@ export function TasksPage() {
               columns={columns}
               data={taskList}
               emptyMessage="No tasks have been queued for this project yet."
+              facetedFilters={[STATUS_FILTER]}
               isLoading={tasks.isLoading}
               fillHeight
             />
@@ -223,6 +244,29 @@ export function TasksPage() {
           </CardContent>
         </Card>
       </div>
+
+      <ConfirmDialog
+        confirmLabel="Cancel task"
+        description={
+          cancelTarget ? `"${cancelTarget.title}" will stop as soon as possible.` : ""
+        }
+        destructive
+        isPending={cancelTask.isPending}
+        onConfirm={async () => {
+          if (!cancelTarget) return;
+          try {
+            await cancelTask.mutateAsync({ projectId, taskId: cancelTarget.id });
+            toast.success("Task cancelled.");
+          } catch (error) {
+            toast.error(normalizeAppError(error).message);
+          }
+        }}
+        onOpenChange={(open) => {
+          if (!open) setCancelTarget(null);
+        }}
+        open={Boolean(cancelTarget)}
+        title="Cancel this task?"
+      />
     </div>
   );
 }

@@ -3,7 +3,14 @@ import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Select } from "@/components/ui/select";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { useSystemSettingsQuery, useUpdateSystemSettingsMutation } from "../queries";
 import { parseTimeoutSeconds } from "./parse-timeout";
@@ -137,16 +144,21 @@ export function ImageSection() {
             placeholder="gpt-image-1, dall-e-3"
           />
         </label>
-        <label className="grid gap-1.5 text-sm font-medium">
-          Image Size
-          <Select aria-label="Image Size" value={size} onChange={(e) => setSize(e.target.value)}>
-            {allowedSizesForModel(model).map((s) => (
-              <option key={s} value={s}>
-                {s}
-              </option>
-            ))}
+        <div className="grid gap-1.5">
+          <Label htmlFor="image-size">Image Size</Label>
+          <Select value={size} onValueChange={setSize}>
+            <SelectTrigger id="image-size" aria-label="Image Size" className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {allowedSizesForModel(model).map((s) => (
+                <SelectItem key={s} value={s}>
+                  {s}
+                </SelectItem>
+              ))}
+            </SelectContent>
           </Select>
-        </label>
+        </div>
         <label className="grid gap-1.5 text-sm font-medium">
           Timeout Seconds
           <Input

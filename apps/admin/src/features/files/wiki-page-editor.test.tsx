@@ -47,10 +47,10 @@ describe("WikiPageEditor", () => {
   });
 
   it("deletes after confirmation and reports the cascade result", async () => {
-    vi.spyOn(window, "confirm").mockReturnValue(true);
     const onDeleted = vi.fn();
     render(<WikiPageEditor content="x" onDeleted={onDeleted} path="wiki/a.md" projectId="p1" />);
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Delete page" }));
     await waitFor(() =>
       expect(mocks.deleteMutateAsync).toHaveBeenCalledWith({ paths: ["wiki/a.md"] }),
     );

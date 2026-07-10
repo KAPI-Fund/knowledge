@@ -1,6 +1,6 @@
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 
-import { login, register } from "../shared/api";
+import { login, logout, register } from "../shared/api";
 
 export function useLoginMutation() {
   return useMutation({
@@ -11,5 +11,15 @@ export function useLoginMutation() {
 export function useRegisterMutation() {
   return useMutation({
     mutationFn: register,
+  });
+}
+
+export function useLogoutMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: logout,
+    onSuccess: () => {
+      queryClient.clear();
+    },
   });
 }

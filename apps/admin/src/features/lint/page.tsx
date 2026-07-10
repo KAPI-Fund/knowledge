@@ -1,6 +1,8 @@
 import type { ColumnDef } from "@tanstack/react-table";
+import { SearchCheck, Sparkles } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
+import { toast } from "sonner";
 
 import { EmptyState } from "@/components/layout/empty-state";
 import { DataTable } from "@/components/shared/data-table";
@@ -9,6 +11,7 @@ import { StatusPill } from "@/components/shared/status-pill";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { normalizeAppError } from "@/lib/app-error";
 
 import { ProjectFileLink } from "../shared/file-links";
 
@@ -21,6 +24,20 @@ type LintIssue = {
   detail: string;
   affectedPages?: string[];
 };
+
+function SeverityBadge({ severity }: { severity: string }) {
+  if (severity === "error") {
+    return <Badge variant="destructive">{severity}</Badge>;
+  }
+  if (severity === "warning") {
+    return (
+      <Badge className="border-transparent bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-200">
+        {severity}
+      </Badge>
+    );
+  }
+  return <Badge variant="secondary">{severity}</Badge>;
+}
 
 export function LintPage() {
   const { projectId = "" } = useParams();
@@ -49,7 +66,7 @@ export function LintPage() {
       {
         accessorKey: "severity",
         header: "Severity",
-        cell: ({ row }) => <Badge variant="secondary">{row.original.severity}</Badge>,
+        cell: ({ row }) => <SeverityBadge severity={row.original.severity} />,
       },
       {
         accessorKey: "issueType",
@@ -82,20 +99,14 @@ export function LintPage() {
     [],
   );
 
-  async function handleRunStructuralLint() {
-    const created = await createLintTask.mutateAsync({
-      projectId,
-      mode: "structural",
-    });
-    setActiveTaskId(created.taskId);
-  }
-
-  async function handleRunSemanticLint() {
-    const created = await createLintTask.mutateAsync({
-      projectId,
-      mode: "semantic",
-    });
-    setActiveTaskId(created.taskId);
+  async function handleRunLint(mode: "structural" | "semantic") {
+    try {
+      const created = await createLintTask.mutateAsync({ projectId, mode });
+      setActiveTaskId(created.taskId);
+      toast.success(mode === "structural" ? "Structural lint queued." : "Semantic lint queued.");
+    } catch (error) {
+      toast.error(normalizeAppError(error).message);
+    }
   }
 
   return (
@@ -103,10 +114,16 @@ export function LintPage() {
       <PageHeader
         actions={
           <div className="flex flex-wrap gap-2">
-            <Button disabled={createLintTask.isPending} onClick={handleRunStructuralLint}>
+            <Button disabled={createLintTask.isPending} onClick={() => handleRunLint("structural")}>
+              <SearchCheck />
               Run Structural Lint
             </Button>
-            <Button disabled={createLintTask.isPending} onClick={handleRunSemanticLint} variant="outline">
+            <Button
+              disabled={createLintTask.isPending}
+              onClick={() => handleRunLint("semantic")}
+              variant="outline"
+            >
+              <Sparkles />
               Run Semantic Lint
             </Button>
           </div>
@@ -141,7 +158,7 @@ export function LintPage() {
               {selected ? (
                 <>
                   <div className="flex flex-wrap items-center gap-3">
-                    <Badge variant="secondary">{selected.severity}</Badge>
+                    <SeverityBadge severity={selected.severity} />
                     <span className="text-sm font-medium">{selected.issueType}</span>
                   </div>
                   {selected.issueType === "semantic" ? (

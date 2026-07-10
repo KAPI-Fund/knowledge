@@ -4,8 +4,15 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Select } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import {
   useRunWebSearchMutation,
@@ -134,20 +141,21 @@ export function WebSearchSection() {
         <CardDescription>Search provider for the canvas search node.</CardDescription>
       </CardHeader>
       <CardContent className="grid gap-4">
-        <label className="grid gap-1.5 text-sm font-medium">
-          Search Provider
-          <Select
-            aria-label="Search Provider"
-            value={fields.provider}
-            onChange={(e) => set("provider", e.target.value)}
-          >
-            <option value="none">none</option>
-            <option value="tavily">tavily</option>
-            <option value="serpapi">serpapi</option>
-            <option value="searxng">searxng</option>
-            <option value="ollama">ollama</option>
+        <div className="grid gap-1.5">
+          <Label htmlFor="search-provider">Search Provider</Label>
+          <Select value={fields.provider} onValueChange={(value) => set("provider", value)}>
+            <SelectTrigger id="search-provider" aria-label="Search Provider" className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none">none</SelectItem>
+              <SelectItem value="tavily">tavily</SelectItem>
+              <SelectItem value="serpapi">serpapi</SelectItem>
+              <SelectItem value="searxng">searxng</SelectItem>
+              <SelectItem value="ollama">ollama</SelectItem>
+            </SelectContent>
           </Select>
-        </label>
+        </div>
 
         {fields.provider === "tavily" ? (
           <>
@@ -212,20 +220,24 @@ export function WebSearchSection() {
                 />
               </label>
             ) : null}
-            <label className="grid gap-1.5 text-sm font-medium">
-              SerpApi Engine
+            <div className="grid gap-1.5">
+              <Label htmlFor="serpapi-engine">SerpApi Engine</Label>
               <Select
-                aria-label="SerpApi Engine"
                 value={fields.serpapiEngine}
-                onChange={(e) => set("serpapiEngine", e.target.value)}
+                onValueChange={(value) => set("serpapiEngine", value)}
               >
-                <option value="google">google</option>
-                <option value="google_news">google_news</option>
-                <option value="google_scholar">google_scholar</option>
-                <option value="bing">bing</option>
-                <option value="duckduckgo">duckduckgo</option>
+                <SelectTrigger id="serpapi-engine" aria-label="SerpApi Engine" className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="google">google</SelectItem>
+                  <SelectItem value="google_news">google_news</SelectItem>
+                  <SelectItem value="google_scholar">google_scholar</SelectItem>
+                  <SelectItem value="bing">bing</SelectItem>
+                  <SelectItem value="duckduckgo">duckduckgo</SelectItem>
+                </SelectContent>
               </Select>
-            </label>
+            </div>
             <label className="grid gap-1.5 text-sm font-medium">
               SerpApi Base URL
               <Input

@@ -11,7 +11,7 @@ import { FilesPage } from "../files/page";
 import { GraphPage } from "../graph/page";
 import { ReviewsPage } from "../reviews/page";
 import { SearchPage } from "../search/page";
-import { SettingsPage } from "../settings/page";
+import { SettingsLayout } from "../settings/layout";
 import { SourceWatchPage } from "../source-watch/page";
 import { SourcesPage } from "../sources/page";
 import { TasksPage } from "../tasks/page";
@@ -246,7 +246,7 @@ describe("project operations routing", () => {
                 <Route path="reviews" element={<ReviewsPage />} />
                 <Route path="audit" element={<AuditPage />} />
               </Route>
-              <Route path="settings" element={<SettingsPage />} />
+              <Route path="settings" element={<SettingsLayout />} />
             </Route>
           </Routes>
         </MemoryRouter>
@@ -255,7 +255,7 @@ describe("project operations routing", () => {
 
     await user.click(await screen.findByRole("link", { name: "demo-project" }));
 
-    expect(await screen.findByText("demo-project")).toBeInTheDocument();
+    expect((await screen.findAllByText("demo-project")).length).toBeGreaterThan(0);
     expect(screen.getByRole("heading", { name: "Overview" })).toBeInTheDocument();
     expect(screen.getByText("Recent Sources")).toBeInTheDocument();
     expect(screen.getByText("raw/sources/demo.md")).toBeInTheDocument();

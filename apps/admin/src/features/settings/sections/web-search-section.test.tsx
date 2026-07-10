@@ -39,7 +39,9 @@ describe("WebSearchSection", () => {
   it("defaults to the active tavily provider and renders its fields", () => {
     settingsData.mockReturnValue(tavilyActive());
     render(<WebSearchSection />);
-    expect(screen.getByLabelText(/Search Provider/i)).toHaveValue("tavily");
+    expect(screen.getByRole("combobox", { name: /Search Provider/i })).toHaveTextContent(
+      "tavily",
+    );
     expect(screen.getByLabelText(/Tavily Base URL/i)).toHaveValue("https://api.tavily.com");
   });
 
@@ -67,7 +69,8 @@ describe("WebSearchSection", () => {
     settingsData.mockReturnValue(tavilyActive());
     render(<WebSearchSection />);
 
-    await user.selectOptions(screen.getByLabelText(/Search Provider/i), "searxng");
+    await user.click(screen.getByRole("combobox", { name: /Search Provider/i }));
+    await user.click(await screen.findByRole("option", { name: "searxng" }));
     await user.type(screen.getByLabelText(/SearXNG Instance URL/i), "https://searx.local");
     await user.click(screen.getByRole("button", { name: /^save$/i }));
 

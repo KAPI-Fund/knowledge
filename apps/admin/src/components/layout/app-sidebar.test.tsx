@@ -45,7 +45,7 @@ describe("AppSidebar", () => {
 
     expect(screen.getByRole("link", { name: "Dashboard" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Projects" })).toBeInTheDocument();
-    expect(screen.getByText("admin")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /admin/i })).toBeInTheDocument();
   });
 
   it("renders grouped project navigation inside a project", () => {
@@ -67,7 +67,7 @@ describe("AppSidebar", () => {
 });
 
 describe("AppSidebar create-org entry", () => {
-  it("opens the create-organization dialog from the user menu", async () => {
+  it("opens the create-organization dialog from the space switcher", async () => {
     mockUseSession.mockReturnValue({ user: { id: "u1", username: "admin", role: "operator" }, isLoading: false });
     mockUseProjectDetailQuery.mockReturnValue({ data: null, error: null, isLoading: false });
     mockUseSpacesQuery.mockReturnValue({ data: { orgs: [] }, isLoading: false });
@@ -75,7 +75,7 @@ describe("AppSidebar create-org entry", () => {
     const user = userEvent.setup();
     renderSidebar("/projects");
 
-    await user.click(screen.getByRole("button", { name: /admin/i }));
+    await user.click(screen.getByRole("button", { name: /knowledge/i }));
     await user.click(await screen.findByText("New organization"));
 
     expect(await screen.findByRole("heading", { name: "New organization" })).toBeInTheDocument();

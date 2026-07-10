@@ -1,36 +1,57 @@
+import { zodResolver } from "@hookform/resolvers/zod";
 import { useQueryClient } from "@tanstack/react-query";
-import { FormEvent, useState } from "react";
+import { LibraryBig, Loader2 } from "lucide-react";
+import { useState } from "react";
+import { useForm } from "react-hook-form";
 import { Link, useNavigate } from "react-router-dom";
+import { z } from "zod";
 
-import { Button } from "../../components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
-import { Input } from "../../components/ui/input";
+import { Button } from "@/components/ui/button";
+import {
+  Form,
+  FormControl,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from "@/components/ui/form";
+import { Input } from "@/components/ui/input";
 
+import { AuthLayout } from "./auth-layout";
 import { useRegisterMutation } from "./api";
 import { setCsrfToken } from "./csrf";
+
+const registerSchema = z
+  .object({
+    username: z.string().min(1, "Username is required."),
+    password: z.string().min(8, "Password must be at least 8 characters."),
+    confirmPassword: z.string(),
+  })
+  .refine((values) => values.password === values.confirmPassword, {
+    message: "Passwords do not match.",
+    path: ["confirmPassword"],
+  });
+
+type RegisterValues = z.infer<typeof registerSchema>;
 
 export function RegisterPage() {
   const register = useRegisterMutation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  const form = useForm<RegisterValues>({
+    resolver: zodResolver(registerSchema),
+    defaultValues: { username: "", password: "", confirmPassword: "" },
+  });
+
+  async function onSubmit(values: RegisterValues) {
     setErrorMessage("");
-    if (password.length < 8) {
-      setErrorMessage("Password must be at least 8 characters.");
-      return;
-    }
-    if (password !== confirmPassword) {
-      setErrorMessage("Passwords do not match.");
-      return;
-    }
     try {
-      const result = await register.mutateAsync({ username, password });
+      const result = await register.mutateAsync({
+        username: values.username,
+        password: values.password,
+      });
       setCsrfToken(result.csrfToken);
       // Registration logs the user in; drop any cached anonymous session so the
       // guard reads the fresh authenticated state instead of bouncing to /login.
@@ -42,52 +63,73 @@ export function RegisterPage() {
   }
 
   return (
-    <main className="page">
-      <Card className="w-full max-w-md">
-        <CardHeader>
-          <CardTitle>Create account</CardTitle>
-          <CardDescription>
-            Register to access project operations and system settings.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form className="grid gap-4" onSubmit={handleSubmit}>
-            <label className="grid gap-2 text-sm font-medium">
-              Username
-              <Input value={username} onChange={(event) => setUsername(event.target.value)} />
-            </label>
-            <label className="grid gap-2 text-sm font-medium">
-              Password
-              <Input
-                type="password"
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-              />
-            </label>
-            <label className="grid gap-2 text-sm font-medium">
-              Confirm password
-              <Input
-                type="password"
-                value={confirmPassword}
-                onChange={(event) => setConfirmPassword(event.target.value)}
-              />
-            </label>
-            {errorMessage ? <p className="text-sm text-destructive">{errorMessage}</p> : null}
-            <Button disabled={register.isPending} type="submit">
-              {register.isPending ? "Creating account..." : "Create account"}
-            </Button>
-            <p className="text-sm text-muted-foreground">
-              Already have an account?{" "}
-              <Link
-                className="font-medium text-foreground underline-offset-4 hover:underline"
-                to="/login"
-              >
-                Sign in
-              </Link>
-            </p>
-          </form>
-        </CardContent>
-      </Card>
-    </main>
+    <AuthLayout>
+      <div className="grid gap-2 text-center">
+        <div className="mx-auto mb-2 flex size-10 items-center justify-center rounded-lg bg-primary text-primary-foreground lg:hidden">
+          <LibraryBig className="size-5" />
+        </div>
+        <h1 className="text-2xl font-semibold tracking-tight">Create account</h1>
+        <p className="text-sm text-muted-foreground">
+          Register to access project operations and system settings.
+        </p>
+      </div>
+      <Form {...form}>
+        <form className="grid gap-4" onSubmit={form.handleSubmit(onSubmit)}>
+          <FormField
+            control={form.control}
+            name="username"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Username</FormLabel>
+                <FormControl>
+                  <Input autoComplete="username" {...field} />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+          <FormField
+            control={form.control}
+            name="password"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Password</FormLabel>
+                <FormControl>
+                  <Input autoComplete="new-password" type="password" {...field} />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+          <FormField
+            control={form.control}
+            name="confirmPassword"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Confirm password</FormLabel>
+                <FormControl>
+                  <Input autoComplete="new-password" type="password" {...field} />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+          {errorMessage ? <p className="text-sm text-destructive">{errorMessage}</p> : null}
+          <Button disabled={register.isPending} type="submit">
+            {register.isPending ? <Loader2 className="animate-spin" /> : null}
+            {register.isPending ? "Creating account..." : "Create account"}
+          </Button>
+        </form>
+      </Form>
+      <p className="text-center text-sm text-muted-foreground">
+        Already have an account?{" "}
+        <Link
+          className="font-medium text-foreground underline-offset-4 hover:underline"
+          to="/login"
+        >
+          Sign in
+        </Link>
+      </p>
+    </AuthLayout>
   );
 }

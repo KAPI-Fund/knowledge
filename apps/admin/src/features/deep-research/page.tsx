@@ -1,6 +1,11 @@
+import { zodResolver } from "@hookform/resolvers/zod";
 import type { ColumnDef } from "@tanstack/react-table";
+import { Telescope } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { useForm } from "react-hook-form";
 import { useParams } from "react-router-dom";
+import { toast } from "sonner";
+import { z } from "zod";
 
 import { ProjectFileLink } from "../shared/file-links";
 
@@ -10,13 +15,31 @@ import { PageHeader } from "@/components/shared/page-header";
 import { StatusPill } from "@/components/shared/status-pill";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Form,
+  FormControl,
+  FormDescription,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { normalizeAppError } from "@/lib/app-error";
+import { formatDateTime } from "@/lib/format";
 
 import { useProjectTasksQuery } from "../tasks/queries";
 
 import { useCreateDeepResearchTaskMutation } from "./queries";
 
 type ResearchTask = NonNullable<ReturnType<typeof useProjectTasksQuery>["data"]>[number];
+
+const researchSchema = z.object({
+  topic: z.string().trim().min(1, "Topic is required."),
+  queries: z.string(),
+});
+
+type ResearchValues = z.infer<typeof researchSchema>;
 
 function renderTaskResult(
   task: { result?: unknown; error?: unknown },
@@ -62,12 +85,15 @@ function renderTaskResult(
 
 export function DeepResearchPage() {
   const { projectId = "" } = useParams();
-  const [topic, setTopic] = useState("");
-  const [queries, setQueries] = useState("");
   const createTask = useCreateDeepResearchTaskMutation();
   const tasksQuery = useProjectTasksQuery(projectId);
   const tasks = (tasksQuery.data ?? []).filter((task) => task.taskType === "project.deep_research");
   const [selectedId, setSelectedId] = useState("");
+
+  const form = useForm<ResearchValues>({
+    resolver: zodResolver(researchSchema),
+    defaultValues: { topic: "", queries: "" },
+  });
 
   useEffect(() => {
     if (!selectedId && tasks[0]?.id) {
@@ -76,6 +102,24 @@ export function DeepResearchPage() {
   }, [selectedId, tasks]);
 
   const selected = tasks.find((task) => task.id === selectedId) ?? null;
+
+  async function onSubmit(values: ResearchValues) {
+    const parsed = values.queries
+      .split(",")
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0);
+    try {
+      await createTask.mutateAsync({
+        projectId,
+        topic: values.topic.trim(),
+        searchQueries: parsed.length > 0 ? parsed : undefined,
+      });
+      toast.success("Research task queued.");
+      form.reset();
+    } catch (error) {
+      toast.error(normalizeAppError(error).message);
+    }
+  }
 
   const columns = useMemo<ColumnDef<ResearchTask>[]>(
     () => [
@@ -101,7 +145,9 @@ export function DeepResearchPage() {
         accessorKey: "updatedAt",
         header: "Updated",
         cell: ({ row }) => (
-          <span className="text-sm text-muted-foreground">{row.original.updatedAt ?? "—"}</span>
+          <span className="text-sm text-muted-foreground">
+            {row.original.updatedAt ? formatDateTime(row.original.updatedAt) : "—"}
+          </span>
         ),
       },
       {
@@ -133,45 +179,49 @@ export function DeepResearchPage() {
             The synthesizer uses the configured chat provider. Web search uses the configured search provider (see Settings).
           </CardDescription>
         </CardHeader>
-        <CardContent className="grid gap-4">
-          <label className="grid gap-2 text-sm font-medium">
-            Topic
-            <Input
-              aria-label="Topic"
-              onChange={(event) => setTopic(event.target.value)}
-              placeholder="e.g. Knowledge Graphs"
-              value={topic}
-            />
-          </label>
-          <label className="grid gap-2 text-sm font-medium">
-            Search Queries
-            <Input
-              aria-label="Search Queries"
-              onChange={(event) => setQueries(event.target.value)}
-              placeholder="Comma-separated. Leave blank to use the topic as the only query."
-              value={queries}
-            />
-          </label>
-          <div className="flex justify-end">
-            <Button
-              disabled={createTask.isPending || topic.trim().length === 0}
-              onClick={async () => {
-                const parsed = queries
-                  .split(",")
-                  .map((value) => value.trim())
-                  .filter((value) => value.length > 0);
-                await createTask.mutateAsync({
-                  projectId,
-                  topic: topic.trim(),
-                  searchQueries: parsed.length > 0 ? parsed : undefined,
-                });
-                setTopic("");
-                setQueries("");
-              }}
-            >
-              Start Research
-            </Button>
-          </div>
+        <CardContent>
+          <Form {...form}>
+            <form className="grid gap-4" onSubmit={form.handleSubmit(onSubmit)}>
+              <FormField
+                control={form.control}
+                name="topic"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Topic</FormLabel>
+                    <FormControl>
+                      <Input placeholder="e.g. Knowledge Graphs" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="queries"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Search Queries</FormLabel>
+                    <FormControl>
+                      <Input
+                        placeholder="Comma-separated. Leave blank to use the topic as the only query."
+                        {...field}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      Each query fans out to the search provider before synthesis.
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <div className="flex justify-end">
+                <Button disabled={createTask.isPending} type="submit">
+                  <Telescope />
+                  Start Research
+                </Button>
+              </div>
+            </form>
+          </Form>
         </CardContent>
       </Card>
 
@@ -197,7 +247,8 @@ export function DeepResearchPage() {
                   <span className="text-sm font-medium">{selected.title}</span>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Updated {selected.updatedAt ?? "—"} · created {selected.createdAt ?? "—"}
+                  Updated {selected.updatedAt ? formatDateTime(selected.updatedAt) : "—"} · created{" "}
+                  {selected.createdAt ? formatDateTime(selected.createdAt) : "—"}
                 </p>
                 <div className="grid gap-2 text-sm">{renderTaskResult(selected, projectId)}</div>
               </div>

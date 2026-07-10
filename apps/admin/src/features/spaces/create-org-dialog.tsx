@@ -1,16 +1,19 @@
+import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useForm } from "react-hook-form";
 import { useNavigate } from "react-router-dom";
+import { toast } from "sonner";
+import { z } from "zod";
 
-import { Button } from "@/components/ui/button";
+import { FormDialog } from "@/components/shared/form-dialog";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+  FormControl,
+  FormDescription,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { createOrg } from "@/features/shared/tenancy-api";
 
@@ -22,6 +25,13 @@ function slugify(value: string) {
     .replace(/^-+|-+$/g, "");
 }
 
+const createOrgSchema = z.object({
+  name: z.string().trim().min(1, "Name is required."),
+  slug: z.string().trim(),
+});
+
+type CreateOrgValues = z.infer<typeof createOrgSchema>;
+
 export function CreateOrgDialog({
   open,
   onOpenChange,
@@ -31,69 +41,71 @@ export function CreateOrgDialog({
 }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const [name, setName] = useState("");
-  const [slug, setSlug] = useState("");
-  const [slugEdited, setSlugEdited] = useState(false);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const form = useForm<CreateOrgValues>({
+    resolver: zodResolver(createOrgSchema),
+    defaultValues: { name: "", slug: "" },
+  });
+  const watchedName = form.watch("name");
 
   const mutation = useMutation({
-    mutationFn: () => createOrg({ name: name.trim(), slug: (slugEdited ? slug : slugify(name)).trim() }),
+    mutationFn: (values: CreateOrgValues) =>
+      createOrg({ name: values.name, slug: values.slug || slugify(values.name) }),
     onSuccess: async (org) => {
       await queryClient.invalidateQueries({ queryKey: ["spaces"] });
       onOpenChange(false);
+      toast.success(`Organization "${org.name}" created.`);
+      form.reset({ name: "", slug: "" });
       navigate(`/orgs/${org.id}`);
     },
   });
 
-  const submit = async () => {
-    setErrorMessage(null);
+  async function onSubmit(values: CreateOrgValues) {
     try {
-      await mutation.mutateAsync();
+      await mutation.mutateAsync(values);
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "Failed to create organization");
+      toast.error(error instanceof Error ? error.message : "Failed to create organization");
     }
-  };
+  }
 
   return (
-    <Dialog onOpenChange={onOpenChange} open={open}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>New organization</DialogTitle>
-          <DialogDescription>
-            Create a shared workspace for teams and public knowledge bases.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="grid gap-3">
-          <label className="grid gap-1.5 text-sm font-medium">
-            Name
-            <Input
-              onChange={(event) => setName(event.target.value)}
-              placeholder="Acme Research"
-              value={name}
-            />
-          </label>
-          <label className="grid gap-1.5 text-sm font-medium">
-            Slug
-            <Input
-              onChange={(event) => {
-                setSlugEdited(true);
-                setSlug(event.target.value);
-              }}
-              placeholder={slugify(name) || "acme-research"}
-              value={slugEdited ? slug : slugify(name)}
-            />
-          </label>
-          {errorMessage ? <p className="text-sm text-destructive">{errorMessage}</p> : null}
-        </div>
-        <DialogFooter>
-          <Button onClick={() => onOpenChange(false)} type="button" variant="outline">
-            Cancel
-          </Button>
-          <Button disabled={!name.trim() || mutation.isPending} onClick={submit} type="button">
-            Create organization
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+    <FormDialog
+      description="Create a shared workspace for teams and public knowledge bases."
+      form={form}
+      isPending={mutation.isPending}
+      onOpenChange={onOpenChange}
+      onSubmit={onSubmit}
+      open={open}
+      submitLabel="Create organization"
+      title="New organization"
+    >
+      <FormField
+        control={form.control}
+        name="name"
+        render={({ field }) => (
+          <FormItem>
+            <FormLabel>Name</FormLabel>
+            <FormControl>
+              <Input placeholder="Acme Research" {...field} />
+            </FormControl>
+            <FormMessage />
+          </FormItem>
+        )}
+      />
+      <FormField
+        control={form.control}
+        name="slug"
+        render={({ field }) => (
+          <FormItem>
+            <FormLabel>Slug</FormLabel>
+            <FormControl>
+              <Input placeholder={slugify(watchedName) || "acme-research"} {...field} />
+            </FormControl>
+            <FormDescription>Leave blank to derive from the name.</FormDescription>
+            <FormMessage />
+          </FormItem>
+        )}
+      />
+    </FormDialog>
   );
 }

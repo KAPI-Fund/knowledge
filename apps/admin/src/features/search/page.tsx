@@ -1,13 +1,18 @@
+import { Search, SearchX } from "lucide-react";
 import { useState } from "react";
 import { useParams } from "react-router-dom";
+import { toast } from "sonner";
 
 import { EmptyState } from "@/components/layout/empty-state";
 import { PageHeader } from "@/components/shared/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { normalizeAppError } from "@/lib/app-error";
 
 import { ProjectFileLink } from "../shared/file-links";
 
@@ -45,13 +50,17 @@ export function SearchPage() {
       return;
     }
 
-    const next = await search.mutateAsync({
-      projectId,
-      query: trimmed,
-      topK: Number(topK) || 10,
-      includeContent,
-    });
-    setResponse(next);
+    try {
+      const next = await search.mutateAsync({
+        projectId,
+        query: trimmed,
+        topK: Number(topK) || 10,
+        includeContent,
+      });
+      setResponse(next);
+    } catch (error) {
+      toast.error(normalizeAppError(error).message);
+    }
   }
 
   return (
@@ -67,28 +76,35 @@ export function SearchPage() {
           <CardDescription>Run keyword and vector search against the current project.</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4">
-          <label className="grid gap-2 text-sm font-medium">
-            Search Query
-            <Input
-              aria-label="Search Query"
-              onChange={(event) => setQuery(event.target.value)}
-              value={query}
-            />
-          </label>
-          <label className="grid gap-2 text-sm font-medium">
-            Top K
-            <Input aria-label="Top K" onChange={(event) => setTopK(event.target.value)} value={topK} />
-          </label>
-          <label className="flex items-center gap-3 rounded-xl border border-border/70 px-4 py-3 text-sm font-medium">
-            <input
-              checked={includeContent}
-              onChange={(event) => setIncludeContent(event.target.checked)}
-              type="checkbox"
-            />
-            Include Content
-          </label>
-          <div className="flex justify-end">
+          <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_120px]">
+            <label className="grid gap-2 text-sm font-medium">
+              Search Query
+              <Input
+                aria-label="Search Query"
+                onChange={(event) => setQuery(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") void handleSearch();
+                }}
+                placeholder="What are you looking for?"
+                value={query}
+              />
+            </label>
+            <label className="grid gap-2 text-sm font-medium">
+              Top K
+              <Input aria-label="Top K" onChange={(event) => setTopK(event.target.value)} value={topK} />
+            </label>
+          </div>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-3 rounded-lg border px-4 py-2.5">
+              <Checkbox
+                checked={includeContent}
+                id="search-include-content"
+                onCheckedChange={(checked) => setIncludeContent(checked === true)}
+              />
+              <Label htmlFor="search-include-content">Include Content</Label>
+            </div>
             <Button disabled={search.isPending} onClick={handleSearch}>
+              <Search />
               Run Search
             </Button>
           </div>
@@ -156,11 +172,13 @@ export function SearchPage() {
       ) : response ? (
         <EmptyState
           description="The backend returned no results for this search."
+          icon={SearchX}
           title="No matches found"
         />
       ) : (
         <EmptyState
           description="Enter a query and run search to inspect ranked matches."
+          icon={Search}
           title="Ready to search"
         />
       )}

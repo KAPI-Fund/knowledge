@@ -11,8 +11,15 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Select } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   useGrantCandidatesQuery,
   useProjectGranteesQuery,
@@ -127,35 +134,36 @@ export function ManageAccessDialog({
           </div>
 
           <div className="flex items-end gap-2">
-            <label className="grid flex-1 gap-1.5 text-sm font-medium">
-              Add user
-              <Select
-                aria-label="Add user"
-                value={selectedUser}
-                onChange={(event) => setSelectedUser(event.target.value)}
-              >
-                <option value="">Select a member...</option>
-                {filteredCandidates?.map((candidate) => (
-                  <option key={candidate.userId} value={candidate.userId}>
-                    {candidate.username}
-                  </option>
-                ))}
+            <div className="grid flex-1 gap-1.5">
+              <Label htmlFor="add-user-select">Add user</Label>
+              <Select value={selectedUser} onValueChange={setSelectedUser}>
+                <SelectTrigger id="add-user-select" aria-label="Add user" className="w-full">
+                  <SelectValue placeholder="Select a member..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {filteredCandidates?.map((candidate) => (
+                    <SelectItem key={candidate.userId} value={candidate.userId}>
+                      {candidate.username}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
               </Select>
-            </label>
-            <label className="grid gap-1.5 text-sm font-medium">
-              Grant role
+            </div>
+            <div className="grid gap-1.5">
+              <Label htmlFor="grant-role-select">Grant role</Label>
               <Select
-                aria-label="Grant role"
-                className="w-32"
                 value={selectedRole}
-                onChange={(event) =>
-                  setSelectedRole(event.target.value as "editor" | "viewer")
-                }
+                onValueChange={(value) => setSelectedRole(value as "editor" | "viewer")}
               >
-                <option value="editor">editor</option>
-                <option value="viewer">viewer</option>
+                <SelectTrigger id="grant-role-select" aria-label="Grant role" className="w-32">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="editor">editor</SelectItem>
+                  <SelectItem value="viewer">viewer</SelectItem>
+                </SelectContent>
               </Select>
-            </label>
+            </div>
             <Button
               type="button"
               onClick={addGrant}

@@ -1,9 +1,13 @@
+import { Plus } from "lucide-react";
 import { useState } from "react";
+import { toast } from "sonner";
 
+import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/switch";
 import type { ProviderConnection } from "../../shared/api";
@@ -113,6 +117,7 @@ function ConnectionRow({ connection }: { connection: ProviderConnection }) {
   const update = useUpdateConnectionMutation();
   const remove = useDeleteConnectionMutation();
   const [editing, setEditing] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [fields, setFields] = useState<DraftFields>({
     label: connection.label,
     baseUrl: connection.baseUrl,
@@ -139,26 +144,13 @@ function ConnectionRow({ connection }: { connection: ProviderConnection }) {
     setEditing(false);
   }
 
-  async function del() {
-    if (!window.confirm(`Delete connection "${connection.label}"?`)) {
-      return;
-    }
-    await remove.mutateAsync(connection.id);
-  }
-
   return (
     <li className="rounded-lg border p-3">
       <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3">
-          <input
-            type="radio"
+          <RadioGroupItem
             aria-label={`Activate ${connection.label}`}
-            checked={connection.isActive}
-            onChange={() => {
-              if (!connection.isActive) {
-                void activate.mutateAsync(connection.id);
-              }
-            }}
+            value={connection.id}
           />
           <div className="min-w-0">
             <p className="truncate font-medium">{connection.label}</p>
@@ -177,7 +169,12 @@ function ConnectionRow({ connection }: { connection: ProviderConnection }) {
           <Button size="sm" variant="ghost" onClick={() => setEditing((v) => !v)}>
             Edit
           </Button>
-          <Button size="sm" variant="ghost" className="text-destructive" onClick={del}>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="text-destructive"
+            onClick={() => setConfirmDelete(true)}
+          >
             Delete
           </Button>
         </div>
@@ -195,6 +192,23 @@ function ConnectionRow({ connection }: { connection: ProviderConnection }) {
           </div>
         </div>
       ) : null}
+      <ConfirmDialog
+        confirmLabel="Delete connection"
+        description={`"${connection.label}" will be removed. Chat and analyze will stop working until another connection is activated.`}
+        destructive
+        isPending={remove.isPending}
+        onConfirm={async () => {
+          try {
+            await remove.mutateAsync(connection.id);
+            toast.success(`Connection "${connection.label}" deleted.`);
+          } catch (error) {
+            toast.error(error instanceof Error ? error.message : "Failed to delete connection.");
+          }
+        }}
+        onOpenChange={setConfirmDelete}
+        open={confirmDelete}
+        title="Delete this connection?"
+      />
     </li>
   );
 }
@@ -202,8 +216,10 @@ function ConnectionRow({ connection }: { connection: ProviderConnection }) {
 export function LlmConnectionsSection() {
   const settings = useSystemSettingsQuery();
   const create = useCreateConnectionMutation();
+  const activate = useActivateConnectionMutation();
   const connections = settings.data?.connections ?? [];
   const [draft, setDraft] = useState<DraftFields | null>(null);
+  const activeId = connections.find((c) => c.isActive)?.id ?? "";
 
   async function createDraft() {
     if (!draft) {
@@ -227,7 +243,8 @@ export function LlmConnectionsSection() {
           <CardDescription>Chat and analyze use the active connection.</CardDescription>
         </div>
         <Button size="sm" onClick={() => setDraft(EMPTY_DRAFT)} disabled={draft !== null}>
-          + Add
+          <Plus />
+          Add
         </Button>
       </CardHeader>
       <CardContent className="grid gap-3">
@@ -235,11 +252,18 @@ export function LlmConnectionsSection() {
           <p className="text-sm text-muted-foreground">No connections configured yet.</p>
         ) : null}
         <ScrollArea className="max-h-[420px] pr-2">
-          <ul className="grid gap-2">
-            {connections.map((c) => (
-              <ConnectionRow key={c.id} connection={c} />
-            ))}
-          </ul>
+          <RadioGroup
+            onValueChange={(id) => {
+              if (id !== activeId) void activate.mutateAsync(id);
+            }}
+            value={activeId}
+          >
+            <ul className="grid gap-2">
+              {connections.map((c) => (
+                <ConnectionRow key={c.id} connection={c} />
+              ))}
+            </ul>
+          </RadioGroup>
         </ScrollArea>
         {draft ? (
           <div className="rounded-lg border border-dashed p-3">

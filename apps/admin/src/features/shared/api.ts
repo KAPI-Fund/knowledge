@@ -398,6 +398,17 @@ export async function register(input: { username: string; password: string }) {
   );
 }
 
+export async function logout() {
+  return apiFetch(
+    "/api/auth/logout",
+    {
+      method: "POST",
+      headers: { "x-csrf-token": getCsrfToken() },
+    },
+    z.unknown(),
+  );
+}
+
 export async function listProjects() {
   const response = await apiFetch("/api/projects", { method: "GET" }, projectsSchema);
   return response.projects;

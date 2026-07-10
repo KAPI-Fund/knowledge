@@ -6,9 +6,17 @@ import { RouteStatePane } from "@/components/layout/route-state-pane";
 import { PageHeader } from "@/components/shared/page-header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Select } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { normalizeAppError } from "@/lib/app-error";
 
 import { useProjectFileContentQuery, useProjectFilesQuery, useSaveFileContentMutation } from "./queries";
@@ -129,14 +137,19 @@ export function FilesPage() {
 
       <Card>
         <CardContent className="grid gap-4 p-6 md:grid-cols-[180px_minmax(0,1fr)_auto] md:items-end">
-          <label className="grid gap-2 text-sm font-medium">
-            Root
-            <Select aria-label="Root" onChange={(event) => handleRootChange(event.target.value)} value={root}>
-              <option value="all">all</option>
-              <option value="wiki">wiki</option>
-              <option value="sources">sources</option>
+          <div className="grid gap-2">
+            <Label htmlFor="files-root">Root</Label>
+            <Select onValueChange={handleRootChange} value={root}>
+              <SelectTrigger id="files-root" aria-label="Root" className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">all</SelectItem>
+                <SelectItem value="wiki">wiki</SelectItem>
+                <SelectItem value="sources">sources</SelectItem>
+              </SelectContent>
             </Select>
-          </label>
+          </div>
           <label className="grid gap-2 text-sm font-medium">
             Max Files
             <Input
@@ -145,14 +158,14 @@ export function FilesPage() {
               value={maxFiles}
             />
           </label>
-          <label className="flex items-center gap-3 rounded-xl border border-border/70 px-4 py-2 text-sm font-medium">
-            <input
+          <div className="flex items-center gap-3 rounded-lg border px-4 py-2.5">
+            <Checkbox
+              id="files-recursive"
               checked={recursive}
-              onChange={(event) => setRecursive(event.target.checked)}
-              type="checkbox"
+              onCheckedChange={(checked) => setRecursive(checked === true)}
             />
-            Recursive
-          </label>
+            <Label htmlFor="files-recursive">Recursive</Label>
+          </div>
         </CardContent>
       </Card>
 

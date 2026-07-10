@@ -57,9 +57,10 @@ describe("ImageSection", () => {
 
     expect(screen.getByLabelText(/base url/i)).toHaveValue("https://img.example.com");
     expect(screen.getByLabelText(/model/i)).toHaveValue("gpt-image-1");
-    expect(screen.getByLabelText(/image size/i)).toHaveValue("1024x1024");
+    expect(screen.getByRole("combobox", { name: /image size/i })).toHaveTextContent("1024x1024");
 
-    await user.selectOptions(screen.getByLabelText(/image size/i), "1536x1024");
+    await user.click(screen.getByRole("combobox", { name: /image size/i }));
+    await user.click(await screen.findByRole("option", { name: "1536x1024" }));
     await user.click(screen.getByRole("button", { name: /save/i }));
 
     const payload = updateSettings.mock.calls[0][0];
@@ -91,15 +92,16 @@ describe("ImageSection", () => {
     render(<ImageSection />);
 
     // dall-e-2 allows 512x512.
-    expect(screen.getByLabelText(/image size/i)).toHaveValue("512x512");
+    expect(screen.getByRole("combobox", { name: /image size/i })).toHaveTextContent("512x512");
 
     // Switch to gpt-image-1, which does not allow 512x512 -> resets to its first size.
     await user.clear(screen.getByLabelText(/model/i));
     await user.type(screen.getByLabelText(/model/i), "gpt-image-1");
 
-    expect(screen.getByLabelText(/image size/i)).toHaveValue("1024x1024");
+    expect(screen.getByRole("combobox", { name: /image size/i })).toHaveTextContent("1024x1024");
+    await user.click(screen.getByRole("combobox", { name: /image size/i }));
     expect(screen.queryByRole("option", { name: "512x512" })).not.toBeInTheDocument();
-    expect(screen.getByRole("option", { name: "1536x1024" })).toBeInTheDocument();
+    expect(await screen.findByRole("option", { name: "1536x1024" })).toBeInTheDocument();
   });
 
   it("sends clearApiKey when the clear-key switch is on and no new key is typed", async () => {

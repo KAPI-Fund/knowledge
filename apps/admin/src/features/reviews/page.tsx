@@ -1,17 +1,25 @@
 import type { ColumnDef } from "@tanstack/react-table";
+import { ClipboardCheck } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
+import { toast } from "sonner";
 
 import { EmptyState } from "@/components/layout/empty-state";
 import { DataTable } from "@/components/shared/data-table";
-import { FilterToolbar } from "@/components/shared/filter-toolbar";
 import { PageHeader } from "@/components/shared/page-header";
 import { StatusPill } from "@/components/shared/status-pill";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Select } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { normalizeAppError } from "@/lib/app-error";
 
 import { ProjectFileLink } from "../shared/file-links";
 import { useProjectReviewsQuery, useSweepReviewsMutation, useUpdateReviewMutation } from "./queries";
@@ -91,13 +99,18 @@ export function ReviewsPage() {
               Inspect
             </Button>
             <Button
-              onClick={() =>
-                updateReview.mutateAsync({
-                  projectId,
-                  reviewId: row.original.id,
-                  status: "resolved",
-                })
-              }
+              onClick={async () => {
+                try {
+                  await updateReview.mutateAsync({
+                    projectId,
+                    reviewId: row.original.id,
+                    status: "resolved",
+                  });
+                  toast.success("Review resolved.");
+                } catch (error) {
+                  toast.error(normalizeAppError(error).message);
+                }
+              }}
               size="sm"
               variant="secondary"
             >
@@ -114,7 +127,18 @@ export function ReviewsPage() {
     <div className="grid gap-4">
       <PageHeader
         actions={
-          <Button disabled={sweepReviews.isPending} onClick={() => sweepReviews.mutateAsync({ projectId })}>
+          <Button
+            disabled={sweepReviews.isPending}
+            onClick={async () => {
+              try {
+                await sweepReviews.mutateAsync({ projectId });
+                toast.success("Review sweep queued.");
+              } catch (error) {
+                toast.error(normalizeAppError(error).message);
+              }
+            }}
+          >
+            <ClipboardCheck />
             Sweep Reviews
           </Button>
         }
@@ -122,28 +146,31 @@ export function ReviewsPage() {
         title="Reviews"
       />
 
-      <FilterToolbar
-        onSearchChange={setItemType}
-        searchPlaceholder="Filter by type"
-        searchValue={itemType}
-      >
-        <Select
-          aria-label="Status"
-          className="w-40"
-          onChange={(event) => setStatus(event.target.value)}
-          value={status}
-        >
-          <option value="unresolved">unresolved</option>
-          <option value="resolved">resolved</option>
-          <option value="all">all</option>
+      <div className="flex flex-wrap items-center gap-2">
+        <Input
+          aria-label="Filter by type"
+          className="h-8 w-40 lg:w-64"
+          onChange={(event) => setItemType(event.target.value)}
+          placeholder="Filter by type"
+          value={itemType}
+        />
+        <Select onValueChange={setStatus} value={status}>
+          <SelectTrigger aria-label="Status" size="sm" className="w-40">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="unresolved">unresolved</SelectItem>
+            <SelectItem value="resolved">resolved</SelectItem>
+            <SelectItem value="all">all</SelectItem>
+          </SelectContent>
         </Select>
         <Input
           aria-label="Limit"
-          className="w-24"
+          className="h-8 w-24"
           onChange={(event) => setLimit(event.target.value)}
           value={limit}
         />
-      </FilterToolbar>
+      </div>
 
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1.4fr)_380px]">
         <div className="grid gap-3">

@@ -1,11 +1,22 @@
-import { Pencil, Trash2 } from "lucide-react";
+import { MessagesSquare, Pencil, Plus, SendHorizontal, Trash2 } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useParams } from "react-router-dom";
+import { toast } from "sonner";
 
+import { EmptyState } from "@/components/layout/empty-state";
+import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { MarkdownMessage } from "@/components/shared/markdown-message";
 import { PageHeader } from "@/components/shared/page-header";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Tooltip,
@@ -38,6 +49,9 @@ export function ChatPage() {
   const [streamingText, setStreamingText] = useState<string | null>(null);
   const [pendingUserText, setPendingUserText] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [renameTarget, setRenameTarget] = useState<{ id: string; title: string } | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; title: string } | null>(null);
 
   const isStreaming = streamingText !== null;
 
@@ -156,21 +170,25 @@ export function ChatPage() {
     );
   }
 
-  function handleRename(conversationId: string, currentTitle: string) {
-    const title = window.prompt("Conversation title", currentTitle);
-    if (title?.trim()) {
-      renameMutation.mutate({ conversationId, title: title.trim() });
-    }
+  function openRename(conversationId: string, currentTitle: string) {
+    setRenameTarget({ id: conversationId, title: currentTitle });
+    setRenameDraft(currentTitle);
   }
 
-  function handleDelete(conversationId: string) {
-    deleteMutation.mutate(conversationId, {
-      onSuccess: () => {
-        if (activeId === conversationId) {
-          setActiveId(null);
-        }
+  function submitRename() {
+    if (!renameTarget || !renameDraft.trim()) {
+      return;
+    }
+    renameMutation.mutate(
+      { conversationId: renameTarget.id, title: renameDraft.trim() },
+      {
+        onError: (mutationError) =>
+          toast.error(
+            mutationError instanceof Error ? mutationError.message : "Failed to rename conversation",
+          ),
       },
-    });
+    );
+    setRenameTarget(null);
   }
 
   return (
@@ -191,9 +209,15 @@ export function ChatPage() {
             }}
             variant="outline"
           >
+            <Plus />
             New conversation
           </Button>
           <TooltipProvider delayDuration={300}>
+            {(conversations.data ?? []).length === 0 ? (
+              <p className="px-2 py-4 text-center text-sm text-muted-foreground">
+                No conversations yet.
+              </p>
+            ) : null}
             <ul className="min-h-0 flex-1 space-y-0.5 overflow-y-auto">
               {(conversations.data ?? []).map((conversation) => (
                 <li className="group/conv relative" key={conversation.id}>
@@ -211,7 +235,7 @@ export function ChatPage() {
                         <Button
                           aria-label={`Rename ${conversation.title}`}
                           className="text-muted-foreground"
-                          onClick={() => handleRename(conversation.id, conversation.title)}
+                          onClick={() => openRename(conversation.id, conversation.title)}
                           size="icon-xs"
                           variant="ghost"
                         >
@@ -225,7 +249,7 @@ export function ChatPage() {
                         <Button
                           aria-label={`Delete ${conversation.title}`}
                           className="text-muted-foreground hover:text-destructive"
-                          onClick={() => handleDelete(conversation.id)}
+                          onClick={() => setDeleteTarget({ id: conversation.id, title: conversation.title })}
                           size="icon-xs"
                           variant="ghost"
                         >
@@ -249,6 +273,17 @@ export function ChatPage() {
             ref={scrollRef}
           >
             <div className="space-y-3 p-4" ref={contentRef}>
+            {(messages.data ?? []).length === 0 && pendingUserText === null && streamingText === null ? (
+              <EmptyState
+                description={
+                  activeId
+                    ? "Send a message to start this conversation."
+                    : "Pick a conversation or just start typing below."
+                }
+                icon={MessagesSquare}
+                title={activeId ? "No messages yet" : "Ask the wiki"}
+              />
+            ) : null}
             {(messages.data ?? []).map((message) => {
               const isUser = message.role === "user";
               return (
@@ -312,11 +347,75 @@ export function ChatPage() {
               value={draft}
             />
             <Button disabled={isStreaming || !draft.trim()} type="submit">
+              <SendHorizontal />
               Send
             </Button>
           </form>
         </section>
       </div>
+
+      <Dialog
+        onOpenChange={(open) => {
+          if (!open) setRenameTarget(null);
+        }}
+        open={Boolean(renameTarget)}
+      >
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Rename conversation</DialogTitle>
+          </DialogHeader>
+          <Input
+            aria-label="Conversation title"
+            onChange={(event) => setRenameDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") submitRename();
+            }}
+            value={renameDraft}
+          />
+          <DialogFooter>
+            <Button onClick={() => setRenameTarget(null)} type="button" variant="outline">
+              Cancel
+            </Button>
+            <Button
+              disabled={!renameDraft.trim() || renameMutation.isPending}
+              onClick={submitRename}
+              type="button"
+            >
+              Save
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <ConfirmDialog
+        confirmLabel="Delete conversation"
+        description={
+          deleteTarget ? `"${deleteTarget.title}" and its messages will be removed.` : ""
+        }
+        destructive
+        isPending={deleteMutation.isPending}
+        onConfirm={async () => {
+          if (!deleteTarget) return;
+          try {
+            await deleteMutation.mutateAsync(deleteTarget.id);
+            if (activeId === deleteTarget.id) {
+              setActiveId(null);
+            }
+            toast.success("Conversation deleted.");
+          } catch (mutationError) {
+            toast.error(
+              mutationError instanceof Error
+                ? mutationError.message
+                : "Failed to delete conversation",
+            );
+          }
+        }}
+        onOpenChange={(open) => {
+          if (!open) setDeleteTarget(null);
+        }}
+        open={Boolean(deleteTarget)}
+        title="Delete this conversation?"
+      />
     </div>
   );
 }

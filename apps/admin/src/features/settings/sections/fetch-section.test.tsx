@@ -27,7 +27,9 @@ describe("FetchSection", () => {
   it("defaults to the active firecrawl provider and renders its fields", () => {
     settingsData.mockReturnValue(firecrawlActive());
     render(<FetchSection />);
-    expect(screen.getByLabelText(/Fetch Provider/i)).toHaveValue("firecrawl");
+    expect(screen.getByRole("combobox", { name: /Fetch Provider/i })).toHaveTextContent(
+      "firecrawl",
+    );
     expect(screen.getByLabelText(/Firecrawl Base URL/i)).toHaveValue("https://api.firecrawl.dev");
   });
 
@@ -80,7 +82,8 @@ describe("FetchSection", () => {
     settingsData.mockReturnValue(firecrawlActive());
     render(<FetchSection />);
 
-    await user.selectOptions(screen.getByLabelText(/Fetch Provider/i), "none");
+    await user.click(screen.getByRole("combobox", { name: /Fetch Provider/i }));
+    await user.click(await screen.findByRole("option", { name: "none" }));
     expect(screen.queryByLabelText(/Firecrawl Base URL/i)).not.toBeInTheDocument();
   });
 });

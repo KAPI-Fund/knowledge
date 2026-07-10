@@ -49,7 +49,7 @@ export function GraphInsightsPanel({
                   return (
                     <li key={item.key}>
                       <div
-                        className={`rounded-md border p-2 ${active ? "border-sky-400 bg-sky-50" : ""}`}
+                        className={`rounded-md border p-2 ${active ? "border-sky-400 bg-sky-50 dark:border-sky-700 dark:bg-sky-950/50" : ""}`}
                       >
                         <div className="flex items-start justify-between gap-2">
                           <button

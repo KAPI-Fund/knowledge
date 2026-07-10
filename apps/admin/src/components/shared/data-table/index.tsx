@@ -1,16 +1,19 @@
 import {
   type ColumnDef,
+  type ColumnFiltersState,
   type SortingState,
   flexRender,
   getCoreRowModel,
+  getFacetedRowModel,
+  getFacetedUniqueValues,
+  getFilteredRowModel,
   getPaginationRowModel,
   getSortedRowModel,
   useReactTable,
 } from "@tanstack/react-table";
 import { ArrowDown, ArrowUp, ChevronsUpDown } from "lucide-react";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 
-import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
@@ -22,6 +25,15 @@ import {
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 
+import { DataTablePagination } from "./pagination";
+import { DataTableToolbar, type FacetedFilterConfig } from "./toolbar";
+
+export { DataTableColumnHeader } from "./column-header";
+export { DataTableFacetedFilter, type FacetedFilterOption } from "./faceted-filter";
+export { DataTablePagination } from "./pagination";
+export { DataTableRowActions } from "./row-actions";
+export { DataTableToolbar, type FacetedFilterConfig } from "./toolbar";
+
 type DataTableProps<TData, TValue> = {
   columns: ColumnDef<TData, TValue>[];
   data: TData[];
@@ -32,6 +44,11 @@ type DataTableProps<TData, TValue> = {
   // bounded box (sticky header, pagination pinned to the bottom) instead of
   // growing the page. Use inside a height-constrained flex/grid cell.
   fillHeight?: boolean;
+  searchKey?: string;
+  searchPlaceholder?: string;
+  facetedFilters?: FacetedFilterConfig[];
+  toolbar?: ReactNode;
+  onRowClick?: (row: TData) => void;
 };
 
 export function DataTable<TData, TValue>({
@@ -41,24 +58,45 @@ export function DataTable<TData, TValue>({
   isLoading = false,
   pageSize = 10,
   fillHeight = false,
+  searchKey,
+  searchPlaceholder,
+  facetedFilters,
+  toolbar,
+  onRowClick,
 }: DataTableProps<TData, TValue>) {
   const [sorting, setSorting] = useState<SortingState>([]);
+  const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
 
   const table = useReactTable({
     columns,
     data,
-    state: { sorting },
+    state: { sorting, columnFilters },
     onSortingChange: setSorting,
+    onColumnFiltersChange: setColumnFilters,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
+    getFilteredRowModel: getFilteredRowModel(),
+    getFacetedRowModel: getFacetedRowModel(),
+    getFacetedUniqueValues: getFacetedUniqueValues(),
     getPaginationRowModel: getPaginationRowModel(),
     initialState: { pagination: { pageSize } },
   });
 
   const rows = table.getRowModel().rows;
+  const hasToolbar = Boolean(searchKey || facetedFilters?.length || toolbar);
 
   return (
     <div className={cn("grid gap-3", fillHeight && "flex h-full min-h-0 flex-col")}>
+      {hasToolbar ? (
+        <DataTableToolbar
+          facetedFilters={facetedFilters}
+          searchKey={searchKey}
+          searchPlaceholder={searchPlaceholder}
+          table={table}
+        >
+          {toolbar}
+        </DataTableToolbar>
+      ) : null}
       <div
         className={cn(
           "rounded-md border border-border",
@@ -113,8 +151,12 @@ export function DataTable<TData, TValue>({
                 </TableRow>
               ))
             ) : rows.length ? (
-              rows.map((row, index) => (
-                <TableRow className={cn(index % 2 === 1 && "bg-[#fbfcfd]")} key={row.id}>
+              rows.map((row) => (
+                <TableRow
+                  className={cn(onRowClick && "cursor-pointer")}
+                  key={row.id}
+                  onClick={onRowClick ? () => onRowClick(row.original) : undefined}
+                >
                   {row.getVisibleCells().map((cell) => (
                     <TableCell key={cell.id}>
                       {flexRender(cell.column.columnDef.cell, cell.getContext())}
@@ -135,29 +177,7 @@ export function DataTable<TData, TValue>({
           </TableBody>
         </Table>
       </div>
-      <div className="flex items-center justify-between text-xs text-muted-foreground">
-        <span>
-          {rows.length} of {data.length}
-        </span>
-        <div className="flex gap-2">
-          <Button
-            disabled={!table.getCanPreviousPage()}
-            onClick={() => table.previousPage()}
-            size="sm"
-            variant="outline"
-          >
-            Prev
-          </Button>
-          <Button
-            disabled={!table.getCanNextPage()}
-            onClick={() => table.nextPage()}
-            size="sm"
-            variant="outline"
-          >
-            Next
-          </Button>
-        </div>
-      </div>
+      <DataTablePagination table={table} />
     </div>
   );
 }

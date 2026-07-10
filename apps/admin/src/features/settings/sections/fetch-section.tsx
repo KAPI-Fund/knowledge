@@ -3,7 +3,14 @@ import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Select } from "@/components/ui/select";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { useSystemSettingsQuery, useUpdateSystemSettingsMutation } from "../queries";
 
@@ -88,17 +95,18 @@ export function FetchSection() {
         <CardDescription>Scraping provider for the canvas URL node.</CardDescription>
       </CardHeader>
       <CardContent className="grid gap-4">
-        <label className="grid gap-1.5 text-sm font-medium">
-          Fetch Provider
-          <Select
-            aria-label="Fetch Provider"
-            value={fields.provider}
-            onChange={(e) => set("provider", e.target.value)}
-          >
-            <option value="none">none</option>
-            <option value="firecrawl">firecrawl</option>
+        <div className="grid gap-1.5">
+          <Label htmlFor="fetch-provider">Fetch Provider</Label>
+          <Select value={fields.provider} onValueChange={(value) => set("provider", value)}>
+            <SelectTrigger id="fetch-provider" aria-label="Fetch Provider" className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none">none</SelectItem>
+              <SelectItem value="firecrawl">firecrawl</SelectItem>
+            </SelectContent>
           </Select>
-        </label>
+        </div>
 
         {fields.provider === "firecrawl" ? (
           <>

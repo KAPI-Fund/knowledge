@@ -16,6 +16,7 @@ import {
   type NodeProps,
   type NodeTypes,
 } from "@xyflow/react";
+import { useTheme } from "next-themes";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useSystemSettingsQuery } from "../settings/queries";
@@ -273,6 +274,7 @@ export function commitNodeGeometry(
 }
 
 export function CanvasBoard({ document, onChange, onRunNode, onFetchUrl, onSelectionChange }: CanvasBoardProps) {
+  const { resolvedTheme } = useTheme();
   const settings = useSystemSettingsQuery().data;
   const analyzeModel = settings?.connections?.find((c) => c.isActive)?.model ?? null;
   const imageModel = settings?.image?.model ?? null;
@@ -445,6 +447,7 @@ export function CanvasBoard({ document, onChange, onRunNode, onFetchUrl, onSelec
           isValidConnection={validateConnection}
           deleteKeyCode={["Delete", "Backspace"]}
           defaultViewport={document.viewport}
+          colorMode={resolvedTheme === "dark" ? "dark" : "light"}
         >
           <Background />
           <Controls />
