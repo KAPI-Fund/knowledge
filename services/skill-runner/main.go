@@ -124,6 +124,7 @@ func main() {
 	s := &server{factory: factory, templateID: templateID}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/render", s.handleRender)
+	mux.HandleFunc("/exec", s.handleExec)
 	mux.HandleFunc("/health", s.handleHealth)
 	log.Printf("skill-runner listening on %s", addr)
 	log.Fatal(http.ListenAndServe(addr, mux))
