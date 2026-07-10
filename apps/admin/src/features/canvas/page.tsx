@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { uuid } from "@/lib/uuid";
 
+import { retrySkillJob } from "../shared/api";
 import { extractUrl } from "./api";
 import { CanvasBoard } from "./canvas-board";
 import { CanvasToolbar } from "./canvas-toolbar";
@@ -195,9 +196,45 @@ export function CanvasPage() {
     return flush((value) => cacheSave(canvasId, { title, document: value }));
   }, [canvasId, title, flush, cacheSave]);
 
+  // Retry a failed skill render: the server clones the failed job's input into
+  // a fresh queued job (new id -- the poller dedupes terminal jobs by id), and
+  // the node rebinds to the new id so the existing poll loop picks it up.
+  const retrySkillNode = useCallback(
+    (nodeId: string, jobId: string) => {
+      // Unbind the failed job while the retry is in flight: a node that is
+      // "running" but still bound to the old jobId would be polled instantly,
+      // and the old job's terminal error would flip the node right back.
+      patchNodeData(nodeId, {
+        status: "running",
+        jobId: null,
+        error: null,
+        progressStage: null,
+        progressMessage: null,
+      });
+      retrySkillJob(jobId)
+        .then(({ jobId: nextJobId }) => patchNodeData(nodeId, { jobId: nextJobId }))
+        .catch((error: unknown) =>
+          patchNodeData(nodeId, {
+            status: "error",
+            jobId,
+            error: error instanceof Error ? error.message : "重试失败",
+          }),
+        );
+    },
+    [patchNodeData],
+  );
+
   const runNode = useCallback(
     (nodeId: string) => {
       if (!canvasId) {
+        return;
+      }
+      // An html skill node's "run" is a job retry, not an SSE node run.
+      const target = doc?.nodes.find((n) => n.id === nodeId);
+      if (target?.type === "html") {
+        if (typeof target.data.jobId === "string") {
+          retrySkillNode(nodeId, target.data.jobId);
+        }
         return;
       }
       patchNodeData(nodeId, { status: "running", error: null });
@@ -259,7 +296,7 @@ export function CanvasPage() {
         });
       });
     },
-    [canvasId, flushCurrent, patchNodeData],
+    [canvasId, doc, flushCurrent, patchNodeData, retrySkillNode],
   );
 
   const fetchUrlNode = useCallback(
@@ -382,6 +419,11 @@ export function CanvasPage() {
         title: result.title,
       }),
     onError: (nodeId, message) => patchNodeData(nodeId, { status: "error", error: message }),
+    onProgress: (nodeId, progress) =>
+      patchNodeData(nodeId, {
+        progressStage: progress.stage,
+        progressMessage: progress.message,
+      }),
   });
 
   return (

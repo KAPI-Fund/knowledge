@@ -132,12 +132,14 @@ function ImageAdapter({ id, data, selected }: NodeProps) {
 }
 
 function HtmlAdapter({ id, data, selected }: NodeProps) {
+  const cb = callbacks(data);
   return (
     <HtmlNode
       data={data as unknown as HtmlNodeData}
       nodeId={id}
       index={indexOf(data)}
       selected={selected}
+      onRetry={cb.onRun}
     />
   );
 }
@@ -172,10 +174,14 @@ export function pruneDanglingEdges(
   return edges.filter((e) => ids.has(e.source) && ids.has(e.target));
 }
 
-const CONSUMER_TYPES = ["search", "ai_analyze", "ai_image"];
+// Valid edge targets: consumers that read upstream content when run, plus html,
+// whose incoming edge records which nodes the skill deck was generated from.
+// Must stay in sync with prune_invalid_edges on the server, or a client-visible
+// edge would be silently dropped on save.
+const CONSUMER_TYPES = ["search", "ai_analyze", "ai_image", "html"];
 
 // A connection is valid iff: the endpoints differ, the target is a consumer
-// (search/ai_analyze/ai_image), it does not duplicate an existing edge, and it
+// (see CONSUMER_TYPES), it does not duplicate an existing edge, and it
 // would not create a cycle (walking forward from target must not reach source).
 // React Flow calls this during a drag, so an illegal handle never highlights and
 // a release over it makes no edge (§3.2 "middle" blocking).

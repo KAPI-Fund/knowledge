@@ -10,12 +10,14 @@ function Harness({
   jobs,
   onDone,
   onError,
+  onProgress,
 }: {
   jobs: RunningSkillJob[];
   onDone: (nodeId: string, result: { assetId: string; url: string; title?: string }) => void;
   onError: (nodeId: string, message: string) => void;
+  onProgress?: (nodeId: string, progress: { stage?: string; message?: string }) => void;
 }) {
-  useSkillJobPoll(jobs, { onDone, onError });
+  useSkillJobPoll(jobs, { onDone, onError, onProgress });
   return null;
 }
 
@@ -55,6 +57,29 @@ describe("useSkillJobPoll", () => {
       <Harness jobs={[{ nodeId: "n1", jobId: "j1" }]} onDone={() => {}} onError={onError} />,
     );
     await waitFor(() => expect(onError).toHaveBeenCalledWith("n1", "boom"));
+  });
+
+  it("invokes onProgress while a job is running without resolving it", async () => {
+    vi.mocked(fetchSkillJob).mockResolvedValue({
+      status: "running",
+      result: null,
+      error: null,
+      progress: { stage: "codex", message: "writing slides" },
+    });
+    const onProgress = vi.fn();
+    render(
+      <Harness
+        jobs={[{ nodeId: "n1", jobId: "j1" }]}
+        onDone={() => {}}
+        onError={() => {}}
+        onProgress={onProgress}
+      />,
+    );
+    await waitFor(() =>
+      expect(onProgress).toHaveBeenCalledWith("n1", { stage: "codex", message: "writing slides" }),
+    );
+    // Still unresolved: the next tick polls again and re-reports progress.
+    await waitFor(() => expect(onProgress.mock.calls.length).toBeGreaterThanOrEqual(1));
   });
 
   it("does not fire a terminal callback twice for the same job", async () => {

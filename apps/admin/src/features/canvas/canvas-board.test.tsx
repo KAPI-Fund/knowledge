@@ -96,10 +96,15 @@ describe("isValidConnection", () => {
     { id: "img1", type: "ai_image" },
     { id: "s1", type: "search" },
     { id: "kb1", type: "kb" },
+    { id: "deck1", type: "html" },
   ];
 
   it("accepts a producer -> consumer edge", () => {
     expect(isValidConnection(nodes, [], { source: "note1", target: "an1" })).toBe(true);
+  });
+
+  it("accepts an edge into an html deck node (skill provenance)", () => {
+    expect(isValidConnection(nodes, [], { source: "an1", target: "deck1" })).toBe(true);
   });
 
   it("rejects a self-loop", () => {

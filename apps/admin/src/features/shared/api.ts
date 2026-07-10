@@ -1251,10 +1251,25 @@ const skillJobStatusSchema = z.object({
     .object({ assetId: z.string(), url: z.string(), title: z.string().optional() })
     .nullish(),
   error: z.object({ message: z.string() }).nullish(),
+  progress: z
+    .object({ stage: z.string(), message: z.string(), elapsedS: z.number().nullish() })
+    .partial()
+    .nullish(),
 });
 
 export type SkillJobStatus = z.infer<typeof skillJobStatusSchema>;
+export type SkillJobProgress = NonNullable<SkillJobStatus["progress"]>;
 
 export async function fetchSkillJob(id: string) {
   return apiFetch(`/api/canvas-skill-jobs/${id}`, { method: "GET" }, skillJobStatusSchema);
+}
+
+// A retry issues a brand-new job id (the poller dedupes terminal jobs by id,
+// so the old id would never be polled again); callers must rebind the node.
+export async function retrySkillJob(id: string) {
+  return apiFetch(
+    `/api/canvas-skill-jobs/${id}/retry`,
+    { method: "POST", headers: csrfHeader() },
+    z.object({ jobId: z.string() }),
+  );
 }

@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 
-import { fetchSkillJob } from "../shared/api";
+import { fetchSkillJob, type SkillJobProgress } from "../shared/api";
 
 export interface RunningSkillJob {
   nodeId: string;
@@ -10,6 +10,7 @@ export interface RunningSkillJob {
 interface SkillJobHandlers {
   onDone: (nodeId: string, result: { assetId: string; url: string; title?: string }) => void;
   onError: (nodeId: string, message: string) => void;
+  onProgress?: (nodeId: string, progress: SkillJobProgress) => void;
 }
 
 // Poll running skill jobs until each reaches a terminal state, then hand the
@@ -50,6 +51,8 @@ export function useSkillJobPoll(jobs: RunningSkillJob[], handlers: SkillJobHandl
           } else if (status.status === "error") {
             resolvedRef.current.add(job.jobId);
             handlersRef.current.onError(job.nodeId, status.error?.message ?? "生成失败");
+          } else if (status.status === "running" && status.progress) {
+            handlersRef.current.onProgress?.(job.nodeId, status.progress);
           }
         } catch {
           // Transient failures are retried on the next tick.
