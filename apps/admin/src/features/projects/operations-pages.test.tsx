@@ -78,6 +78,10 @@ vi.mock("../reviews/queries", () => ({
   useUpdateReviewMutation: () => ({
     mutateAsync: vi.fn(),
   }),
+  useResolveReviewsMutation: () => ({
+    mutateAsync: vi.fn(),
+    isPending: false,
+  }),
   useSweepReviewsMutation: () => ({
     mutateAsync: vi.fn(),
   }),
@@ -333,8 +337,8 @@ describe("project operation pages", () => {
 
     await user.click(screen.getByRole("link", { name: "Reviews" }));
     expect(await screen.findByRole("heading", { name: "Reviews" })).toBeInTheDocument();
-    expect(screen.getByText("Review demo.md")).toBeInTheDocument();
-    expect(screen.getByText("missing-page")).toBeInTheDocument();
+    expect(screen.getAllByText("Review demo.md").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("missing-page").length).toBeGreaterThan(0);
     expect(screen.getByText("Create a dedicated page for evaluation details.")).toBeInTheDocument();
     expect(screen.getByText("raw/sources/demo.md")).toBeInTheDocument();
     expect(screen.getByText("wiki/evaluation.md")).toBeInTheDocument();

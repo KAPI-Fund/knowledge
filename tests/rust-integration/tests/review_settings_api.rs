@@ -240,6 +240,133 @@ async fn ingest_creates_review_items_and_review_endpoint_can_update_status() {
 }
 
 #[tokio::test]
+async fn reviews_resolve_endpoint_batches_and_dismisses() {
+    let temp = tempdir().unwrap();
+    let _env = TestEnvironment::start("review-batch-resolve").await.unwrap();
+    let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
+    let state = bootstrap_state(&config).await.unwrap();
+    let (cookie, csrf) = login_and_csrf(state.clone()).await;
+    let project_root = temp.path().join("review-batch-project");
+    let project_id = create_project(state.clone(), &cookie, &csrf, project_root.clone()).await;
+
+    std::fs::write(
+        project_root.join(".knowledge/reviews/items.json"),
+        json!({
+          "reviews": [
+            {
+              "id": "legacy-missing",
+              "status": "open",
+              "type": "missing-page",
+              "title": "Missing page: Attention",
+              "description": "Create Attention",
+              "options": []
+            },
+            {
+              "id": "legacy-duplicate",
+              "status": "open",
+              "type": "duplicate",
+              "title": "Duplicate page: Delta",
+              "description": "Merge Delta",
+              "options": []
+            }
+          ]
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let resolve_response = build_app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/projects/{project_id}/reviews:resolve"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .header("x-csrf-token", &csrf)
+                .body(Body::from(
+                    json!({ "ids": ["legacy-missing", "missing-id"] }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resolve_response.status(), StatusCode::OK);
+    let resolve_payload = read_json(resolve_response.into_body()).await;
+    assert_eq!(
+        resolve_payload
+            .get("resolved")
+            .and_then(Value::as_array)
+            .map(Vec::len),
+        Some(1)
+    );
+    assert_eq!(
+        resolve_payload
+            .get("notFound")
+            .and_then(Value::as_array)
+            .and_then(|items| items.first())
+            .and_then(Value::as_str),
+        Some("missing-id")
+    );
+
+    let dismiss_response = build_app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/projects/{project_id}/reviews:resolve"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .header("x-csrf-token", &csrf)
+                .body(Body::from(
+                    json!({ "ids": ["legacy-duplicate"], "action": "dismiss" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(dismiss_response.status(), StatusCode::OK);
+
+    let unresolved_response = build_app(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/projects/{project_id}/reviews"))
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let unresolved_payload = read_json(unresolved_response.into_body()).await;
+    assert_eq!(
+        unresolved_payload
+            .get("reviews")
+            .and_then(Value::as_array)
+            .map(Vec::len),
+        Some(0)
+    );
+
+    let all_response = build_app(state)
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/projects/{project_id}/reviews?status=all"))
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let all_payload = read_json(all_response.into_body()).await;
+    let statuses = all_payload
+        .get("reviews")
+        .and_then(Value::as_array)
+        .unwrap()
+        .iter()
+        .filter_map(|review| review.get("status").and_then(Value::as_str))
+        .collect::<Vec<_>>();
+    assert_eq!(statuses, vec!["resolved", "dismissed"]);
+}
+
+#[tokio::test]
 async fn provider_generated_review_blocks_are_persisted_during_ingest() {
     let temp = tempdir().unwrap();
     let _env = TestEnvironment::start("provider-review-items")

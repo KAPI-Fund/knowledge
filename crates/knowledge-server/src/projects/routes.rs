@@ -38,7 +38,10 @@ use knowledge_core::project::lint_fixes::{
     append_wikilink, ensure_broken_link_stub, rewrite_wikilink_target,
 };
 use knowledge_core::project::lint_items::{LintItem, load_lint_items, remove_lint_items};
-use knowledge_core::project::reviews::{ReviewItem, ReviewOption, load_reviews, save_reviews};
+use knowledge_core::project::reviews::{
+    ReviewItem, ReviewOption, append_review_items, load_reviews, stable_review_id,
+    update_review_statuses,
+};
 use knowledge_core::project::root::ProjectRoot;
 use knowledge_core::project::wiki_pages::{
     WikiPageError, delete_wiki_pages_with_refs, save_wiki_page,
@@ -162,6 +165,10 @@ pub fn router() -> Router<AppState> {
             post(sweep_reviews_handler),
         )
         .route(
+            "/api/projects/{project_id}/reviews:resolve",
+            post(resolve_reviews_handler),
+        )
+        .route(
             "/api/projects/{project_id}/reviews/{review_id}",
             patch(update_review_handler),
         )
@@ -275,6 +282,14 @@ pub struct UpdateSourceWatchRequest {
 #[derive(Debug, Clone, Deserialize)]
 pub struct UpdateReviewRequest {
     pub status: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolveReviewsRequest {
+    pub ids: Vec<String>,
+    #[serde(default)]
+    pub action: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1348,7 +1363,6 @@ async fn write_wiki_page_with_history(
 // addLintItemToReview (L124-168); desktop absolute paths become
 // project-relative ones.
 fn lint_item_to_review(item: &LintItem) -> ReviewItem {
-    let id = format!("lint-{}", uuid::Uuid::new_v4());
     let open_option = ReviewOption {
         label: "Open & Edit".to_string(),
         action: format!("open:{}", item.page),
@@ -1357,9 +1371,9 @@ fn lint_item_to_review(item: &LintItem) -> ReviewItem {
         label: "Skip".to_string(),
         action: "Skip".to_string(),
     };
-    match item.issue_type.as_str() {
+    let mut review = match item.issue_type.as_str() {
         "broken-link" => ReviewItem {
-            id,
+            id: String::new(),
             status: "open".to_string(),
             review_type: "confirm".to_string(),
             title: format!("Fix broken link in {}", item.page),
@@ -1377,7 +1391,7 @@ fn lint_item_to_review(item: &LintItem) -> ReviewItem {
             ],
         },
         "orphan" | "no-outlinks" => ReviewItem {
-            id,
+            id: String::new(),
             status: "open".to_string(),
             review_type: "suggestion".to_string(),
             title: format!("Add cross-references to {}", item.page),
@@ -1392,7 +1406,7 @@ fn lint_item_to_review(item: &LintItem) -> ReviewItem {
             options: vec![open_option, skip_option],
         },
         _ => ReviewItem {
-            id,
+            id: String::new(),
             status: "open".to_string(),
             review_type: "confirm".to_string(),
             title: item.detail.chars().take(80).collect(),
@@ -1406,19 +1420,13 @@ fn lint_item_to_review(item: &LintItem) -> ReviewItem {
             search_queries: None,
             options: vec![open_option, skip_option],
         },
-    }
+    };
+    review.id = stable_review_id(&review);
+    review
 }
 
 fn append_reviews(root: &ProjectRoot, reviews: Vec<ReviewItem>) -> Result<Vec<String>, ApiError> {
-    let mut store =
-        load_reviews(root).map_err(|error| ApiError::bad_request(error.to_string()))?;
-    let mut review_ids = Vec::new();
-    for review in reviews {
-        review_ids.push(review.id.clone());
-        store.reviews.push(review);
-    }
-    save_reviews(root, &store).map_err(|error| ApiError::bad_request(error.to_string()))?;
-    Ok(review_ids)
+    append_review_items(root, reviews).map_err(|error| ApiError::bad_request(error.to_string()))
 }
 
 async fn fix_lint_item_handler(
@@ -1844,6 +1852,75 @@ async fn sweep_reviews_handler(
     ))
 }
 
+async fn resolve_reviews_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(project_id): Path<String>,
+    Json(payload): Json<ResolveReviewsRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let session = authorized_principal_with_role(
+        &state,
+        &headers,
+        &project_id,
+        crate::tenancy::access::AccessRole::Editor,
+    )
+    .await?;
+    validate_csrf(&headers, &session)?;
+    if payload.ids.is_empty() {
+        return Err(ApiError::bad_request("ids must not be empty"));
+    }
+    if payload.ids.len() > 500 {
+        return Err(ApiError::bad_request("ids must contain at most 500 items"));
+    }
+    let status = match payload.action.as_deref().unwrap_or("resolve") {
+        "resolve" | "resolved" => "resolved",
+        "dismiss" | "dismissed" => "dismissed",
+        invalid => {
+            return Err(ApiError::bad_request(format!(
+                "invalid review action '{invalid}'. expected resolve or dismiss"
+            )));
+        }
+    };
+    let root = project_root_for_id(&state, &project_id).await?;
+    let result = update_review_statuses(&root, &payload.ids, status)
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    let updated_ids = result.updated_ids.clone();
+    let not_found_ids = result.not_found_ids.clone();
+
+    append_audit_log(
+        &state,
+        CreateAuditLog {
+            project_id: Some(project_id),
+            actor_id: session.user_id,
+            action: if status == "resolved" {
+                "review.resolved".to_string()
+            } else {
+                "review.dismissed".to_string()
+            },
+            target_type: "review".to_string(),
+            target_id: "batch".to_string(),
+            task_id: None,
+            summary: if status == "resolved" {
+                format!("Resolved {} review items", result.count)
+            } else {
+                format!("Dismissed {} review items", result.count)
+            },
+            metadata: json!({
+              "ids": updated_ids,
+              "notFound": not_found_ids,
+              "status": status
+            }),
+        },
+    )
+    .await?;
+
+    Ok(Json(json!({
+      "resolved": updated_ids,
+      "notFound": not_found_ids,
+      "count": result.count
+    })))
+}
+
 async fn update_review_handler(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -2116,7 +2193,7 @@ fn parse_review_status(value: Option<&str>) -> Result<ReviewStatusFilter, ApiErr
 
 fn review_status_matches(filter: ReviewStatusFilter, status: &str) -> bool {
     match filter {
-        ReviewStatusFilter::Unresolved => status != "resolved",
+        ReviewStatusFilter::Unresolved => status != "resolved" && status != "dismissed",
         ReviewStatusFilter::Resolved => status == "resolved",
         ReviewStatusFilter::All => true,
     }

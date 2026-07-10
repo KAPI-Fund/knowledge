@@ -14,6 +14,9 @@ import { TasksPage } from "../tasks/page";
 const retryTask = vi.fn();
 const cancelTask = vi.fn();
 const updateReview = vi.fn();
+const resolveReviews = vi
+  .fn()
+  .mockResolvedValue({ resolved: ["review-1"], notFound: [], count: 1 });
 const sweepReviews = vi.fn();
 const updateSettings = vi.fn();
 const importSource = vi.fn();
@@ -100,6 +103,10 @@ vi.mock("../reviews/queries", () => ({
   }),
   useUpdateReviewMutation: () => ({
     mutateAsync: updateReview,
+  }),
+  useResolveReviewsMutation: () => ({
+    mutateAsync: resolveReviews,
+    isPending: false,
   }),
   useSweepReviewsMutation: () => ({
     mutateAsync: sweepReviews,
@@ -350,10 +357,10 @@ describe("operations actions", () => {
     });
 
     await user.click(screen.getByRole("button", { name: "Resolve" }));
-    expect(updateReview).toHaveBeenCalledWith({
+    expect(resolveReviews).toHaveBeenCalledWith({
       projectId: "project-1",
-      reviewId: "review-1",
-      status: "resolved",
+      ids: ["review-1"],
+      action: "resolve",
     });
 
     cleanup();

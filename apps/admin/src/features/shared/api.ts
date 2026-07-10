@@ -1153,6 +1153,29 @@ export async function updateProjectReview(input: {
   );
 }
 
+export async function resolveProjectReviews(input: {
+  projectId: string;
+  ids: string[];
+  action?: "resolve" | "dismiss";
+}) {
+  return apiFetch(
+    `/api/projects/${input.projectId}/reviews:resolve`,
+    {
+      method: "POST",
+      headers: csrfHeader(),
+      body: JSON.stringify({
+        ids: input.ids,
+        ...(input.action ? { action: input.action } : {}),
+      }),
+    },
+    z.object({
+      resolved: z.array(z.string()),
+      notFound: z.array(z.string()),
+      count: z.number(),
+    }),
+  );
+}
+
 export async function sweepProjectReviews(input: { projectId: string }) {
   return apiFetch(
     `/api/projects/${input.projectId}/reviews:sweep`,
