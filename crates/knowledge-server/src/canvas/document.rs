@@ -69,13 +69,15 @@ impl CanvasDocument {
     }
 
     /// Return a copy with illegal edges removed: self-loops, duplicates
-    /// (same source+target), edges whose target is not a consumer
-    /// (search/ai_analyze/ai_image), and dangling edges (missing endpoints).
-    /// Cycles are intentionally not pruned (front-end blocks them; runtime reads
-    /// only direct predecessors so a cycle is harmless).
+    /// (same source+target), edges whose target is not a valid target
+    /// (search/ai_analyze/ai_image consumers, plus html which carries the
+    /// provenance edge auto-created by skill nodes), and dangling edges
+    /// (missing endpoints). Cycles are intentionally not pruned (front-end
+    /// blocks them; runtime reads only direct predecessors so a cycle is
+    /// harmless).
     pub fn prune_invalid_edges(&self) -> CanvasDocument {
         let is_consumer =
-            |ty: Option<&str>| matches!(ty, Some("search" | "ai_analyze" | "ai_image"));
+            |ty: Option<&str>| matches!(ty, Some("search" | "ai_analyze" | "ai_image" | "html"));
 
         let mut seen: std::collections::HashSet<(String, String)> =
             std::collections::HashSet::new();
@@ -227,10 +229,13 @@ mod tests {
                 node_at("note1", "note", 0.0, 0.0),
                 node_at("an", "ai_analyze", 100.0, 0.0),
                 node_at("kb1", "kb", 0.0, 100.0),
+                node_at("deck", "html", 200.0, 0.0),
             ],
             edges: vec![
                 // legal: note -> ai_analyze (consumer target)
                 CanvasEdge { id: "ok".into(), source: "note1".into(), target: "an".into(), ..Default::default() },
+                // legal: skill provenance edge into an html deck node
+                CanvasEdge { id: "prov".into(), source: "an".into(), target: "deck".into(), ..Default::default() },
                 // self-loop
                 CanvasEdge { id: "self".into(), source: "an".into(), target: "an".into(), ..Default::default() },
                 // duplicate of "ok"
@@ -244,7 +249,7 @@ mod tests {
         };
         let pruned = doc.prune_invalid_edges();
         let ids: Vec<&str> = pruned.edges.iter().map(|e| e.id.as_str()).collect();
-        assert_eq!(ids, vec!["ok"]);
+        assert_eq!(ids, vec!["ok", "prov"]);
     }
 
     #[test]
