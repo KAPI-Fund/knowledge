@@ -166,6 +166,25 @@ const deleteWikiPagesSchema = z.object({
   rewrittenFiles: z.number(),
 });
 
+const fileHistoryEntrySchema = z.object({
+  id: z.string(),
+  path: z.string(),
+  author: z.string(),
+  tool: z.string(),
+  createdAt: z.string(),
+});
+
+const fileHistoryListSchema = z.object({
+  entries: z.array(fileHistoryEntrySchema),
+});
+
+const fileHistoryDetailSchema = fileHistoryEntrySchema.extend({
+  content: z.string(),
+});
+
+export type FileHistoryEntry = z.infer<typeof fileHistoryEntrySchema>;
+export type FileHistoryDetail = z.infer<typeof fileHistoryDetailSchema>;
+
 const auditSchema = z.object({
   items: z.array(
     z.object({
@@ -570,6 +589,39 @@ export async function saveProjectFileContent(input: {
   );
 }
 
+export function rawFileUrl(projectId: string, path: string) {
+  return `/api/projects/${projectId}/files/raw?path=${encodeURIComponent(path)}`;
+}
+
+export async function listFileHistory(input: { projectId: string; path: string }) {
+  const searchParams = new URLSearchParams({ path: input.path });
+  const response = await apiFetch(
+    `/api/projects/${input.projectId}/files/history?${searchParams.toString()}`,
+    { method: "GET" },
+    fileHistoryListSchema,
+  );
+  return response.entries;
+}
+
+export async function getFileHistoryEntry(input: { projectId: string; entryId: string }) {
+  return apiFetch(
+    `/api/projects/${input.projectId}/files/history/${input.entryId}`,
+    { method: "GET" },
+    fileHistoryDetailSchema,
+  );
+}
+
+export async function restoreFileHistoryEntry(input: { projectId: string; entryId: string }) {
+  return apiFetch(
+    `/api/projects/${input.projectId}/files/history/${input.entryId}/restore`,
+    {
+      method: "POST",
+      headers: csrfHeader(),
+    },
+    z.object({ path: z.string(), content: z.string() }),
+  );
+}
+
 export async function listConversations(projectId: string) {
   const response = await apiFetch(
     `/api/projects/${projectId}/conversations`,
@@ -628,6 +680,21 @@ export async function listConversationMessages(input: {
     conversationMessagesSchema,
   );
   return response.messages;
+}
+
+export async function saveMessageToWiki(input: {
+  projectId: string;
+  conversationId: string;
+  messageId: string;
+}) {
+  return apiFetch(
+    `/api/projects/${input.projectId}/conversations/${input.conversationId}/messages/${input.messageId}/save-to-wiki`,
+    {
+      method: "POST",
+      headers: csrfHeader(),
+    },
+    z.object({ path: z.string(), title: z.string() }),
+  );
 }
 
 export async function listAgentSkills(projectId: string) {

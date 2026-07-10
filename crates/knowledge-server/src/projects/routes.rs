@@ -1,6 +1,7 @@
+use axum::body::Body;
 use axum::extract::{Path, Query, State};
-use axum::http::{HeaderMap, StatusCode};
-use axum::response::IntoResponse;
+use axum::http::{HeaderMap, StatusCode, header};
+use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, patch, post};
 use axum::{Json, Router};
 use serde::Deserialize;
@@ -9,6 +10,10 @@ use serde_json::json;
 use crate::app::state::AppState;
 use crate::http::error::ApiError;
 use crate::projects::audit::{CreateAuditLog, append_audit_log, list_audit_logs};
+use crate::projects::file_history::{
+    FileHistoryError, get_file_history_entry, list_file_history, record_disk_version,
+    restore_file_version,
+};
 use crate::projects::service::{
     create_project, normalize_project_path_string, project_detail, project_root_for_id,
 };
@@ -78,6 +83,22 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/projects/{project_id}/files/content",
             get(file_content_handler).put(save_file_content_handler),
+        )
+        .route(
+            "/api/projects/{project_id}/files/raw",
+            get(raw_file_handler),
+        )
+        .route(
+            "/api/projects/{project_id}/files/history",
+            get(list_file_history_handler),
+        )
+        .route(
+            "/api/projects/{project_id}/files/history/{entry_id}",
+            get(file_history_entry_handler),
+        )
+        .route(
+            "/api/projects/{project_id}/files/history/{entry_id}/restore",
+            post(restore_file_history_handler),
         )
         .route(
             "/api/projects/{project_id}/wiki-pages:delete",
@@ -828,8 +849,34 @@ async fn save_file_content_handler(
     .await?;
     validate_csrf(&headers, &session)?;
     let root = project_root_for_id(&state, &project_id).await?;
+    // Mirror upstream fs.rs write_file (L982-989): snapshot the pre-write
+    // state as a baseline, then the post-write state; dedupe keeps no-ops out.
+    if let Err(error) = record_disk_version(
+        &state.pool,
+        &project_id,
+        &root,
+        &payload.path,
+        "baseline",
+        "before.editor.save",
+    )
+    .await
+    {
+        tracing::warn!(?error, path = %payload.path, "failed to record baseline file version");
+    }
     let saved =
         save_wiki_page(&root, &payload.path, &payload.content).map_err(map_wiki_page_error)?;
+    if let Err(error) = record_disk_version(
+        &state.pool,
+        &project_id,
+        &root,
+        &saved.path,
+        &session.user_id,
+        "editor.save",
+    )
+    .await
+    {
+        tracing::warn!(?error, path = %saved.path, "failed to record file version");
+    }
     append_audit_log(
         &state,
         CreateAuditLog {
@@ -849,6 +896,139 @@ async fn save_file_content_handler(
     )
     .await?;
     Ok(Json(json!({ "path": saved.path, "created": saved.created })))
+}
+
+const MAX_RAW_FILE_BYTES: u64 = 25 * 1024 * 1024;
+
+fn raw_file_mime(rel_path: &str) -> &'static str {
+    let lower = rel_path.to_lowercase();
+    let extension = std::path::Path::new(&lower)
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default();
+    match extension {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "bmp" => "image/bmp",
+        "ico" => "image/x-icon",
+        "mp4" => "video/mp4",
+        "webm" => "video/webm",
+        "mov" => "video/quicktime",
+        "mp3" => "audio/mpeg",
+        "wav" => "audio/wav",
+        "ogg" => "audio/ogg",
+        "m4a" => "audio/mp4",
+        "pdf" => "application/pdf",
+        "html" | "htm" => "text/html; charset=utf-8",
+        "md" | "txt" | "csv" | "tsv" | "log" => "text/plain; charset=utf-8",
+        "json" => "application/json",
+        _ => "application/octet-stream",
+    }
+}
+
+async fn raw_file_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(project_id): Path<String>,
+    Query(params): Query<FileContentRequest>,
+) -> Result<Response, ApiError> {
+    let _session = authorized_principal(&state, &headers, Some(&project_id)).await?;
+    if !knowledge_core::project::files::is_public_project_rel(&params.path) {
+        return Err(ApiError::not_found("file not found"));
+    }
+    let root = project_root_for_id(&state, &project_id).await?;
+    let path = root
+        .safe_join(&params.path)
+        .map_err(|_| ApiError::not_found("file not found"))?;
+    let metadata = std::fs::symlink_metadata(&path)
+        .map_err(|_| ApiError::not_found("file not found"))?;
+    if !metadata.file_type().is_file() {
+        return Err(ApiError::not_found("file not found"));
+    }
+    if metadata.len() > MAX_RAW_FILE_BYTES {
+        return Err(ApiError::bad_request("file is too large to stream"));
+    }
+    let bytes = std::fs::read(&path).map_err(|_| ApiError::not_found("file not found"))?;
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("file")
+        .replace(['"', '\\'], "_");
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, raw_file_mime(&params.path))
+        .header(
+            header::CONTENT_DISPOSITION,
+            format!("inline; filename=\"{file_name}\""),
+        )
+        .header(header::CACHE_CONTROL, "private, no-cache")
+        .body(Body::from(bytes))
+        .map_err(|_| ApiError::internal("failed to build file response"))
+}
+
+async fn list_file_history_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(project_id): Path<String>,
+    Query(params): Query<FileContentRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let _session = authorized_principal(&state, &headers, Some(&project_id)).await?;
+    let entries = list_file_history(&state.pool, &project_id, &params.path).await?;
+    Ok(Json(json!({ "entries": entries })))
+}
+
+async fn file_history_entry_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((project_id, entry_id)): Path<(String, String)>,
+) -> Result<impl IntoResponse, ApiError> {
+    let _session = authorized_principal(&state, &headers, Some(&project_id)).await?;
+    let entry = get_file_history_entry(&state.pool, &project_id, &entry_id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("history entry not found"))?;
+    Ok(Json(entry))
+}
+
+async fn restore_file_history_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((project_id, entry_id)): Path<(String, String)>,
+) -> Result<impl IntoResponse, ApiError> {
+    let session = authorized_principal_with_role(
+        &state,
+        &headers,
+        &project_id,
+        crate::tenancy::access::AccessRole::Editor,
+    )
+    .await?;
+    validate_csrf(&headers, &session)?;
+    let root = project_root_for_id(&state, &project_id).await?;
+    let entry = restore_file_version(&state.pool, &project_id, &root, &entry_id, &session.user_id)
+        .await
+        .map_err(|error| match error {
+            FileHistoryError::NotFound => ApiError::not_found("history entry not found"),
+            FileHistoryError::UnsupportedPath => ApiError::bad_request(error.to_string()),
+            FileHistoryError::Restore(message) => ApiError::bad_request(message),
+            FileHistoryError::Db(error) => ApiError::from(error),
+        })?;
+    append_audit_log(
+        &state,
+        CreateAuditLog {
+            project_id: Some(project_id),
+            actor_id: session.user_id,
+            action: "project.file_version_restored".to_string(),
+            target_type: "file_version".to_string(),
+            target_id: entry.id.clone(),
+            task_id: None,
+            summary: format!("Restored {} from history", entry.path),
+            metadata: json!({ "path": entry.path, "entryId": entry.id }),
+        },
+    )
+    .await?;
+    Ok(Json(json!({ "path": entry.path, "content": entry.content })))
 }
 
 const MAX_WIKI_DELETE_BATCH: usize = 100;

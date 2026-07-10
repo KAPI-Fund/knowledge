@@ -154,6 +154,30 @@ pub async fn list_messages(
     .map_err(ApiError::from)
 }
 
+/// Scoped like `find_conversation`: the JOIN enforces that the message belongs
+/// to the given conversation, project, and requesting user.
+pub async fn find_message_by_id(
+    pool: &PgPool,
+    project_id: &str,
+    conversation_id: &str,
+    user_id: &str,
+    message_id: &str,
+) -> Result<Option<MessageRecord>, ApiError> {
+    sqlx::query_as::<_, MessageRecord>(
+        "SELECT m.id, m.conversation_id, m.role, m.content, m.context_summary, m.agent_mode, m.agent_events, m.created_at
+         FROM conversation_messages m
+         JOIN conversations c ON c.id = m.conversation_id
+         WHERE m.id = $1 AND m.conversation_id = $2 AND c.project_id = $3 AND c.user_id = $4",
+    )
+    .bind(message_id)
+    .bind(conversation_id)
+    .bind(project_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(ApiError::from)
+}
+
 pub async fn append_message(
     pool: &PgPool,
     conversation_id: &str,

@@ -161,6 +161,9 @@ vi.mock("../files/queries", () => ({
   }),
   useSaveFileContentMutation: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useDeleteWikiPagesMutation: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useFileHistoryQuery: () => ({ data: [], isLoading: false, error: null }),
+  useFileHistoryEntryQuery: () => ({ data: undefined, isLoading: false, error: null }),
+  useRestoreFileHistoryMutation: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
 vi.mock("../audit/queries", () => ({

@@ -6,6 +6,7 @@ pub mod ingest_sanitize;
 pub mod lint;
 pub mod multimodal;
 pub mod page_merge;
+pub mod query_save;
 pub mod research;
 pub mod root;
 pub mod reviews;

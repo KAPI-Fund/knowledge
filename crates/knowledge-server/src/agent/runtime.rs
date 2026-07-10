@@ -11,6 +11,7 @@ use uuid::Uuid;
 use knowledge_core::project::root::ProjectRoot;
 
 use crate::app::state::AppState;
+use crate::projects::file_history;
 use crate::providers::{OpenAiCompatibleProvider, ProviderTextRequest};
 
 use super::cancel::AgentCancellationToken;
@@ -586,7 +587,9 @@ async fn execute_agent_loop_tool(
 
     match result {
         Ok(value) => {
+            let events_before = events.len();
             let summary = record_loop_tool_success(tool, value, references, events, event_sink)?;
+            record_file_versions_for_events(tool_context, &events[events_before..]).await;
             emit_event(
                 events,
                 event_sink,
@@ -607,6 +610,53 @@ async fn execute_agent_loop_tool(
                 tool: tool.to_string(),
                 summary: format!("failed: {err}"),
             })
+        }
+    }
+}
+
+// Single history chokepoint for every agent write path: wiki.write_page,
+// workspace.write_file/append_file, and shell.exec generated files all emit
+// FileChanged, so recording off those events cannot double-count. Mirrors
+// upstream fs.rs write_file (L982-989): baseline snapshot of the pre-write
+// content, then the post-write state; best-effort, never fails the tool.
+async fn record_file_versions_for_events(context: &ToolContext<'_>, new_events: &[AgentEvent]) {
+    for event in new_events {
+        let AgentEvent::FileChanged {
+            path,
+            tool,
+            existed_before,
+            previous_content,
+        } = event
+        else {
+            continue;
+        };
+        if *existed_before {
+            if let Some(previous) = previous_content {
+                if let Err(error) = file_history::record_content_version(
+                    &context.state.pool,
+                    context.project_id,
+                    path,
+                    "baseline",
+                    &format!("before.{tool}"),
+                    previous,
+                )
+                .await
+                {
+                    tracing::warn!(?error, path, "failed to record baseline file version");
+                }
+            }
+        }
+        if let Err(error) = file_history::record_disk_version(
+            &context.state.pool,
+            context.project_id,
+            context.project_root,
+            path,
+            "agent",
+            tool,
+        )
+        .await
+        {
+            tracing::warn!(?error, path, "failed to record agent file version");
         }
     }
 }

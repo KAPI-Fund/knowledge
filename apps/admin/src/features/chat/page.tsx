@@ -1,4 +1,12 @@
-import { MessagesSquare, Pencil, Plus, SendHorizontal, Square, Trash2 } from "lucide-react";
+import {
+  BookmarkPlus,
+  MessagesSquare,
+  Pencil,
+  Plus,
+  SendHorizontal,
+  Square,
+  Trash2,
+} from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useParams } from "react-router-dom";
@@ -52,6 +60,7 @@ import {
   useCreateConversationMutation,
   useDeleteConversationMutation,
   useRenameConversationMutation,
+  useSaveMessageToWikiMutation,
 } from "./queries";
 import { streamChatMessage } from "./stream";
 
@@ -446,6 +455,13 @@ export function ChatPage() {
                     <>
                       {agentEvents.length > 0 && <AgentActivity events={agentEvents} />}
                       <MarkdownMessage content={message.content} id={message.id} />
+                      {activeId !== null && (
+                        <SaveToWikiButton
+                          conversationId={activeId}
+                          messageId={message.id}
+                          projectId={projectId}
+                        />
+                      )}
                     </>
                   )}
                 </div>
@@ -620,5 +636,52 @@ export function ChatPage() {
         title="Delete this conversation?"
       />
     </div>
+  );
+}
+
+// Port of upstream SaveToWikiButton (chat-message.tsx L540-640); the three
+// frontend writes are replaced by one backend endpoint.
+function SaveToWikiButton({
+  projectId,
+  conversationId,
+  messageId,
+}: {
+  projectId: string;
+  conversationId: string;
+  messageId: string;
+}) {
+  const mutation = useSaveMessageToWikiMutation(projectId);
+  const [saved, setSaved] = useState(false);
+
+  return (
+    <Button
+      className="mt-1 h-6 gap-1 px-2 text-[11px] text-muted-foreground"
+      disabled={mutation.isPending}
+      onClick={() => {
+        mutation.mutate(
+          { conversationId, messageId },
+          {
+            onSuccess: (result) => {
+              setSaved(true);
+              setTimeout(() => setSaved(false), 2000);
+              toast.success(`Saved to ${result.path}`);
+            },
+            onError: (mutationError) => {
+              toast.error(
+                mutationError instanceof Error
+                  ? mutationError.message
+                  : "Failed to save to wiki",
+              );
+            },
+          },
+        );
+      }}
+      size="sm"
+      type="button"
+      variant="ghost"
+    >
+      <BookmarkPlus className="size-3" />
+      {saved ? "Saved!" : mutation.isPending ? "Saving…" : "Save to Wiki"}
+    </Button>
   );
 }

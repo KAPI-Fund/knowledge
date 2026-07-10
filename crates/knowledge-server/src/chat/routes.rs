@@ -5,7 +5,7 @@ use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum::response::sse::{Event, KeepAlive, Sse};
-use axum::routing::{get, patch};
+use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use futures_util::StreamExt;
 use futures_util::stream::BoxStream;
@@ -23,11 +23,13 @@ use crate::app::state::AppState;
 use crate::chat::context::assemble_chat_context;
 use crate::chat::store::{
     ConversationRecord, MessageRecord, append_agent_message, append_message, create_conversation,
-    delete_conversation, find_conversation, list_conversations, list_messages,
+    delete_conversation, find_conversation, find_message_by_id, list_conversations, list_messages,
     rename_conversation,
 };
 use crate::http::error::ApiError;
-use crate::projects::routes::{authorized_principal, validate_csrf};
+use crate::projects::audit::{CreateAuditLog, append_audit_log};
+use crate::projects::file_history::record_disk_version;
+use crate::projects::routes::{authorized_principal, authorized_principal_with_role, validate_csrf};
 use crate::projects::service::project_root_for_id;
 use crate::providers::{load_active_connection, ProviderChatMessage, ProviderChatStreamRequest};
 use crate::query::load_query_settings;
@@ -48,6 +50,10 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/projects/{project_id}/conversations/{conversation_id}/messages",
             get(list_messages_handler).post(send_message_handler),
+        )
+        .route(
+            "/api/projects/{project_id}/conversations/{conversation_id}/messages/{message_id}/save-to-wiki",
+            post(save_message_to_wiki_handler),
         )
 }
 
@@ -497,6 +503,126 @@ async fn send_agent_message(
 
     let event_stream: ChatEventStream = event_stream.boxed();
     Ok(Sse::new(event_stream).keep_alive(KeepAlive::default()).into_response())
+}
+
+/// Backend port of upstream SaveToWikiButton (chat-message.tsx L540-624).
+/// Upstream issues three frontend writes; here one endpoint cleans the
+/// message, writes the query page, updates index.md/log.md, records file
+/// history, and kicks a best-effort embedding refresh.
+async fn save_message_to_wiki_handler(
+    State(state): State<AppState>,
+    Path((project_id, conversation_id, message_id)): Path<(String, String, String)>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, ApiError> {
+    let session = authorized_principal_with_role(
+        &state,
+        &headers,
+        &project_id,
+        crate::tenancy::access::AccessRole::Editor,
+    )
+    .await?;
+    validate_csrf(&headers, &session)?;
+
+    let message = find_message_by_id(
+        &state.pool,
+        &project_id,
+        &conversation_id,
+        &session.user_id,
+        &message_id,
+    )
+    .await?
+    .ok_or_else(|| ApiError::not_found("message not found"))?;
+    if message.role != "assistant" {
+        return Err(ApiError::bad_request(
+            "only assistant messages can be saved to the wiki",
+        ));
+    }
+
+    let root = project_root_for_id(&state, &project_id).await?;
+
+    // Snapshot index.md/log.md before the save mutates them (same baseline
+    // pattern as the editor save handler; dedupe keeps no-ops out).
+    for rel in ["wiki/index.md", "wiki/log.md"] {
+        if let Err(error) = record_disk_version(
+            &state.pool,
+            &project_id,
+            &root,
+            rel,
+            "baseline",
+            "before.chat.save_to_wiki",
+        )
+        .await
+        {
+            tracing::warn!(?error, path = rel, "failed to record baseline file version");
+        }
+    }
+
+    let saved = knowledge_core::project::query_save::save_query_page(&root, &message.content)
+        .map_err(|error| match error {
+            knowledge_core::project::query_save::QuerySaveError::EmptyContent => {
+                ApiError::bad_request(error.to_string())
+            }
+            other => ApiError::internal(other.to_string()),
+        })?;
+
+    for rel in [saved.path.as_str(), "wiki/index.md", "wiki/log.md"] {
+        if let Err(error) = record_disk_version(
+            &state.pool,
+            &project_id,
+            &root,
+            rel,
+            &session.user_id,
+            "chat.save_to_wiki",
+        )
+        .await
+        {
+            tracing::warn!(?error, path = rel, "failed to record file version");
+        }
+    }
+
+    append_audit_log(
+        &state,
+        CreateAuditLog {
+            project_id: Some(project_id.clone()),
+            actor_id: session.user_id.clone(),
+            action: "chat.saved_to_wiki".to_string(),
+            target_type: "wiki_page".to_string(),
+            target_id: saved.path.clone(),
+            task_id: None,
+            summary: format!("Saved chat message to {}", saved.path),
+            metadata: json!({ "conversationId": conversation_id, "messageId": message_id }),
+        },
+    )
+    .await?;
+
+    // Upstream auto-ingests the saved page (L611-618); here the equivalent is
+    // a best-effort embedding refresh so the page becomes searchable.
+    let refresh_state = state.clone();
+    tokio::spawn(async move {
+        let Ok(root) = project_root_for_id(&refresh_state, &project_id).await else {
+            return;
+        };
+        match crate::retrieval::service::load_embedding_config(&refresh_state).await {
+            Ok(Some(config)) => {
+                if let Err(error) = crate::retrieval::service::ensure_project_embeddings(
+                    &refresh_state,
+                    &project_id,
+                    &root,
+                    &config,
+                )
+                .await
+                {
+                    tracing::warn!("embedding refresh after save-to-wiki failed: {error}");
+                }
+            }
+            Ok(None) => {}
+            Err(error) => {
+                tracing::warn!("embedding config load after save-to-wiki failed: {error}");
+            }
+        }
+    });
+
+    Ok(Json(json!({ "path": saved.path, "title": saved.title })))
 }
 
 fn conversation_json(record: &ConversationRecord) -> Value {

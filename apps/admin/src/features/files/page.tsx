@@ -19,6 +19,9 @@ import {
 } from "@/components/ui/select";
 import { normalizeAppError } from "@/lib/app-error";
 
+import { FileHistoryPanel } from "./file-history-panel";
+import { FilePreview } from "./file-preview";
+import { hasServerTextContent } from "./file-types";
 import { useProjectFileContentQuery, useProjectFilesQuery, useSaveFileContentMutation } from "./queries";
 import { WikiPageEditor } from "./wiki-page-editor";
 
@@ -44,7 +47,8 @@ export function FilesPage() {
     recursive,
     maxFiles: maxFilesNumber,
   });
-  const content = useProjectFileContentQuery(projectId, selectedPath);
+  const textReadable = hasServerTextContent(selectedPath);
+  const content = useProjectFileContentQuery(projectId, textReadable ? selectedPath : "");
   const createPage = useSaveFileContentMutation(projectId);
   const [newPagePath, setNewPagePath] = useState("");
   const [createError, setCreateError] = useState("");
@@ -147,6 +151,7 @@ export function FilesPage() {
                 <SelectItem value="all">all</SelectItem>
                 <SelectItem value="wiki">wiki</SelectItem>
                 <SelectItem value="sources">sources</SelectItem>
+                <SelectItem value="workspace">workspace</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -224,11 +229,20 @@ export function FilesPage() {
         </Card>
 
         <Card>
-          <CardHeader>
-            <CardTitle>Preview</CardTitle>
-            <CardDescription>
-              {selectedPath ? selectedPath : "Select a file from the tree to inspect its content."}
-            </CardDescription>
+          <CardHeader className="flex-row items-start justify-between gap-4 space-y-0">
+            <div className="grid gap-1.5">
+              <CardTitle>Preview</CardTitle>
+              <CardDescription>
+                {selectedPath ? selectedPath : "Select a file from the tree to inspect its content."}
+              </CardDescription>
+            </div>
+            {selectedPath ? (
+              <FileHistoryPanel
+                currentContent={content.data?.content ?? null}
+                path={selectedPath}
+                projectId={projectId}
+              />
+            ) : null}
           </CardHeader>
           <CardContent>
             {deleteNotice ? (
@@ -239,9 +253,9 @@ export function FilesPage() {
                 description="Choose a file from the tree to load its preview."
                 title="No file selected"
               />
-            ) : content.isLoading ? (
+            ) : textReadable && content.isLoading ? (
               <RouteStatePane description="Loading file preview." state="loading" title="Preview" />
-            ) : content.error ? (
+            ) : textReadable && content.error ? (
               <RouteStatePane description="Preview unavailable for the selected file." state="failed" title="Preview unavailable" />
             ) : (
               <div className="grid gap-4">
@@ -251,9 +265,11 @@ export function FilesPage() {
                   path={selectedPath}
                   projectId={projectId}
                 />
-                <ScrollArea className="max-h-[520px] rounded-xl border border-border/70 bg-muted/30 p-4">
-                  <pre className="whitespace-pre-wrap break-words font-mono text-sm">{content.data?.content}</pre>
-                </ScrollArea>
+                <FilePreview
+                  content={textReadable ? (content.data?.content ?? "") : null}
+                  path={selectedPath}
+                  projectId={projectId}
+                />
               </div>
             )}
           </CardContent>
@@ -351,9 +367,12 @@ function pathMatchesRoot(path: string, root: string): boolean {
   if (root === "sources") {
     return path.startsWith("raw/sources/");
   }
+  if (root === "workspace") {
+    return path.startsWith("agent-workspace/");
+  }
   return false;
 }
 
 function isSupportedRoot(root: string) {
-  return root === "all" || root === "wiki" || root === "sources";
+  return root === "all" || root === "wiki" || root === "sources" || root === "workspace";
 }

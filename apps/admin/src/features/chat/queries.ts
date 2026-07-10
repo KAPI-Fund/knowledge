@@ -7,6 +7,7 @@ import {
   listConversationMessages,
   listConversations,
   renameConversation,
+  saveMessageToWiki,
 } from "../shared/api";
 
 export const conversationKeys = {
@@ -58,6 +59,17 @@ export function useRenameConversationMutation(projectId: string) {
       renameConversation({ projectId, ...input }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: conversationKeys.list(projectId) });
+    },
+  });
+}
+
+export function useSaveMessageToWikiMutation(projectId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { conversationId: string; messageId: string }) =>
+      saveMessageToWiki({ projectId, ...input }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["project-files", projectId] });
     },
   });
 }

@@ -14,6 +14,7 @@ pub const MAX_FILE_CONTENT_BYTES: u64 = 2 * 1024 * 1024;
 pub enum ProjectFileRoot {
   Wiki,
   Sources,
+  Workspace,
   All,
 }
 
@@ -22,6 +23,7 @@ impl ProjectFileRoot {
     match self {
       Self::Wiki => Some("wiki"),
       Self::Sources => Some("raw/sources"),
+      Self::Workspace => Some("agent-workspace"),
       Self::All => None,
     }
   }
@@ -30,6 +32,7 @@ impl ProjectFileRoot {
     match self {
       Self::Wiki => "wiki",
       Self::Sources => "raw/sources",
+      Self::Workspace => "agent-workspace",
       Self::All => "all",
     }
   }
@@ -77,7 +80,7 @@ pub struct ProjectFileContent {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProjectFilesError {
-  #[error("root must be wiki, sources, or all")]
+  #[error("root must be wiki, sources, workspace, or all")]
   InvalidRoot,
   #[error("path is not exposed by the project API")]
   NonPublicPath,
@@ -103,6 +106,7 @@ pub fn parse_project_file_root(value: Option<&str>) -> Result<ProjectFileRoot, P
   match value.unwrap_or("wiki") {
     "wiki" => Ok(ProjectFileRoot::Wiki),
     "sources" | "raw" | "raw/sources" => Ok(ProjectFileRoot::Sources),
+    "workspace" | "agent-workspace" => Ok(ProjectFileRoot::Workspace),
     "all" | "" => Ok(ProjectFileRoot::All),
     _ => Err(ProjectFilesError::InvalidRoot),
   }
@@ -119,8 +123,12 @@ pub fn list_project_files(
   let files = match options.root.as_relative_path() {
     Some(relative_path) => {
       let directory = root.safe_join(relative_path)?;
-      let mut count = 0usize;
-      list_tree(root, &directory, options.recursive, options.max_files, &mut count)?
+      if directory.exists() {
+        let mut count = 0usize;
+        list_tree(root, &directory, options.recursive, options.max_files, &mut count)?
+      } else {
+        Vec::new()
+      }
     }
     None => list_public_roots(root, options.recursive, options.max_files)?,
   };
@@ -186,6 +194,7 @@ pub fn is_public_project_rel(relative_path: &str) -> bool {
     || lower == "schema.md"
     || lower.starts_with("wiki/")
     || lower.starts_with("raw/sources/")
+    || lower.starts_with("agent-workspace/")
 }
 
 pub fn is_text_content_rel(relative_path: &str) -> bool {
@@ -201,6 +210,7 @@ pub fn is_text_content_rel(relative_path: &str) -> bool {
       | "mdx"
       | "txt"
       | "csv"
+      | "tsv"
       | "json"
       | "yaml"
       | "yml"
@@ -209,6 +219,26 @@ pub fn is_text_content_rel(relative_path: &str) -> bool {
       | "htm"
       | "rtf"
       | "log"
+      | "svg"
+      | "mmd"
+      | "mermaid"
+      | "py"
+      | "js"
+      | "ts"
+      | "jsx"
+      | "tsx"
+      | "rs"
+      | "go"
+      | "java"
+      | "c"
+      | "cpp"
+      | "h"
+      | "css"
+      | "scss"
+      | "sh"
+      | "toml"
+      | "ini"
+      | "sql"
   )
 }
 
@@ -250,7 +280,7 @@ fn list_public_roots(
   let mut count = 0usize;
   let mut roots = Vec::new();
 
-  for relative_path in ["purpose.md", "schema.md", "wiki", "raw/sources"] {
+  for relative_path in ["purpose.md", "schema.md", "wiki", "raw/sources", "agent-workspace"] {
     let path = root.safe_join(relative_path)?;
     if !path.exists() {
       continue;
@@ -359,8 +389,10 @@ mod tests {
     assert!(is_public_project_rel("Wiki/index.md"));
     assert!(is_public_project_rel("raw/sources/source.md"));
     assert!(is_public_project_rel("Raw/Sources/source.md"));
+    assert!(is_public_project_rel("agent-workspace/report/out.svg"));
     assert!(!is_public_project_rel(".knowledge/reviews/items.json"));
     assert!(!is_public_project_rel("wiki/.draft.md"));
+    assert!(!is_public_project_rel("agent-workspace/../wiki/index.md"));
   }
 
   #[test]
