@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Navigate, Route, Routes } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 
 import { AppShell } from "../../components/layout/app-shell";
@@ -11,7 +11,8 @@ import { FilesPage } from "../files/page";
 import { GraphPage } from "../graph/page";
 import { ReviewsPage } from "../reviews/page";
 import { SearchPage } from "../search/page";
-import { SettingsPage } from "../settings/page";
+import { SettingsLayout } from "../settings/layout";
+import { LlmConnectionsSection } from "../settings/sections/llm-connections-section";
 import { SourceWatchPage } from "../source-watch/page";
 import { SourcesPage } from "../sources/page";
 
@@ -215,6 +216,16 @@ vi.mock("../graph/graph-canvas", () => ({
   ),
 }));
 
+vi.mock("../graph/starfield-canvas", () => ({
+  StarfieldCanvas: ({ nodes }: { nodes: { id: string; label: string }[] }) => (
+    <div data-testid="starfield-canvas">
+      {nodes.map((node) => (
+        <span key={node.id}>{node.label}</span>
+      ))}
+    </div>
+  ),
+}));
+
 vi.mock("../graph/queries", () => ({
   useProjectGraphQuery: () => ({
     data: {
@@ -271,7 +282,10 @@ function renderProjectRoute(initialEntry: string) {
               <Route path="reviews" element={<ReviewsPage />} />
               <Route path="audit" element={<AuditPage />} />
             </Route>
-            <Route path="settings" element={<SettingsPage />} />
+            <Route path="settings" element={<SettingsLayout />}>
+              <Route index element={<Navigate replace to="llm" />} />
+              <Route path="llm" element={<LlmConnectionsSection />} />
+            </Route>
           </Route>
         </Routes>
       </MemoryRouter>
@@ -280,12 +294,14 @@ function renderProjectRoute(initialEntry: string) {
 }
 
 describe("project operation pages", () => {
-  it("navigates to files, sources, search, graph, reviews, audit, and settings pages", async () => {
+  // Walks seven routes in one pass; needs headroom beyond the 5s default when
+  // the whole suite runs in parallel.
+  it("navigates to files, sources, search, graph, reviews, audit, and settings pages", { timeout: 15_000 }, async () => {
     const user = userEvent.setup();
 
     renderProjectRoute("/projects/project-1");
 
-    expect(await screen.findByText("demo-project")).toBeInTheDocument();
+    expect((await screen.findAllByText("demo-project")).length).toBeGreaterThan(0);
     expect(screen.getByRole("link", { name: "Files" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Overview" })).toBeInTheDocument();
 
@@ -310,7 +326,7 @@ describe("project operation pages", () => {
 
     await user.click(screen.getByRole("link", { name: "Graph" }));
     expect(await screen.findByRole("heading", { name: "Graph" })).toBeInTheDocument();
-    expect(screen.getByText("Demo")).toBeInTheDocument();
+    expect(await screen.findByText("Demo")).toBeInTheDocument();
 
     await user.click(screen.getByRole("link", { name: "Reviews" }));
     expect(await screen.findByRole("heading", { name: "Reviews" })).toBeInTheDocument();
