@@ -60,6 +60,7 @@ impl OpenAiCompatibleProvider {
                         request.context_blocks.join("\n\n")
                     }
                 ),
+                max_tokens: None,
             })
             .await?;
 
@@ -542,6 +543,8 @@ struct ChatCompletionRequest {
     temperature: f32,
     #[serde(skip_serializing_if = "Option::is_none")]
     stream: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_tokens: Option<u32>,
 }
 
 impl ChatCompletionRequest {
@@ -562,6 +565,7 @@ impl ChatCompletionRequest {
             // Stream so the gateway's ~60s idle timeout never fires mid-generation
             // (complete_text reassembles the deltas into one text).
             stream: Some(true),
+            max_tokens: request.max_tokens,
         }
     }
 
@@ -579,6 +583,7 @@ impl ChatCompletionRequest {
             messages,
             temperature: 0.0,
             stream: Some(true),
+            max_tokens: None,
         }
     }
 
@@ -614,6 +619,7 @@ impl ChatCompletionRequest {
             ],
             temperature: 0.0,
             stream: None,
+            max_tokens: None,
         }
     }
 }
@@ -788,6 +794,7 @@ mod tests {
       crate::providers::types::ProviderTextRequest {
         system_prompt: "s".to_string(),
         user_prompt: "u".to_string(),
+        max_tokens: None,
       },
     );
     // complete_text now streams too (to dodge the gateway's 60s idle cut), so
@@ -818,6 +825,7 @@ mod tests {
       .complete_text(ProviderTextRequest {
         system_prompt: "s".to_string(),
         user_prompt: "u".to_string(),
+        max_tokens: None,
       })
       .await
       .expect("streamed completion");
@@ -845,6 +853,7 @@ mod tests {
       .complete_text(ProviderTextRequest {
         system_prompt: "s".to_string(),
         user_prompt: "u".to_string(),
+        max_tokens: None,
       })
       .await
       .expect_err("429 must surface as an error");

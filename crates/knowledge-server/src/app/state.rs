@@ -1,7 +1,9 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use sqlx::PgPool;
 
+use crate::agent::cancel::AgentCancellationRegistry;
 use crate::cache::CacheStore;
 use crate::canvas::executor::SkillExecutor;
 
@@ -13,4 +15,6 @@ pub struct AppState {
     pub session_ttl_hours: u64,
     pub skill_registry: crate::skills::SkillRegistry,
     pub executor: Arc<dyn SkillExecutor>,
+    pub agent_cancellations: AgentCancellationRegistry,
+    pub global_skills_dir: Option<PathBuf>,
 }

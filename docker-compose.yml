@@ -45,6 +45,9 @@ services:
       KNOWLEDGE_REDIS_URL: redis://redis:6379/
       KNOWLEDGE_PROJECT_ROOT: /data/projects
       KNOWLEDGE_SKILLS_DIR: /app/skills
+      # Server-wide agent SKILL.md directory; project .knowledge/skills/
+      # entries with the same id override these.
+      KNOWLEDGE_GLOBAL_SKILLS_DIR: /data/agent-skills
       # Bootstraps the first admin user on a fresh database. Change before any
       # non-local deployment.
       KNOWLEDGE_ADMIN_PASSWORD: admin
@@ -55,6 +58,7 @@ services:
       - "4001:4001"
     volumes:
       - knowledge-projects:/data/projects
+      - knowledge-agent-skills:/data/agent-skills
 
   admin:
     build:
@@ -71,3 +75,4 @@ volumes:
   knowledge-postgres-data:
   knowledge-redis-data:
   knowledge-projects:
+  knowledge-agent-skills:

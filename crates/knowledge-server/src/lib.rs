@@ -1,3 +1,4 @@
+pub mod agent;
 pub mod app;
 pub mod assets;
 pub mod auth;
@@ -51,6 +52,10 @@ pub async fn bootstrap_state(config: &AppConfig) -> anyhow::Result<AppState> {
         std::sync::Arc::new(crate::canvas::executor::CubeExecutor::new(
             config.skill_runner_url.clone(),
         ));
+    let global_skills_dir = std::env::var("KNOWLEDGE_GLOBAL_SKILLS_DIR")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map(std::path::PathBuf::from);
     let state = AppState {
         pool,
         cache,
@@ -58,6 +63,8 @@ pub async fn bootstrap_state(config: &AppConfig) -> anyhow::Result<AppState> {
         session_ttl_hours: config.session_ttl_hours,
         skill_registry,
         executor,
+        agent_cancellations: agent::cancel::AgentCancellationRegistry::default(),
+        global_skills_dir,
     };
     tasks::recovery::recover_tasks(&state).await?;
     tasks::scheduler::spawn_scheduler(state.clone());

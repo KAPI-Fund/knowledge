@@ -398,7 +398,7 @@ async fn run_node_handler(
                 crate::canvas::service::build_search_query_prompt(&guidance, &blocks);
             let provider = load_active_connection(&state).await?.provider();
             let response = provider
-                .complete_text(ProviderTextRequest { system_prompt, user_prompt })
+                .complete_text(ProviderTextRequest { system_prompt, user_prompt, max_tokens: None })
                 .await
                 // A provider/transport failure is server-side, not a client error.
                 .map_err(|e| ApiError::internal(e.message().to_string()))?;

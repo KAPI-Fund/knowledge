@@ -325,6 +325,7 @@ async fn run_lint_executor(state: &AppState, task: &TaskRecord) -> Result<Value,
       .unwrap_or_default();
     let response = provider
       .complete_text(ProviderTextRequest {
+        max_tokens: None,
         system_prompt: "You are a wiki quality analyst.".to_string(),
         user_prompt: prompt,
       })
@@ -419,6 +420,7 @@ async fn run_ingest_source_executor(
     let overview = try_read_project_file(&root, "wiki/overview.md");
     let analysis_text = provider
       .complete_text(ProviderTextRequest {
+        max_tokens: None,
         system_prompt: build_analysis_prompt(&purpose, &index, &content),
         user_prompt: build_analysis_user_prompt(source_name, &content),
       })
@@ -432,6 +434,7 @@ async fn run_ingest_source_executor(
     };
     let generation = provider
       .complete_text(ProviderTextRequest {
+        max_tokens: None,
         system_prompt: build_generation_prompt(
           &schema,
           &purpose,
@@ -449,6 +452,7 @@ async fn run_ingest_source_executor(
     let review_suggestions = if should_run_dedicated_review_stage(&generation.text) {
       provider
         .complete_text(ProviderTextRequest {
+          max_tokens: None,
           system_prompt: build_review_suggestion_prompt(
             &purpose,
             &index,
@@ -544,6 +548,7 @@ async fn run_review_sweep(
       build_review_sweep_prompt(root, &result.unresolved_ids, REVIEW_SWEEP_MAX_PAGES)
     && let Ok(response) = provider
       .complete_text(ProviderTextRequest {
+        max_tokens: None,
         system_prompt: REVIEW_SWEEP_SYSTEM_PROMPT.to_string(),
         user_prompt: prompt,
       })
@@ -656,6 +661,7 @@ async fn run_dedup_detect_executor(
   if summaries.len() >= 2 {
     let response = provider
       .complete_text(ProviderTextRequest {
+        max_tokens: None,
         system_prompt: DETECTOR_SYSTEM_PROMPT.to_string(),
         user_prompt: build_detector_user_message(&summaries),
       })
@@ -751,6 +757,7 @@ async fn run_dedup_merge_executor(
 
   let response = provider
     .complete_text(ProviderTextRequest {
+      max_tokens: None,
       system_prompt: MERGER_SYSTEM_PROMPT.to_string(),
       user_prompt: build_merger_user_message(&group_pages),
     })
@@ -927,6 +934,7 @@ async fn run_deep_research_executor(
 
   let response = provider
     .complete_text(ProviderTextRequest {
+      max_tokens: None,
       system_prompt,
       user_prompt,
     })
@@ -1140,6 +1148,7 @@ async fn merge_generated_pages_with_existing_content(
           build_page_merge_prompts(&existing_content, &array_merged, source_name);
         let llm_output = provider
           .complete_text(ProviderTextRequest {
+            max_tokens: None,
             system_prompt,
             user_prompt,
           })

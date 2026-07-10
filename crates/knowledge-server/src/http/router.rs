@@ -3,6 +3,7 @@ use axum::routing::get;
 use axum::Router;
 use serde_json::json;
 
+use crate::agent;
 use crate::assets;
 use crate::auth;
 use crate::app::state::AppState;
@@ -19,6 +20,7 @@ use crate::web_search;
 pub fn build_router(state: AppState) -> Router {
   Router::new()
     .route("/api/health", get(health))
+    .merge(agent::routes::router())
     .merge(auth::routes::router())
     .merge(assets::routes::router())
     .merge(canvas::routes::router())

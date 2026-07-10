@@ -27,6 +27,32 @@ pub struct RenderedDeck {
     pub deck_html: String,
 }
 
+/// backend <-> sidecar 的一个 agent workspace 文件(内容 base64,兼容二进制)。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ShellExecFile {
+    pub path: String,
+    pub content_b64: String,
+}
+
+/// backend → sidecar 的一次 shell 执行请求(POST /exec 的 body)。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ShellExecRequest {
+    pub command: String,
+    pub timeout_seconds: u64,
+    pub files: Vec<ShellExecFile>,
+}
+
+/// sidecar → backend 的执行结果。files 只含执行后新增/变更的 workspace 文件。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ShellExecResponse {
+    pub exit_code: Option<i32>,
+    pub stdout: String,
+    pub stderr: String,
+    pub timed_out: bool,
+    #[serde(default)]
+    pub files: Vec<ShellExecFile>,
+}
+
 /// 执行一次技能渲染。唯一生产实现是 CubeExecutor(调 sidecar)。
 /// 返回的 String 是给 job error 用的人类可读失败信息。
 /// progress 在执行期间收到 sidecar 的进度快照(send 失败静默忽略)。
@@ -37,6 +63,10 @@ pub trait SkillExecutor: Send + Sync {
         req: RenderRequest,
         progress: mpsc::Sender<Value>,
     ) -> Result<RenderedDeck, String>;
+
+    /// Agent shell.exec:在 CubeSandbox 微 VM 内执行一条命令。上游桌面版在
+    /// 进程内跑 shell,服务端多租户不可——这是 A4 的核心架构差异。
+    async fn exec_shell(&self, req: ShellExecRequest) -> Result<ShellExecResponse, String>;
 }
 
 /// 调 skill-runner sidecar 的 POST /render 的生产实现。
@@ -165,6 +195,37 @@ impl SkillExecutor for CubeExecutor {
         }
         Err("skill runner stream ended without a terminal line".into())
     }
+
+    async fn exec_shell(&self, req: ShellExecRequest) -> Result<ShellExecResponse, String> {
+        let url = format!("{}/exec", self.base_url);
+        // 沙箱创建+文件同步+命令超时(≤30s)+回读,给足余量但别占满 660s 全局超时。
+        let timeout = std::time::Duration::from_secs(req.timeout_seconds + 120);
+        let resp = self
+            .client
+            .post(&url)
+            .timeout(timeout)
+            .json(&req)
+            .send()
+            .await
+            .map_err(|e| format!("skill runner unavailable: {e}"))?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            let detail = serde_json::from_str::<RunnerError>(&body)
+                .ok()
+                .map(|e| {
+                    let stage = e.stage.unwrap_or_else(|| "exec".into());
+                    let msg = e.message.unwrap_or_else(|| body.clone());
+                    format!("{stage}: {msg}")
+                })
+                .unwrap_or_else(|| format!("HTTP {status}: {body}"));
+            return Err(format!("shell exec failed ({detail})"));
+        }
+        resp.json::<ShellExecResponse>()
+            .await
+            .map_err(|e| format!("skill runner sent malformed exec response: {e}"))
+    }
 }
 
 #[cfg(test)]
@@ -176,21 +237,32 @@ pub mod mock {
     #[derive(Clone)]
     pub struct MockExecutor {
         pub result: Arc<Result<RenderedDeck, String>>,
+        pub exec_result: Arc<Result<ShellExecResponse, String>>,
         pub seen: Arc<std::sync::Mutex<Option<RenderRequest>>>,
+        pub seen_exec: Arc<std::sync::Mutex<Option<ShellExecRequest>>>,
     }
 
     impl MockExecutor {
         pub fn ok(html: &str) -> Self {
             Self {
                 result: Arc::new(Ok(RenderedDeck { deck_html: html.to_string() })),
+                exec_result: Arc::new(Err("exec not configured".to_string())),
                 seen: Arc::new(std::sync::Mutex::new(None)),
+                seen_exec: Arc::new(std::sync::Mutex::new(None)),
             }
         }
         pub fn err(message: &str) -> Self {
             Self {
                 result: Arc::new(Err(message.to_string())),
+                exec_result: Arc::new(Err(message.to_string())),
                 seen: Arc::new(std::sync::Mutex::new(None)),
+                seen_exec: Arc::new(std::sync::Mutex::new(None)),
             }
+        }
+        pub fn exec_ok(response: ShellExecResponse) -> Self {
+            let mut mock = Self::ok("");
+            mock.exec_result = Arc::new(Ok(response));
+            mock
         }
     }
 
@@ -203,6 +275,11 @@ pub mod mock {
         ) -> Result<RenderedDeck, String> {
             *self.seen.lock().unwrap() = Some(req);
             (*self.result).clone()
+        }
+
+        async fn exec_shell(&self, req: ShellExecRequest) -> Result<ShellExecResponse, String> {
+            *self.seen_exec.lock().unwrap() = Some(req);
+            (*self.exec_result).clone()
         }
     }
 }
@@ -307,6 +384,58 @@ mod tests {
         let (tx, _rx) = mpsc::channel(32);
         let err = exec.render(req, tx).await.unwrap_err();
         assert!(err.contains("codex") || err.contains("boom"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn cube_executor_posts_exec_and_parses_response() {
+        let app = Router::new().route(
+            "/exec",
+            post(|Json(req): Json<ShellExecRequest>| async move {
+                assert_eq!(req.command, "python make.py");
+                assert_eq!(req.timeout_seconds, 30);
+                assert_eq!(req.files.len(), 1);
+                Json(serde_json::json!({
+                    "exit_code": 0,
+                    "stdout": "done\n",
+                    "stderr": "",
+                    "timed_out": false,
+                    "files": [{ "path": "out.svg", "content_b64": "PHN2Zy8+" }],
+                }))
+            }),
+        );
+        let base = spawn_stub(app).await;
+        let exec = CubeExecutor::new(base);
+        let out = exec
+            .exec_shell(ShellExecRequest {
+                command: "python make.py".into(),
+                timeout_seconds: 30,
+                files: vec![ShellExecFile { path: "make.py".into(), content_b64: "cHJpbnQ=".into() }],
+            })
+            .await
+            .unwrap();
+        assert_eq!(out.exit_code, Some(0));
+        assert!(!out.timed_out);
+        assert_eq!(out.files[0].path, "out.svg");
+    }
+
+    #[tokio::test]
+    async fn cube_executor_maps_exec_error_body() {
+        let app = Router::new().route(
+            "/exec",
+            post(|| async {
+                (
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "stage": "exec", "message": "sandbox boom" })),
+                )
+            }),
+        );
+        let base = spawn_stub(app).await;
+        let exec = CubeExecutor::new(base);
+        let err = exec
+            .exec_shell(ShellExecRequest { command: "true".into(), timeout_seconds: 5, files: vec![] })
+            .await
+            .unwrap_err();
+        assert!(err.contains("exec: sandbox boom"), "got: {err}");
     }
 
     #[test]
