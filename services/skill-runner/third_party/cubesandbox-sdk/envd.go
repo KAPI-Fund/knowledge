@@ -130,7 +130,7 @@ func (s *Sandbox) startProcess(ctx context.Context, payload processStartRequest,
 		return nil, apiErrorFromResponse(resp)
 	}
 
-	result, err := parseProcessStartStream(resp.Body)
+	result, err := parseProcessStartStream(resp.Body, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -265,7 +265,7 @@ func basicAuthUser(user string) string {
 	return "Basic " + base64.StdEncoding.EncodeToString([]byte(user+":"))
 }
 
-func parseProcessStartStream(r io.Reader) (*processStartResult, error) {
+func parseProcessStartStream(r io.Reader, opts CommandOptions) (*processStartResult, error) {
 	var result processStartResult
 	var stdout strings.Builder
 	var stderr strings.Builder
@@ -306,6 +306,9 @@ func parseProcessStartStream(r io.Reader) (*processStartResult, error) {
 					return nil, fmt.Errorf("decode stdout: %w", err)
 				}
 				stdout.WriteString(text)
+				if text != "" && opts.OnStdout != nil {
+					opts.OnStdout(OutputMessage{Text: text})
+				}
 			}
 			if response.Event.Data.Stderr != "" {
 				text, err := decodeProcessBytes(response.Event.Data.Stderr)
@@ -313,6 +316,9 @@ func parseProcessStartStream(r io.Reader) (*processStartResult, error) {
 					return nil, fmt.Errorf("decode stderr: %w", err)
 				}
 				stderr.WriteString(text)
+				if text != "" && opts.OnStderr != nil {
+					opts.OnStderr(OutputMessage{Text: text, IsStderr: true})
+				}
 			}
 		}
 		if response.Event.End != nil {

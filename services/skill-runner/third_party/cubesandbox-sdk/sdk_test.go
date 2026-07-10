@@ -4,6 +4,7 @@
 package cubesandbox
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/binary"
@@ -581,8 +582,15 @@ func TestCommandsRunUsesEnvdProcessStart(t *testing.T) {
 		}
 		gotHost = r.Host
 		gotHeaders = r.Header.Clone()
-		if err := json.NewDecoder(r.Body).Decode(&gotPayload); err != nil {
-			t.Fatalf("decode payload: %v", err)
+		// The request body is a single Connect envelope (5-byte header + JSON).
+		_, payload, err := readConnectEnvelope(r.Body)
+		if err != nil {
+			t.Errorf("read request envelope: %v", err)
+			return
+		}
+		if err := json.Unmarshal(payload, &gotPayload); err != nil {
+			t.Errorf("decode payload: %v", err)
+			return
 		}
 		w.Header().Set("Content-Type", connectContentType)
 		w.Write(connectEnvelope(0, `{"event":{"start":{"pid":123}}}`))
@@ -641,6 +649,40 @@ func TestCommandsRunUsesEnvdProcessStart(t *testing.T) {
 		t.Fatalf("stdin=%#v", gotPayload["stdin"])
 	}
 	if result.Stdout != "cmd-out\n" || result.Stderr != "cmd-err\n" || result.ExitCode != 7 {
+		t.Fatalf("result=%#v", result)
+	}
+}
+
+func TestParseProcessStartStreamInvokesCallbacks(t *testing.T) {
+	var buf bytes.Buffer
+	buf.Write(connectEnvelope(0, `{"event":{"start":{"pid":1}}}`))
+	buf.Write(connectEnvelope(0, fmt.Sprintf(`{"event":{"data":{"stdout":%q}}}`, base64.StdEncoding.EncodeToString([]byte("line-1\n")))))
+	buf.Write(connectEnvelope(0, fmt.Sprintf(`{"event":{"data":{"stdout":%q}}}`, base64.StdEncoding.EncodeToString([]byte("line-2\n")))))
+	buf.Write(connectEnvelope(0, fmt.Sprintf(`{"event":{"data":{"stderr":%q}}}`, base64.StdEncoding.EncodeToString([]byte("err-1\n")))))
+	buf.Write(connectEnvelope(0, `{"event":{"end":{"exitCode":0,"exited":true}}}`))
+	buf.Write(connectEnvelope(connectEndStreamFlag, `{}`))
+
+	var stdout []string
+	var stderr []string
+	result, err := parseProcessStartStream(&buf, CommandOptions{
+		OnStdout: func(m OutputMessage) { stdout = append(stdout, m.Text) },
+		OnStderr: func(m OutputMessage) {
+			if !m.IsStderr {
+				t.Errorf("stderr callback IsStderr=false for %#v", m)
+			}
+			stderr = append(stderr, m.Text)
+		},
+	})
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(stdout) != 2 || stdout[0] != "line-1\n" || stdout[1] != "line-2\n" {
+		t.Fatalf("stdout callbacks=%#v", stdout)
+	}
+	if len(stderr) != 1 || stderr[0] != "err-1\n" {
+		t.Fatalf("stderr callbacks=%#v", stderr)
+	}
+	if result.Stdout != "line-1\nline-2\n" || result.Stderr != "err-1\n" || result.ExitCode != 0 {
 		t.Fatalf("result=%#v", result)
 	}
 }

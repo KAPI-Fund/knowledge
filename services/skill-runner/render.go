@@ -39,14 +39,20 @@ func (e *RenderError) Error() string {
 }
 
 // runRender 编排一次沙箱生命周期。无论成功失败都 kill(create 失败除外——没有沙箱)。
-func runRender(ctx context.Context, factory SandboxFactory, templateID string, req RenderRequest) (RenderedDeck, error) {
+// emit(可为 nil)在执行期间上报阶段进度;codex 阶段逐行转发命令输出(stdout+stderr)。
+func runRender(ctx context.Context, factory SandboxFactory, templateID string, req RenderRequest, emit func(stage, message string)) (RenderedDeck, error) {
+	if emit == nil {
+		emit = func(string, string) {}
+	}
 	_ = templateID // 真实 factory 用它 Create;fake 忽略。
+	emit("create", "正在创建沙箱")
 	sb, err := factory.Create(ctx)
 	if err != nil {
 		return RenderedDeck{}, &RenderError{Stage: "create", Message: err.Error()}
 	}
 	defer sb.Kill(context.Background())
 
+	emit("create", "正在写入输入")
 	if err := sb.WriteFile(ctx, inputSelection, req.Selection); err != nil {
 		return RenderedDeck{}, &RenderError{Stage: "create", Message: "write selection: " + err.Error()}
 	}
@@ -61,7 +67,11 @@ func runRender(ctx context.Context, factory SandboxFactory, templateID string, r
 		`codex exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox --cd %s/%s "$(cat %s)"`,
 		skillsRoot, req.SkillID, promptPath,
 	)
-	res, err := sb.RunCommand(ctx, cmd, map[string]string{"PROVIDER_API_KEY": req.Provider.APIKey})
+	emit("codex", "codex 开始生成")
+	onOutput := func(line string) {
+		emit("codex", truncateLine(line))
+	}
+	res, err := sb.RunCommand(ctx, cmd, map[string]string{"PROVIDER_API_KEY": req.Provider.APIKey}, onOutput)
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
 			return RenderedDeck{}, &RenderError{Stage: "timeout", Message: "codex render timed out"}
@@ -80,6 +90,15 @@ func runRender(ctx context.Context, factory SandboxFactory, templateID string, r
 		return RenderedDeck{}, &RenderError{Stage: "output", Message: "codex produced empty output"}
 	}
 	return RenderedDeck{DeckHTML: html}, nil
+}
+
+// truncateLine 截断单条进度行,进度只是给用户看的心跳,不需要全文。
+func truncateLine(s string) string {
+	const max = 500
+	if len(s) > max {
+		return s[:max] + "…"
+	}
+	return s
 }
 
 // summarize 截断长 stderr,避免 job error 塞爆。

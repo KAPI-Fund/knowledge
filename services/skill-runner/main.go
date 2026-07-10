@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 )
 
@@ -17,6 +18,8 @@ type server struct {
 	templateID string
 }
 
+// handleRender 以 NDJSON 流式响应:执行期间写 progress 行,结束写 done/error 终态行。
+// 流开始前的校验错误仍用非 200 JSON(writeErr)。
 func (s *server) handleRender(w http.ResponseWriter, r *http.Request) {
 	var req RenderRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -31,25 +34,67 @@ func (s *server) handleRender(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), renderTimeout)
 	defer cancel()
 
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	w.WriteHeader(http.StatusOK)
+	flusher, _ := w.(http.Flusher)
+
 	start := time.Now()
-	out, err := runRender(ctx, s.factory, s.templateID, req)
+	var mu sync.Mutex
+	closed := false
+	// writeLine 序列化 emit/心跳/终态的并发写;final 置 closed,handler 返回后
+	// 心跳 goroutine 不得再碰 ResponseWriter。
+	writeLine := func(v any, final bool) {
+		mu.Lock()
+		defer mu.Unlock()
+		if closed {
+			return
+		}
+		if final {
+			closed = true
+		}
+		_ = json.NewEncoder(w).Encode(v)
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
+	emit := func(stage, message string) {
+		writeLine(map[string]any{
+			"type":      "progress",
+			"stage":     stage,
+			"message":   message,
+			"elapsed_s": int(time.Since(start).Seconds()),
+		}, false)
+	}
+
+	hbCtx, hbCancel := context.WithCancel(ctx)
+	defer hbCancel()
+	go func() {
+		t := time.NewTicker(10 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-hbCtx.Done():
+				return
+			case <-t.C:
+				emit("codex", "仍在生成…")
+			}
+		}
+	}()
+
+	out, err := runRender(ctx, s.factory, s.templateID, req, emit)
+	hbCancel()
 	if err != nil {
 		re, ok := err.(*RenderError)
 		stage, msg := "codex", err.Error()
 		if ok {
 			stage, msg = re.Stage, re.Message
 		}
-		status := http.StatusInternalServerError
-		if stage == "timeout" {
-			status = http.StatusGatewayTimeout
-		}
 		log.Printf("render failed skill=%s stage=%s dur=%s: %s", req.SkillID, stage, time.Since(start), msg)
-		writeErr(w, status, stage, msg)
+		writeLine(map[string]string{"type": "error", "stage": stage, "message": msg}, true)
 		return
 	}
 	log.Printf("render ok skill=%s dur=%s bytes=%d", req.SkillID, time.Since(start), len(out.DeckHTML))
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(out)
+	writeLine(map[string]string{"type": "done", "deck_html": out.DeckHTML}, true)
 }
 
 func writeErr(w http.ResponseWriter, status int, stage, message string) {

@@ -86,6 +86,11 @@ type CommandOptions struct {
 	// User authenticates the envd process call (Basic auth). Empty defaults to
 	// "root" to match the Python SDK and avoid old-envd "no user specified".
 	User string
+
+	// Streaming callbacks, invoked synchronously per Process Data event while
+	// the command runs. CommandResult still carries the full buffered output.
+	OnStdout func(OutputMessage)
+	OnStderr func(OutputMessage)
 }
 
 type CommandResult struct {

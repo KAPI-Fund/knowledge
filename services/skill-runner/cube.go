@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	cubesandbox "github.com/tencentcloud/CubeSandbox/sdk/go"
@@ -39,8 +40,34 @@ func (c *cubeSandbox) WriteFile(ctx context.Context, path, content string) error
 	return c.sb.Files().Write(ctx, path, []byte(content))
 }
 
-func (c *cubeSandbox) RunCommand(ctx context.Context, cmd string, env map[string]string) (CommandResult, error) {
-	res, err := c.sb.Commands().Run(ctx, cmd, cubesandbox.CommandOptions{Envs: env})
+// lineSplitter 把 SDK 按 Data 事件到达的文本(可能半行)缓冲并按整行切出。
+func lineSplitter(onLine func(string)) func(cubesandbox.OutputMessage) {
+	var pending string
+	return func(m cubesandbox.OutputMessage) {
+		pending += m.Text
+		for {
+			i := strings.IndexByte(pending, '\n')
+			if i < 0 {
+				break
+			}
+			line := strings.TrimRight(pending[:i], "\r")
+			pending = pending[i+1:]
+			if strings.TrimSpace(line) != "" {
+				onLine(line)
+			}
+		}
+	}
+}
+
+func (c *cubeSandbox) RunCommand(ctx context.Context, cmd string, env map[string]string, onOutput func(string)) (CommandResult, error) {
+	opts := cubesandbox.CommandOptions{Envs: env}
+	if onOutput != nil {
+		// codex exec 的过程日志(thinking/工具调用)走 stderr,最终消息才走 stdout,
+		// 两路都接到同一回调;各自独立缓冲,互不串行内容。
+		opts.OnStdout = lineSplitter(onOutput)
+		opts.OnStderr = lineSplitter(onOutput)
+	}
+	res, err := c.sb.Commands().Run(ctx, cmd, opts)
 	if err != nil {
 		return CommandResult{}, err
 	}

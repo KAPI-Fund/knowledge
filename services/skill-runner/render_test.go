@@ -1,8 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -20,7 +25,7 @@ func TestRenderSuccess(t *testing.T) {
 		runResult: CommandResult{ExitCode: 0},
 		files:     map[string]string{"/work/out/deck.html": "<!DOCTYPE html><html>ok</html>"},
 	}
-	out, err := runRender(context.Background(), &fakeFactory{sb: sb}, "tpl-1", baseReq())
+	out, err := runRender(context.Background(), &fakeFactory{sb: sb}, "tpl-1", baseReq(), nil)
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
@@ -40,7 +45,7 @@ func TestRenderSuccess(t *testing.T) {
 
 func TestRenderCodexNonZeroExit(t *testing.T) {
 	sb := &fakeSandbox{runResult: CommandResult{ExitCode: 1, Stderr: "model refused"}}
-	_, err := runRender(context.Background(), &fakeFactory{sb: sb}, "tpl-1", baseReq())
+	_, err := runRender(context.Background(), &fakeFactory{sb: sb}, "tpl-1", baseReq(), nil)
 	if err == nil {
 		t.Fatal("expected error on non-zero exit")
 	}
@@ -58,7 +63,7 @@ func TestRenderMissingOutput(t *testing.T) {
 		runResult:    CommandResult{ExitCode: 0},
 		failReadPath: "/work/out/deck.html",
 	}
-	_, err := runRender(context.Background(), &fakeFactory{sb: sb}, "tpl-1", baseReq())
+	_, err := runRender(context.Background(), &fakeFactory{sb: sb}, "tpl-1", baseReq(), nil)
 	if err == nil {
 		t.Fatal("expected error on missing output")
 	}
@@ -71,12 +76,113 @@ func TestRenderMissingOutput(t *testing.T) {
 }
 
 func TestRenderCreateFailure(t *testing.T) {
-	_, err := runRender(context.Background(), &fakeFactory{createErr: errors.New("kvm down")}, "tpl-1", baseReq())
+	_, err := runRender(context.Background(), &fakeFactory{createErr: errors.New("kvm down")}, "tpl-1", baseReq(), nil)
 	if err == nil {
 		t.Fatal("expected error on create failure")
 	}
 	if asRenderError(t, err).Stage != "create" {
 		t.Fatalf("stage = %q, want create", asRenderError(t, err).Stage)
+	}
+}
+
+func TestRenderEmitsProgress(t *testing.T) {
+	sb := &fakeSandbox{
+		runResult:   CommandResult{ExitCode: 0},
+		stdoutLines: []string{"thinking about slides", "writing deck.html"},
+		files:       map[string]string{"/work/out/deck.html": "<!DOCTYPE html>"},
+	}
+	var events []string
+	emit := func(stage, message string) {
+		events = append(events, stage+"|"+message)
+	}
+	if _, err := runRender(context.Background(), &fakeFactory{sb: sb}, "tpl-1", baseReq(), emit); err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	want := []string{
+		"create|正在创建沙箱",
+		"create|正在写入输入",
+		"codex|codex 开始生成",
+		"codex|thinking about slides",
+		"codex|writing deck.html",
+	}
+	if len(events) != len(want) {
+		t.Fatalf("events=%#v", events)
+	}
+	for i := range want {
+		if events[i] != want[i] {
+			t.Fatalf("event[%d]=%q, want %q", i, events[i], want[i])
+		}
+	}
+}
+
+func TestHandleRenderStreamsNDJSON(t *testing.T) {
+	sb := &fakeSandbox{
+		runResult:   CommandResult{ExitCode: 0},
+		stdoutLines: []string{"slide 1 done"},
+		files:       map[string]string{"/work/out/deck.html": "<!DOCTYPE html><html>deck</html>"},
+	}
+	s := &server{factory: &fakeFactory{sb: sb}, templateID: "tpl-1"}
+
+	body, _ := json.Marshal(baseReq())
+	req := httptest.NewRequest(http.MethodPost, "/render", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	s.handleRender(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/x-ndjson" {
+		t.Fatalf("content-type=%q", ct)
+	}
+	lines := strings.Split(strings.TrimSpace(rec.Body.String()), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("expected progress + done lines, got %#v", lines)
+	}
+	var first map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &first); err != nil {
+		t.Fatalf("first line not json: %v", err)
+	}
+	if first["type"] != "progress" || first["stage"] != "create" {
+		t.Fatalf("first=%#v", first)
+	}
+	var last map[string]any
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &last); err != nil {
+		t.Fatalf("last line not json: %v", err)
+	}
+	if last["type"] != "done" || last["deck_html"] != "<!DOCTYPE html><html>deck</html>" {
+		t.Fatalf("last=%#v", last)
+	}
+}
+
+func TestHandleRenderStreamsErrorLine(t *testing.T) {
+	sb := &fakeSandbox{runResult: CommandResult{ExitCode: 1, Stderr: "model refused"}}
+	s := &server{factory: &fakeFactory{sb: sb}, templateID: "tpl-1"}
+
+	body, _ := json.Marshal(baseReq())
+	req := httptest.NewRequest(http.MethodPost, "/render", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	s.handleRender(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d", rec.Code)
+	}
+	lines := strings.Split(strings.TrimSpace(rec.Body.String()), "\n")
+	var last map[string]any
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &last); err != nil {
+		t.Fatalf("last line not json: %v", err)
+	}
+	if last["type"] != "error" || last["stage"] != "codex" || last["message"] != "model refused" {
+		t.Fatalf("last=%#v", last)
+	}
+}
+
+func TestHandleRenderRejectsBadRequestBeforeStream(t *testing.T) {
+	s := &server{factory: &fakeFactory{sb: &fakeSandbox{}}, templateID: "tpl-1"}
+	req := httptest.NewRequest(http.MethodPost, "/render", strings.NewReader(`{"skill_id":""}`))
+	rec := httptest.NewRecorder()
+	s.handleRender(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d", rec.Code)
 	}
 }
 

@@ -13,9 +13,10 @@ type CommandResult struct {
 }
 
 // Sandbox 是渲染流程需要的最小沙箱能力(便于 fake 测试;真实现包官方 SDK)。
+// RunCommand 的 onOutput 在命令执行期间按行同步回调 stdout+stderr(可为 nil)。
 type Sandbox interface {
 	WriteFile(ctx context.Context, path, content string) error
-	RunCommand(ctx context.Context, cmd string, env map[string]string) (CommandResult, error)
+	RunCommand(ctx context.Context, cmd string, env map[string]string, onOutput func(line string)) (CommandResult, error)
 	ReadFile(ctx context.Context, path string) (string, error)
 	Kill(ctx context.Context) error
 }
@@ -32,6 +33,7 @@ type fakeSandbox struct {
 	files        map[string]string // ReadFile 的返回内容
 	runResult    CommandResult
 	runErr       error
+	stdoutLines  []string // RunCommand 期间逐行回调给 onOutput
 	killed       bool
 	failReadPath string
 }
@@ -44,7 +46,12 @@ func (f *fakeSandbox) WriteFile(_ context.Context, path, content string) error {
 	return nil
 }
 
-func (f *fakeSandbox) RunCommand(_ context.Context, _ string, _ map[string]string) (CommandResult, error) {
+func (f *fakeSandbox) RunCommand(_ context.Context, _ string, _ map[string]string, onOutput func(string)) (CommandResult, error) {
+	if onOutput != nil {
+		for _, line := range f.stdoutLines {
+			onOutput(line)
+		}
+	}
 	return f.runResult, f.runErr
 }
 
