@@ -14,6 +14,7 @@ pub struct SkillJob {
     pub input: Value,
     pub result: Option<Value>,
     pub error: Option<Value>,
+    pub progress: Option<Value>,
     pub created_by: String,
 }
 
@@ -27,11 +28,23 @@ pub struct NewSkillJob {
 }
 
 // Column tuple shared by acquire_next_job + get_job reads (matches the SELECT/RETURNING order).
-type JobRow = (String, String, String, String, String, Value, Option<Value>, Option<Value>, String);
+type JobRow = (
+    String,
+    String,
+    String,
+    String,
+    String,
+    Value,
+    Option<Value>,
+    Option<Value>,
+    Option<Value>,
+    String,
+);
 
 fn row_to_job(row: JobRow) -> SkillJob {
-    let (id, canvas_id, node_id, skill_id, status, input, result, error, created_by) = row;
-    SkillJob { id, canvas_id, node_id, skill_id, status, input, result, error, created_by }
+    let (id, canvas_id, node_id, skill_id, status, input, result, error, progress, created_by) =
+        row;
+    SkillJob { id, canvas_id, node_id, skill_id, status, input, result, error, progress, created_by }
 }
 
 fn now_rfc3339() -> String {
@@ -113,7 +126,7 @@ pub async fn acquire_next_job(
              lease_expires_at = $3
          FROM next_job
          WHERE j.id = next_job.id
-         RETURNING j.id, j.canvas_id, j.node_id, j.skill_id, j.status, j.input, j.result, j.error, j.created_by",
+         RETURNING j.id, j.canvas_id, j.node_id, j.skill_id, j.status, j.input, j.result, j.error, j.progress, j.created_by",
     )
     .bind(owner)
     .bind(&now)
@@ -129,7 +142,7 @@ pub async fn complete_job(pool: &PgPool, id: &str, result: Value) -> Result<(), 
     let result = serde_json::to_string(&result).unwrap_or_else(|_| "null".to_string());
     sqlx::query(
         "UPDATE canvas_skill_jobs
-         SET status = 'done', result = $2::jsonb, error = NULL,
+         SET status = 'done', result = $2::jsonb, error = NULL, progress = NULL,
              finished_at = $3, updated_at = $3, lease_owner = NULL, lease_expires_at = NULL
          WHERE id = $1",
     )
@@ -146,7 +159,7 @@ pub async fn fail_job(pool: &PgPool, id: &str, error: Value) -> Result<(), sqlx:
     let error = serde_json::to_string(&error).unwrap_or_else(|_| "null".to_string());
     sqlx::query(
         "UPDATE canvas_skill_jobs
-         SET status = 'error', error = $2::jsonb,
+         SET status = 'error', error = $2::jsonb, progress = NULL,
              finished_at = $3, updated_at = $3, lease_owner = NULL, lease_expires_at = NULL
          WHERE id = $1",
     )
@@ -158,9 +171,26 @@ pub async fn fail_job(pool: &PgPool, id: &str, error: Value) -> Result<(), sqlx:
     Ok(())
 }
 
+/// 覆盖运行中 job 的进度快照(latest-wins;终态由 complete/fail 清空)。
+pub async fn update_progress(pool: &PgPool, id: &str, progress: Value) -> Result<(), sqlx::Error> {
+    let now = now_rfc3339();
+    let progress = serde_json::to_string(&progress).unwrap_or_else(|_| "null".to_string());
+    sqlx::query(
+        "UPDATE canvas_skill_jobs
+         SET progress = $2::jsonb, updated_at = $3
+         WHERE id = $1 AND status = 'running'",
+    )
+    .bind(id)
+    .bind(&progress)
+    .bind(&now)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 pub async fn get_job(pool: &PgPool, id: &str) -> Result<Option<SkillJob>, sqlx::Error> {
     let row = sqlx::query_as::<_, JobRow>(
-        "SELECT id, canvas_id, node_id, skill_id, status, input, result, error, created_by
+        "SELECT id, canvas_id, node_id, skill_id, status, input, result, error, progress, created_by
          FROM canvas_skill_jobs WHERE id = $1",
     )
     .bind(id)

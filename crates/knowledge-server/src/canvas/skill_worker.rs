@@ -101,7 +101,28 @@ async fn execute(
     let active = crate::providers::ActiveConnection::from(active);
 
     let req = build_render_request(&descriptor.id, selection, argument, &active);
-    let rendered = state.executor.render(req).await?;
+
+    // 进度旁路:executor 流式上报 → 抽干只留最新 → 覆盖写 job.progress(latest-wins,
+    // 避免 codex 每行 stdout 都打一次 UPDATE)。render 返回后 sender drop,任务自然退出。
+    let (progress_tx, mut progress_rx) = tokio::sync::mpsc::channel::<serde_json::Value>(32);
+    let progress_pool = state.pool.clone();
+    let progress_job_id = job.id.clone();
+    let progress_task = tokio::spawn(async move {
+        while let Some(mut latest) = progress_rx.recv().await {
+            while let Ok(newer) = progress_rx.try_recv() {
+                latest = newer;
+            }
+            if let Err(err) =
+                skill_jobs::update_progress(&progress_pool, &progress_job_id, latest).await
+            {
+                tracing::warn!(%err, job_id = %progress_job_id, "update_progress failed");
+            }
+        }
+    });
+
+    let rendered = state.executor.render(req, progress_tx).await;
+    let _ = progress_task.await;
+    let rendered = rendered?;
 
     let asset = crate::assets::store::NewAsset::new(
         &job.created_by,

@@ -32,6 +32,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/canvases/{id}/nodes/{node_id}/run", post(run_node_handler))
         .route("/api/canvases/{id}/chat", post(chat_handler))
         .route("/api/canvas-skill-jobs/{id}", get(get_skill_job_handler))
+        .route("/api/canvas-skill-jobs/{id}/retry", post(retry_skill_job_handler))
         .route("/api/canvas/extract-url", post(extract_url_handler))
 }
 
@@ -141,6 +142,7 @@ pub struct SkillJobStatus {
     pub status: String,
     pub result: Option<serde_json::Value>,
     pub error: Option<serde_json::Value>,
+    pub progress: Option<serde_json::Value>,
 }
 
 async fn get_handler(
@@ -179,7 +181,49 @@ async fn get_skill_job_handler(
         status: job.status,
         result: job.result,
         error: job.error,
+        progress: job.progress,
     }))
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillJobRetryResponse {
+    pub job_id: String,
+}
+
+/// Requeue a failed skill render as a fresh job (same node, same input). A new
+/// job id is issued instead of resetting the old row: the old id stays a stable
+/// record of the failure, and the front-end poller dedupes terminal jobs by id,
+/// so reusing it would never be polled again.
+async fn retry_skill_job_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<SkillJobRetryResponse>, ApiError> {
+    let principal = resolve_principal(&state, &headers).await?;
+    require_csrf(&principal, &headers)?;
+    let job = crate::canvas::skill_jobs::get_job(&state.pool, &id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("unknown job"))?;
+    // Only the creator may retry; never leak existence to others.
+    if job.created_by != principal.user_id {
+        return Err(ApiError::not_found("unknown job"));
+    }
+    if job.status != "error" {
+        return Err(ApiError::bad_request("only a failed job can be retried"));
+    }
+    let job_id = crate::canvas::skill_jobs::create_job(
+        &state.pool,
+        crate::canvas::skill_jobs::NewSkillJob {
+            canvas_id: job.canvas_id,
+            node_id: job.node_id,
+            skill_id: job.skill_id,
+            input: job.input,
+            created_by: job.created_by,
+        },
+    )
+    .await?;
+    Ok(Json(SkillJobRetryResponse { job_id }))
 }
 
 async fn save_handler(
