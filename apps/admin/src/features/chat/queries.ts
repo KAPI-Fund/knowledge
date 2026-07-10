@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   createConversation,
   deleteConversation,
+  listAgentSkills,
   listConversationMessages,
   listConversations,
   renameConversation,
@@ -12,7 +13,17 @@ export const conversationKeys = {
   list: (projectId: string) => ["conversations", projectId] as const,
   messages: (projectId: string, conversationId: string) =>
     ["conversation-messages", projectId, conversationId] as const,
+  agentSkills: (projectId: string) => ["agent-skills", projectId] as const,
 };
+
+export function useAgentSkillsQuery(projectId: string) {
+  return useQuery({
+    queryKey: conversationKeys.agentSkills(projectId),
+    queryFn: () => listAgentSkills(projectId),
+    enabled: Boolean(projectId),
+    staleTime: 60_000,
+  });
+}
 
 export function useConversationsQuery(projectId: string) {
   return useQuery({

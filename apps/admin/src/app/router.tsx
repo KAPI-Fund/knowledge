@@ -21,6 +21,7 @@ import { ProjectsPage } from "../features/projects/page";
 import { ReviewsPage } from "../features/reviews/page";
 import { SearchPage } from "../features/search/page";
 import { SettingsLayout } from "../features/settings/layout";
+import { AgentSkillsSection } from "../features/settings/sections/agent-skills-section";
 import { DefaultsSection } from "../features/settings/sections/defaults-section";
 import { EmbeddingSection } from "../features/settings/sections/embedding-section";
 import { FetchSection } from "../features/settings/sections/fetch-section";
@@ -123,6 +124,7 @@ export function AppRoutes() {
             <Route path="image" element={<ImageSection />} />
             <Route path="search" element={<WebSearchSection />} />
             <Route path="fetch" element={<FetchSection />} />
+            <Route path="agent-skills" element={<AgentSkillsSection />} />
             <Route path="defaults" element={<DefaultsSection />} />
           </Route>
         </Route>

@@ -10,6 +10,7 @@ export const settingsSections = [
   { to: "image", label: "Image" },
   { to: "search", label: "Web Search" },
   { to: "fetch", label: "Web Fetch" },
+  { to: "agent-skills", label: "Agent Skills" },
   { to: "defaults", label: "Defaults" },
 ];
 

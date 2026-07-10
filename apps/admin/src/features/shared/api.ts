@@ -371,9 +371,30 @@ const conversationMessagesSchema = z.object({
       role: z.string(),
       content: z.string(),
       contextSummary: z.string().nullable().optional(),
+      agentMode: z.string().nullable().optional(),
+      agentEvents: z.unknown().nullable().optional(),
       createdAt: z.string(),
     }),
   ),
+});
+
+const agentSkillsSchema = z.object({
+  skills: z.array(
+    z.object({
+      id: z.string(),
+      name: z.string(),
+      description: z.string(),
+      source: z.enum(["project", "global"]),
+    }),
+  ),
+});
+
+const agentSkillDetailSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  description: z.string(),
+  instructions: z.string(),
+  source: z.enum(["project", "global"]),
 });
 
 export async function login(input: { username: string; password: string }) {
@@ -607,6 +628,38 @@ export async function listConversationMessages(input: {
     conversationMessagesSchema,
   );
   return response.messages;
+}
+
+export async function listAgentSkills(projectId: string) {
+  const response = await apiFetch(
+    `/api/projects/${projectId}/agent/skills`,
+    { method: "GET" },
+    agentSkillsSchema,
+  );
+  return response.skills;
+}
+
+export async function getAgentSkill(input: { projectId: string; skillId: string }) {
+  return apiFetch(
+    `/api/projects/${input.projectId}/agent/skills/${encodeURIComponent(input.skillId)}`,
+    { method: "GET" },
+    agentSkillDetailSchema,
+  );
+}
+
+export async function cancelActiveAgentRun(input: { projectId: string; conversationId: string }) {
+  const response = await fetch(
+    `/api/projects/${input.projectId}/conversations/${input.conversationId}/messages/active`,
+    {
+      method: "DELETE",
+      credentials: "include",
+      headers: csrfHeader(),
+    },
+  );
+  if (!response.ok && response.status !== 404) {
+    throw new Error(`failed to cancel agent run (status ${response.status})`);
+  }
+  return response.ok;
 }
 
 export async function deleteProjectWikiPages(input: { projectId: string; paths: string[] }) {
