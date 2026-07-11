@@ -16,6 +16,8 @@ pub enum WebSearchProvider {
   SerpApi,
   SearXng,
   Ollama,
+  Brave,
+  Firecrawl,
 }
 
 impl WebSearchProvider {
@@ -25,6 +27,8 @@ impl WebSearchProvider {
       WebSearchProvider::SerpApi => "serpapi",
       WebSearchProvider::SearXng => "searxng",
       WebSearchProvider::Ollama => "ollama",
+      WebSearchProvider::Brave => "brave",
+      WebSearchProvider::Firecrawl => "firecrawl",
     }
   }
 }

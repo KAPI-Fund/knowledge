@@ -7,6 +7,8 @@ use crate::web_search::WebSearchProvider;
 const DEFAULT_TAVILY_BASE_URL: &str = "https://api.tavily.com";
 const DEFAULT_SERPAPI_BASE_URL: &str = "https://serpapi.com";
 const DEFAULT_OLLAMA_SEARCH_URL: &str = "https://ollama.com";
+const DEFAULT_BRAVE_BASE_URL: &str = "https://api.search.brave.com";
+const DEFAULT_FIRECRAWL_SEARCH_BASE_URL: &str = "https://api.firecrawl.dev";
 
 #[derive(Debug, Clone)]
 pub struct WebSearchConfig {
@@ -21,13 +23,21 @@ pub struct WebSearchConfig {
   pub tavily_base_url: String,
   /// Overrideable base URL for serpapi — defaults to the public endpoint.
   pub serpapi_base_url: String,
+  /// Overrideable base URL for brave — defaults to the public endpoint.
+  pub brave_base_url: String,
+  /// Overrideable base URL for firecrawl search — defaults to the public endpoint.
+  pub firecrawl_base_url: String,
 }
 
 impl WebSearchConfig {
+  // Firecrawl stays keyless-capable: its api key is optional (Bearer only when set).
   pub fn requires_api_key(&self) -> bool {
     matches!(
       self.provider,
-      WebSearchProvider::Tavily | WebSearchProvider::SerpApi | WebSearchProvider::Ollama,
+      WebSearchProvider::Tavily
+        | WebSearchProvider::SerpApi
+        | WebSearchProvider::Ollama
+        | WebSearchProvider::Brave,
     )
   }
 }
@@ -39,6 +49,8 @@ pub(crate) fn parse_provider(value: &str) -> Result<Option<WebSearchProvider>, A
     "serpapi" => Ok(Some(WebSearchProvider::SerpApi)),
     "searxng" => Ok(Some(WebSearchProvider::SearXng)),
     "ollama" => Ok(Some(WebSearchProvider::Ollama)),
+    "brave" => Ok(Some(WebSearchProvider::Brave)),
+    "firecrawl" => Ok(Some(WebSearchProvider::Firecrawl)),
     other => Err(ApiError::internal(format!(
       "invalid search_provider in system_settings: {other:?}"
     ))),
@@ -86,6 +98,8 @@ pub(crate) fn resolve_web_search_config(
     WebSearchProvider::Tavily => str_field("tavily", "apiKey"),
     WebSearchProvider::SerpApi => str_field("serpapi", "apiKey"),
     WebSearchProvider::Ollama => str_field("ollama", "apiKey"),
+    WebSearchProvider::Brave => str_field("brave", "apiKey"),
+    WebSearchProvider::Firecrawl => str_field("firecrawl", "apiKey"),
     WebSearchProvider::SearXng => None,
   };
 
@@ -106,6 +120,10 @@ pub(crate) fn resolve_web_search_config(
       .unwrap_or_else(|| DEFAULT_TAVILY_BASE_URL.to_string()),
     serpapi_base_url: str_field("serpapi", "baseUrl")
       .unwrap_or_else(|| DEFAULT_SERPAPI_BASE_URL.to_string()),
+    brave_base_url: str_field("brave", "baseUrl")
+      .unwrap_or_else(|| DEFAULT_BRAVE_BASE_URL.to_string()),
+    firecrawl_base_url: str_field("firecrawl", "baseUrl")
+      .unwrap_or_else(|| DEFAULT_FIRECRAWL_SEARCH_BASE_URL.to_string()),
   }))
 }
 
@@ -133,6 +151,8 @@ mod tests {
     assert_eq!(parse_provider("serpapi").unwrap(), Some(WebSearchProvider::SerpApi));
     assert_eq!(parse_provider("searxng").unwrap(), Some(WebSearchProvider::SearXng));
     assert_eq!(parse_provider("ollama").unwrap(), Some(WebSearchProvider::Ollama));
+    assert_eq!(parse_provider("brave").unwrap(), Some(WebSearchProvider::Brave));
+    assert_eq!(parse_provider("firecrawl").unwrap(), Some(WebSearchProvider::Firecrawl));
   }
 
   #[test]
@@ -187,6 +207,47 @@ mod tests {
       .expect("configured");
     assert_eq!(cfg.tavily_base_url, "https://api.tavily.com");
     assert!(cfg.api_key.is_none());
+  }
+
+  #[test]
+  fn resolve_brave_reads_key_and_base_url() {
+    use serde_json::json;
+    let configs = json!({
+      "brave": { "apiKey": "brave-key", "baseUrl": "https://brave.local" }
+    });
+    let cfg = resolve_web_search_config("brave", &configs)
+      .unwrap()
+      .expect("configured");
+    assert!(matches!(cfg.provider, WebSearchProvider::Brave));
+    assert!(cfg.requires_api_key());
+    assert_eq!(cfg.api_key.as_deref(), Some("brave-key"));
+    assert_eq!(cfg.brave_base_url, "https://brave.local");
+
+    let defaulted = resolve_web_search_config("brave", &json!({}))
+      .unwrap()
+      .expect("configured");
+    assert_eq!(defaulted.brave_base_url, "https://api.search.brave.com");
+  }
+
+  #[test]
+  fn resolve_firecrawl_key_is_optional() {
+    use serde_json::json;
+    let cfg = resolve_web_search_config("firecrawl", &json!({}))
+      .unwrap()
+      .expect("configured");
+    assert!(matches!(cfg.provider, WebSearchProvider::Firecrawl));
+    assert!(!cfg.requires_api_key());
+    assert!(cfg.api_key.is_none());
+    assert_eq!(cfg.firecrawl_base_url, "https://api.firecrawl.dev");
+
+    let keyed = resolve_web_search_config(
+      "firecrawl",
+      &json!({ "firecrawl": { "apiKey": "fc-key", "baseUrl": "https://fc.local" } }),
+    )
+    .unwrap()
+    .expect("configured");
+    assert_eq!(keyed.api_key.as_deref(), Some("fc-key"));
+    assert_eq!(keyed.firecrawl_base_url, "https://fc.local");
   }
 
   #[test]

@@ -175,6 +175,85 @@ async fn spawn_mock_ollama_validating() -> (tokio::task::JoinHandle<()>, String)
     (handle, format!("http://127.0.0.1:{port}"))
 }
 
+async fn spawn_mock_brave_validating() -> (tokio::task::JoinHandle<()>, String) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let handle = tokio::spawn(async move {
+        if let Ok((mut socket, _)) = listener.accept().await {
+            let mut buf = vec![0u8; 8192];
+            let n = socket.read(&mut buf).await.unwrap_or(0);
+            let raw = String::from_utf8_lossy(&buf[..n]);
+            let request_line = raw.lines().next().unwrap_or("");
+            assert!(
+                request_line.starts_with("GET /res/v1/web/search?"),
+                "brave: expected GET /res/v1/web/search?..., got: {request_line}"
+            );
+            assert!(request_line.contains("q=brave+query"), "brave: query value not locked: {request_line}");
+            assert!(request_line.contains("count=3"), "brave: count must be 3: {request_line}");
+            assert!(
+                raw.to_lowercase().contains("x-subscription-token: test-key"),
+                "brave: subscription token value not locked: {raw}"
+            );
+            let body = json!({
+              "web": {
+                "results": [
+                  { "title": "Brv", "url": "https://example.com/brv", "description": "from brave" }
+                ]
+              }
+            })
+            .to_string();
+            let payload = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = socket.write_all(payload.as_bytes()).await;
+            let _ = socket.shutdown().await;
+        }
+    });
+    (handle, format!("http://127.0.0.1:{port}"))
+}
+
+async fn spawn_mock_firecrawl_search_validating() -> (tokio::task::JoinHandle<()>, String) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let handle = tokio::spawn(async move {
+        if let Ok((mut socket, _)) = listener.accept().await {
+            let mut buf = vec![0u8; 8192];
+            let n = socket.read(&mut buf).await.unwrap_or(0);
+            let raw = String::from_utf8_lossy(&buf[..n]);
+            let request_line = raw.lines().next().unwrap_or("");
+            assert!(
+                request_line.starts_with("POST /v2/search "),
+                "firecrawl: expected POST /v2/search, got: {request_line}"
+            );
+            assert!(raw.contains("\"query\":\"firecrawl query\""), "firecrawl: query value not locked: {raw}");
+            assert!(raw.contains("\"limit\":3"), "firecrawl: limit must be 3: {raw}");
+            assert!(
+                !raw.to_lowercase().contains("authorization:"),
+                "firecrawl: key-free search must not send Authorization: {raw}"
+            );
+            let body = json!({
+              "success": true,
+              "data": {
+                "web": [
+                  { "metadata": { "title": "FC", "sourceURL": "https://example.com/fc", "description": "from firecrawl" } }
+                ]
+              }
+            })
+            .to_string();
+            let payload = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = socket.write_all(payload.as_bytes()).await;
+            let _ = socket.shutdown().await;
+        }
+    });
+    (handle, format!("http://127.0.0.1:{port}"))
+}
+
 async fn spawn_mock_searxng() -> (tokio::task::JoinHandle<()>, String) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -617,6 +696,118 @@ async fn web_search_ollama_uses_persisted_url() {
     assert_eq!(results.len(), 1);
     assert_eq!(results[0]["title"].as_str(), Some("Olla"));
     assert_eq!(results[0]["url"].as_str(), Some("https://example.com/olla"));
+
+    handle.abort();
+}
+
+#[tokio::test]
+async fn web_search_brave_uses_persisted_base_url() {
+    let _env = TestEnvironment::start("web-search-brave").await.unwrap();
+    let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
+    let state = bootstrap_state(&config).await.unwrap();
+    let (cookie, csrf) = login_and_csrf(state.clone()).await;
+    let (handle, base) = spawn_mock_brave_validating().await;
+
+    let patch = build_app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/system/settings")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .header("x-csrf-token", &csrf)
+                .body(Body::from(
+                    json!({
+                      "search": {
+                        "provider": "brave",
+                        "providers": { "brave": { "apiKey": "test-key", "baseUrl": base } }
+                      }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(patch.status(), StatusCode::OK);
+
+    let response = build_app(state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/web-search")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .header("x-csrf-token", &csrf)
+                .body(Body::from(
+                    json!({ "query": "brave query", "maxResults": 3 }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload = read_json(response.into_body()).await;
+    let results = payload.get("results").and_then(Value::as_array).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0]["title"].as_str(), Some("Brv"));
+    assert_eq!(results[0]["url"].as_str(), Some("https://example.com/brv"));
+
+    handle.abort();
+}
+
+#[tokio::test]
+async fn web_search_firecrawl_uses_persisted_base_url_without_key() {
+    let _env = TestEnvironment::start("web-search-firecrawl").await.unwrap();
+    let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
+    let state = bootstrap_state(&config).await.unwrap();
+    let (cookie, csrf) = login_and_csrf(state.clone()).await;
+    let (handle, base) = spawn_mock_firecrawl_search_validating().await;
+
+    let patch = build_app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/system/settings")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .header("x-csrf-token", &csrf)
+                .body(Body::from(
+                    json!({
+                      "search": {
+                        "provider": "firecrawl",
+                        "providers": { "firecrawl": { "baseUrl": base } }
+                      }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(patch.status(), StatusCode::OK);
+
+    let response = build_app(state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/web-search")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .header("x-csrf-token", &csrf)
+                .body(Body::from(
+                    json!({ "query": "firecrawl query", "maxResults": 3 }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload = read_json(response.into_body()).await;
+    let results = payload.get("results").and_then(Value::as_array).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0]["title"].as_str(), Some("FC"));
+    assert_eq!(results[0]["url"].as_str(), Some("https://example.com/fc"));
 
     handle.abort();
 }

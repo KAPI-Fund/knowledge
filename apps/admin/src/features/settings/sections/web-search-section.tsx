@@ -33,6 +33,10 @@ interface SearchFields {
   searxngCategories: string;
   ollamaApiKey: string;
   ollamaUrl: string;
+  braveApiKey: string;
+  braveBaseUrl: string;
+  firecrawlApiKey: string;
+  firecrawlBaseUrl: string;
 }
 
 const EMPTY: SearchFields = {
@@ -46,6 +50,10 @@ const EMPTY: SearchFields = {
   searxngCategories: "general",
   ollamaApiKey: "",
   ollamaUrl: "",
+  braveApiKey: "",
+  braveBaseUrl: "",
+  firecrawlApiKey: "",
+  firecrawlBaseUrl: "",
 };
 
 export function WebSearchSection() {
@@ -57,7 +65,13 @@ export function WebSearchSection() {
   // Per-provider "remove the stored api key" toggles. Separate from `fields`
   // because a key can only ever be kept, replaced, or cleared — never edited in
   // place (GET redacts it). When on, save sends apiKey=null (backend clears it).
-  const [clearKeys, setClearKeys] = useState({ tavily: false, serpapi: false, ollama: false });
+  const [clearKeys, setClearKeys] = useState({
+    tavily: false,
+    serpapi: false,
+    ollama: false,
+    brave: false,
+    firecrawl: false,
+  });
   const [testQuery, setTestQuery] = useState("");
   const [testError, setTestError] = useState("");
   const hydratedFrom = useRef<string>("");
@@ -84,8 +98,12 @@ export function WebSearchSection() {
       searxngCategories: (p.searxng?.categories ?? ["general"]).join(", "),
       ollamaApiKey: "",
       ollamaUrl: p.ollama?.url ?? "",
+      braveApiKey: "",
+      braveBaseUrl: p.brave?.baseUrl ?? "",
+      firecrawlApiKey: "",
+      firecrawlBaseUrl: p.firecrawl?.baseUrl ?? "",
     });
-    setClearKeys({ tavily: false, serpapi: false, ollama: false });
+    setClearKeys({ tavily: false, serpapi: false, ollama: false, brave: false, firecrawl: false });
   }, [settings.data?.search]);
 
   function set<K extends keyof SearchFields>(key: K, value: SearchFields[K]) {
@@ -125,11 +143,26 @@ export function WebSearchSection() {
             apiKey: keyValue(clearKeys.ollama, fields.ollamaApiKey),
             url: urlOrClear(fields.ollamaUrl),
           },
+          brave: {
+            apiKey: keyValue(clearKeys.brave, fields.braveApiKey),
+            baseUrl: urlOrClear(fields.braveBaseUrl),
+          },
+          firecrawl: {
+            apiKey: keyValue(clearKeys.firecrawl, fields.firecrawlApiKey),
+            baseUrl: urlOrClear(fields.firecrawlBaseUrl),
+          },
         },
       },
     });
-    setFields((f) => ({ ...f, tavilyApiKey: "", serpapiApiKey: "", ollamaApiKey: "" }));
-    setClearKeys({ tavily: false, serpapi: false, ollama: false });
+    setFields((f) => ({
+      ...f,
+      tavilyApiKey: "",
+      serpapiApiKey: "",
+      ollamaApiKey: "",
+      braveApiKey: "",
+      firecrawlApiKey: "",
+    }));
+    setClearKeys({ tavily: false, serpapi: false, ollama: false, brave: false, firecrawl: false });
   }
 
   const configured = settings.data?.search?.providers;
@@ -153,6 +186,8 @@ export function WebSearchSection() {
               <SelectItem value="serpapi">serpapi</SelectItem>
               <SelectItem value="searxng">searxng</SelectItem>
               <SelectItem value="ollama">ollama</SelectItem>
+              <SelectItem value="brave">brave</SelectItem>
+              <SelectItem value="firecrawl">firecrawl</SelectItem>
             </SelectContent>
           </Select>
         </div>
@@ -301,6 +336,83 @@ export function WebSearchSection() {
                 value={fields.ollamaUrl}
                 onChange={(e) => set("ollamaUrl", e.target.value)}
                 placeholder="https://ollama.com"
+              />
+            </label>
+          </>
+        ) : null}
+
+        {fields.provider === "brave" ? (
+          <>
+            <label className="grid gap-1.5 text-sm font-medium">
+              Brave API Key
+              <Input
+                type="password"
+                disabled={clearKeys.brave}
+                placeholder={
+                  configured?.brave?.apiKeyConfigured
+                    ? "Leave blank to keep the current key"
+                    : "Enter your Brave Search API subscription token"
+                }
+                value={fields.braveApiKey}
+                onChange={(e) => set("braveApiKey", e.target.value)}
+              />
+            </label>
+            {configured?.brave?.apiKeyConfigured ? (
+              <label className="flex items-center justify-between text-sm text-muted-foreground">
+                <span>Clear stored key</span>
+                <Switch
+                  aria-label="Clear stored Brave key"
+                  checked={clearKeys.brave}
+                  onCheckedChange={(v) => setClearKeys((c) => ({ ...c, brave: v }))}
+                />
+              </label>
+            ) : null}
+            <label className="grid gap-1.5 text-sm font-medium">
+              Brave Base URL
+              <Input
+                value={fields.braveBaseUrl}
+                onChange={(e) => set("braveBaseUrl", e.target.value)}
+                placeholder="https://api.search.brave.com"
+              />
+            </label>
+          </>
+        ) : null}
+
+        {fields.provider === "firecrawl" ? (
+          <>
+            <label className="grid gap-1.5 text-sm font-medium">
+              Firecrawl API Key
+              <Input
+                type="password"
+                disabled={clearKeys.firecrawl}
+                placeholder={
+                  configured?.firecrawl?.apiKeyConfigured
+                    ? "Leave blank to keep the current key"
+                    : "fc-..."
+                }
+                value={fields.firecrawlApiKey}
+                onChange={(e) => set("firecrawlApiKey", e.target.value)}
+              />
+              <span className="text-xs font-normal text-muted-foreground">
+                Optional — anonymous access works but may be rejected by IP.
+              </span>
+            </label>
+            {configured?.firecrawl?.apiKeyConfigured ? (
+              <label className="flex items-center justify-between text-sm text-muted-foreground">
+                <span>Clear stored key</span>
+                <Switch
+                  aria-label="Clear stored Firecrawl key"
+                  checked={clearKeys.firecrawl}
+                  onCheckedChange={(v) => setClearKeys((c) => ({ ...c, firecrawl: v }))}
+                />
+              </label>
+            ) : null}
+            <label className="grid gap-1.5 text-sm font-medium">
+              Firecrawl Base URL
+              <Input
+                value={fields.firecrawlBaseUrl}
+                onChange={(e) => set("firecrawlBaseUrl", e.target.value)}
+                placeholder="https://api.firecrawl.dev"
               />
             </label>
           </>

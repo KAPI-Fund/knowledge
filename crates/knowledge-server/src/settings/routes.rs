@@ -127,7 +127,7 @@ pub(crate) fn connection_to_json(c: &crate::providers::ProviderConnection) -> se
 /// apiKeyConfigured boolean, so raw keys never leave the server.
 fn redact_search_configs(configs: &serde_json::Value) -> serde_json::Value {
     let mut out = serde_json::Map::new();
-    for provider in ["tavily", "serpapi", "searxng", "ollama"] {
+    for provider in ["tavily", "serpapi", "searxng", "ollama", "brave", "firecrawl"] {
         let block = configs.get(provider);
         let mut fields = serde_json::Map::new();
         if let Some(obj) = block.and_then(|b| b.as_object()) {
@@ -410,7 +410,7 @@ pub(crate) fn merge_provider_configs(
 fn validate_search_provider(provider: &str) -> Result<(), ApiError> {
     if matches!(
         provider,
-        "none" | "tavily" | "serpapi" | "searxng" | "ollama"
+        "none" | "tavily" | "serpapi" | "searxng" | "ollama" | "brave" | "firecrawl"
     ) {
         Ok(())
     } else {
@@ -757,11 +757,29 @@ mod tests {
 
     #[test]
     fn validate_search_provider_accepts_known_and_rejects_unknown() {
-        for ok in ["none", "tavily", "serpapi", "searxng", "ollama"] {
+        for ok in ["none", "tavily", "serpapi", "searxng", "ollama", "brave", "firecrawl"] {
             assert!(validate_search_provider(ok).is_ok(), "{ok} should be valid");
         }
         assert!(validate_search_provider("google").is_err());
         assert!(validate_search_provider("").is_err());
+    }
+
+    use super::redact_search_configs;
+
+    #[test]
+    fn redact_search_configs_covers_brave_and_firecrawl_blocks() {
+        use serde_json::json;
+        let redacted = redact_search_configs(&json!({
+            "brave": { "apiKey": "brave-secret", "baseUrl": "https://brave.local" },
+            "firecrawl": {}
+        }));
+        assert_eq!(redacted["brave"]["apiKeyConfigured"], true);
+        assert_eq!(redacted["brave"]["baseUrl"], "https://brave.local");
+        assert!(
+            redacted["brave"].get("apiKey").is_none(),
+            "raw brave apiKey must never be serialized"
+        );
+        assert_eq!(redacted["firecrawl"]["apiKeyConfigured"], false);
     }
 
     #[test]

@@ -30,6 +30,8 @@ function tavilyActive() {
         serpapi: { apiKeyConfigured: false, engine: "google", baseUrl: "https://serpapi.com" },
         searxng: { url: "", categories: ["general"] },
         ollama: { apiKeyConfigured: false, url: "https://ollama.com" },
+        brave: { apiKeyConfigured: false, baseUrl: "https://api.search.brave.com" },
+        firecrawl: { apiKeyConfigured: false, baseUrl: "https://api.firecrawl.dev" },
       },
     },
   };
@@ -105,6 +107,43 @@ describe("WebSearchSection", () => {
 
     const payload = updateSettings.mock.calls[0][0];
     expect(payload.search.providers.tavily.baseUrl).toBeNull();
+  });
+
+  it("selecting brave renders its key/baseUrl fields and includes them in the payload", async () => {
+    const user = userEvent.setup();
+    updateSettings.mockResolvedValue({});
+    settingsData.mockReturnValue(tavilyActive());
+    render(<WebSearchSection />);
+
+    await user.click(screen.getByRole("combobox", { name: /Search Provider/i }));
+    await user.click(await screen.findByRole("option", { name: "brave" }));
+    await user.type(screen.getByLabelText(/Brave API Key/i), "brave-secret");
+    expect(screen.getByLabelText(/Brave Base URL/i)).toHaveValue("https://api.search.brave.com");
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+
+    const payload = updateSettings.mock.calls[0][0];
+    expect(payload.search.provider).toBe("brave");
+    expect(payload.search.providers.brave.apiKey).toBe("brave-secret");
+    expect(payload.search.providers.brave.baseUrl).toBe("https://api.search.brave.com");
+  });
+
+  it("selecting firecrawl renders optional key fields and includes them in the payload", async () => {
+    const user = userEvent.setup();
+    updateSettings.mockResolvedValue({});
+    settingsData.mockReturnValue(tavilyActive());
+    render(<WebSearchSection />);
+
+    await user.click(screen.getByRole("combobox", { name: /Search Provider/i }));
+    await user.click(await screen.findByRole("option", { name: "firecrawl" }));
+    expect(screen.getByText(/anonymous access works/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Firecrawl Base URL/i)).toHaveValue("https://api.firecrawl.dev");
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+
+    const payload = updateSettings.mock.calls[0][0];
+    expect(payload.search.provider).toBe("firecrawl");
+    // Blank optional key → empty string means "keep/none" server-side.
+    expect(payload.search.providers.firecrawl.apiKey).toBe("");
+    expect(payload.search.providers.firecrawl.baseUrl).toBe("https://api.firecrawl.dev");
   });
 
   it("runs a test search with the typed query", async () => {

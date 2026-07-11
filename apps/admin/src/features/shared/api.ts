@@ -228,6 +228,14 @@ const searchProviderConfigsSchema = z.object({
     .object({ apiKeyConfigured: z.boolean().optional(), url: z.string().optional() })
     .partial()
     .optional(),
+  brave: z
+    .object({ apiKeyConfigured: z.boolean().optional(), baseUrl: z.string().optional() })
+    .partial()
+    .optional(),
+  firecrawl: z
+    .object({ apiKeyConfigured: z.boolean().optional(), baseUrl: z.string().optional() })
+    .partial()
+    .optional(),
 });
 
 const fetchProviderConfigsSchema = z.object({
