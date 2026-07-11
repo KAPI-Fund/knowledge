@@ -265,7 +265,11 @@ export function StarfieldCanvas({
     applyLayoutNodeStates(starNodes, layout, maxLayer);
     graph.graphData({ nodes: starNodes, links });
     applyLayoutForces(graph, layout);
-    graph.d3ReheatSimulation();
+    // No d3ReheatSimulation() here: kapsule applies graphData on a debounced
+    // (async) update pass that itself re-heats the simulation. Reheating
+    // synchronously flips engineRunning on before that pass assigns
+    // state.layout, and the first animation frame then crashes the render
+    // loop with "Cannot read properties of undefined (reading 'tick')".
   }, [nodes, edges, layout]);
 
   // Visual state: selection chain, insights highlight, color mode, theme.
