@@ -11,6 +11,7 @@ export const settingsSections = [
   { to: "search", label: "Web Search" },
   { to: "fetch", label: "Web Fetch" },
   { to: "agent-skills", label: "Agent Skills" },
+  { to: "mcp", label: "MCP" },
   { to: "defaults", label: "Defaults" },
 ];
 

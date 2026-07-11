@@ -27,6 +27,7 @@ import { EmbeddingSection } from "../features/settings/sections/embedding-sectio
 import { FetchSection } from "../features/settings/sections/fetch-section";
 import { ImageSection } from "../features/settings/sections/image-section";
 import { LlmConnectionsSection } from "../features/settings/sections/llm-connections-section";
+import { McpSection } from "../features/settings/sections/mcp-section";
 import { WebSearchSection } from "../features/settings/sections/web-search-section";
 import { SourceWatchPage } from "../features/source-watch/page";
 import { SourcesPage } from "../features/sources/page";
@@ -125,6 +126,7 @@ export function AppRoutes() {
             <Route path="search" element={<WebSearchSection />} />
             <Route path="fetch" element={<FetchSection />} />
             <Route path="agent-skills" element={<AgentSkillsSection />} />
+            <Route path="mcp" element={<McpSection />} />
             <Route path="defaults" element={<DefaultsSection />} />
           </Route>
         </Route>

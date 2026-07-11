@@ -40,6 +40,8 @@ pub struct UpdateSettingsRequest {
   pub defaults: Option<DefaultsBlock>,
   #[serde(default)]
   pub ingest: Option<IngestSettingsBlock>,
+  #[serde(default)]
+  pub mcp: Option<McpSettingsBlock>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -47,6 +49,13 @@ pub struct UpdateSettingsRequest {
 pub struct IngestSettingsBlock {
     #[serde(default)]
     pub paused: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpSettingsBlock {
+    #[serde(default)]
+    pub enabled: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -202,17 +211,19 @@ async fn build_settings_response(state: &AppState) -> Result<serde_json::Value, 
         search_provider_configs,
         fetch_provider_configs,
         ingest_paused,
+        mcp_enabled,
     ) = sqlx::query_as::<_, (
         bool, Option<String>, Option<String>, Option<String>, Option<i64>,
         Option<String>, Option<String>, Option<String>, String, Option<i64>,
         serde_json::Value,
         serde_json::Value,
         bool,
+        bool,
     )>(
         "SELECT embedding_enabled, embedding_base_url, embedding_api_key,
                 embedding_model, embedding_timeout_seconds,
                 image_base_url, image_api_key, image_model, image_size, image_timeout_seconds,
-                search_provider_configs, fetch_provider_configs, ingest_paused
+                search_provider_configs, fetch_provider_configs, ingest_paused, mcp_enabled
          FROM system_settings WHERE id = 1",
     )
     .fetch_one(&state.pool)
@@ -260,6 +271,9 @@ async fn build_settings_response(state: &AppState) -> Result<serde_json::Value, 
         },
         "ingest": {
             "paused": ingest_paused,
+        },
+        "mcp": {
+            "enabled": mcp_enabled,
         },
     }))
 }
@@ -628,6 +642,16 @@ async fn update_settings(
           "UPDATE system_settings SET ingest_paused = COALESCE($1, ingest_paused) WHERE id = 1",
       )
       .bind(ingest.paused)
+      .execute(&mut *tx)
+      .await
+      .map_err(ApiError::from)?;
+  }
+
+  if let Some(mcp) = &payload.mcp {
+      sqlx::query(
+          "UPDATE system_settings SET mcp_enabled = COALESCE($1, mcp_enabled) WHERE id = 1",
+      )
+      .bind(mcp.enabled)
       .execute(&mut *tx)
       .await
       .map_err(ApiError::from)?;

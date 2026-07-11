@@ -1,0 +1,2 @@
+ALTER TABLE system_settings
+    ADD COLUMN mcp_enabled BOOLEAN NOT NULL DEFAULT FALSE;

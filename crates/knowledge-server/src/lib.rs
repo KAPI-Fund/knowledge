@@ -9,6 +9,7 @@ pub mod config;
 pub mod db;
 pub mod deep_research;
 pub mod http;
+pub mod mcp;
 pub mod multimodal;
 pub mod projects;
 pub mod providers;
