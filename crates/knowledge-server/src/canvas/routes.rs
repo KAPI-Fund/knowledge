@@ -143,6 +143,8 @@ pub struct SkillJobStatus {
     pub result: Option<serde_json::Value>,
     pub error: Option<serde_json::Value>,
     pub progress: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub queue_position: Option<i64>,
 }
 
 async fn get_handler(
@@ -177,11 +179,17 @@ async fn get_skill_job_handler(
     if job.created_by != principal.user_id {
         return Err(ApiError::not_found("unknown job"));
     }
+    let queue_position = if job.status == "queued" {
+        crate::canvas::skill_jobs::queue_position(&state.pool, &id).await?
+    } else {
+        None
+    };
     Ok(Json(SkillJobStatus {
         status: job.status,
         result: job.result,
         error: job.error,
         progress: job.progress,
+        queue_position,
     }))
 }
 
@@ -211,6 +219,15 @@ async fn retry_skill_job_handler(
     }
     if job.status != "error" {
         return Err(ApiError::bad_request("only a failed job can be retried"));
+    }
+    let active =
+        crate::canvas::skill_jobs::count_active_jobs_for_user(&state.pool, &principal.user_id)
+            .await?;
+    if active >= state.skill_jobs_per_user as i64 {
+        return Err(ApiError::too_many_requests(format!(
+            "同时进行的生成任务已达上限({}),请等现有任务完成后再重试",
+            state.skill_jobs_per_user
+        )));
     }
     let job_id = crate::canvas::skill_jobs::create_job(
         &state.pool,
@@ -630,6 +647,25 @@ async fn chat_handler(
                 }
                 // Only LlmSkill descriptors reach dispatch (e.g. `/ppt`): create an
                 // async skill job and emit a running node the worker fills in later.
+                let per_user_limit = stream_state.skill_jobs_per_user as i64;
+                match crate::canvas::skill_jobs::count_active_jobs_for_user(
+                    &stream_state.pool,
+                    &user_id,
+                )
+                .await
+                {
+                    Ok(active) if active >= per_user_limit => {
+                        yield Ok(sse_error(&format!(
+                            "同时进行的生成任务已达上限({per_user_limit}),请等现有任务完成"
+                        )));
+                        return;
+                    }
+                    Ok(_) => {}
+                    Err(error) => {
+                        yield Ok(sse_error(&error.to_string()));
+                        return;
+                    }
+                }
                 let selection_text = plain_context.join("\n\n");
                 let node_id = uuid::Uuid::new_v4().to_string();
                 let input = json!({

@@ -188,6 +188,32 @@ pub async fn update_progress(pool: &PgPool, id: &str, progress: Value) -> Result
     Ok(())
 }
 
+/// 该用户当前在途(queued+running)的 job 数,入队配额检查用。
+pub async fn count_active_jobs_for_user(pool: &PgPool, user_id: &str) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM canvas_skill_jobs
+         WHERE created_by = $1 AND status IN ('queued', 'running')",
+    )
+    .bind(user_id)
+    .fetch_one(pool)
+    .await
+}
+
+/// queued job 的 1-based 排队位置(与 acquire_next_job 的 created_at 顺序一致,
+/// id 作并列破序)。job 不存在或已不在 queued 时返回 None。
+pub async fn queue_position(pool: &PgPool, id: &str) -> Result<Option<i64>, sqlx::Error> {
+    sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM canvas_skill_jobs j, canvas_skill_jobs target
+         WHERE target.id = $1 AND target.status = 'queued'
+           AND j.status = 'queued'
+           AND (j.created_at, j.id) <= (target.created_at, target.id)",
+    )
+    .bind(id)
+    .fetch_one(pool)
+    .await
+    .map(|count| if count == 0 { None } else { Some(count) })
+}
+
 pub async fn get_job(pool: &PgPool, id: &str) -> Result<Option<SkillJob>, sqlx::Error> {
     let row = sqlx::query_as::<_, JobRow>(
         "SELECT id, canvas_id, node_id, skill_id, status, input, result, error, progress, created_by

@@ -66,11 +66,12 @@ pub async fn bootstrap_state(config: &AppConfig) -> anyhow::Result<AppState> {
         executor,
         agent_cancellations: agent::cancel::AgentCancellationRegistry::default(),
         global_skills_dir,
+        skill_jobs_per_user: config.skill_jobs_per_user,
     };
     tasks::recovery::recover_tasks(&state).await?;
     tasks::scheduler::spawn_scheduler(state.clone());
     crate::canvas::skill_jobs::recover_skill_jobs(&state.pool).await?;
-    crate::canvas::skill_worker::spawn_skill_worker(state.clone());
+    crate::canvas::skill_worker::spawn_skill_worker(state.clone(), config.skill_worker_concurrency);
     projects::source_watch::spawn_source_watch_scheduler(state.clone());
     Ok(state)
 }

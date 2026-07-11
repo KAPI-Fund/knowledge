@@ -54,6 +54,10 @@ services:
       # skill-runner sidecar(跑在带 KVM 的 Linux 主机上,执行 CubeSandbox+codex)。
       # 本地无 KVM 时 /ppt 会失败,属预期;配置真实地址后生效。
       KNOWLEDGE_SKILL_RUNNER_URL: ${KNOWLEDGE_SKILL_RUNNER_URL:-http://host.docker.internal:4600}
+      # 渲染并发闸门:同时打到 skill-runner 的 CubeSandbox 微 VM 数,调大前先
+      # 确认 KVM 主机容量。KNOWLEDGE_SKILL_JOBS_PER_USER 是单用户在途任务上限。
+      KNOWLEDGE_SKILL_WORKER_CONCURRENCY: ${KNOWLEDGE_SKILL_WORKER_CONCURRENCY:-2}
+      KNOWLEDGE_SKILL_JOBS_PER_USER: ${KNOWLEDGE_SKILL_JOBS_PER_USER:-2}
     ports:
       - "4001:4001"
     volumes:

@@ -68,6 +68,11 @@ func (s *server) handleExec(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if !s.tryAcquire() {
+		writeErr(w, http.StatusTooManyRequests, "exec", "skill-runner 并发已满,请稍后重试")
+		return
+	}
+	defer s.release()
 
 	start := time.Now()
 	out, err := runExec(r.Context(), s.factory, req)

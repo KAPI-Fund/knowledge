@@ -1500,6 +1500,7 @@ const skillJobStatusSchema = z.object({
     .object({ stage: z.string(), message: z.string(), elapsedS: z.number().nullish() })
     .partial()
     .nullish(),
+  queuePosition: z.number().nullish(),
 });
 
 export type SkillJobStatus = z.infer<typeof skillJobStatusSchema>;

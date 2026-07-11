@@ -6,6 +6,8 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -16,7 +18,30 @@ const renderTimeout = 600 * time.Second
 type server struct {
 	factory    SandboxFactory
 	templateID string
+	// sem 是全局并发闸门:render/exec 各占一个槽,槽满直接 429。上限应对齐
+	// KVM 主机能同时跑的 CubeSandbox 微 VM 数,而不是 HTTP 层能扛多少连接。
+	sem chan struct{}
 }
+
+func newServer(factory SandboxFactory, templateID string, maxConcurrent int) *server {
+	if maxConcurrent < 1 {
+		maxConcurrent = 1
+	}
+	return &server{factory: factory, templateID: templateID, sem: make(chan struct{}, maxConcurrent)}
+}
+
+// tryAcquire 非阻塞占一个并发槽;满了返回 false,调用方快速失败而非排队等待
+// (排队由 backend 的 job 队列负责,sidecar 只保护主机容量)。
+func (s *server) tryAcquire() bool {
+	select {
+	case s.sem <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *server) release() { <-s.sem }
 
 // handleRender 以 NDJSON 流式响应:执行期间写 progress 行,结束写 done/error 终态行。
 // 流开始前的校验错误仍用非 200 JSON(writeErr)。
@@ -30,6 +55,11 @@ func (s *server) handleRender(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "create", "skill_id required")
 		return
 	}
+	if !s.tryAcquire() {
+		writeErr(w, http.StatusTooManyRequests, "create", "skill-runner 并发已满,请稍后重试")
+		return
+	}
+	defer s.release()
 
 	ctx, cancel := context.WithTimeout(r.Context(), renderTimeout)
 	defer cancel()
@@ -121,7 +151,9 @@ func main() {
 	if v := os.Getenv("SKILLS_VERSION"); v != "" {
 		log.Printf("skill-runner starting; skills version=%s template=%s", v, templateID)
 	}
-	s := &server{factory: factory, templateID: templateID}
+	maxConcurrent := envInt("SKILL_RUNNER_MAX_CONCURRENT", 4)
+	log.Printf("skill-runner max concurrent sandboxes: %d", maxConcurrent)
+	s := newServer(factory, templateID, maxConcurrent)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/render", s.handleRender)
 	mux.HandleFunc("/exec", s.handleExec)
@@ -135,4 +167,16 @@ func envOr(key, def string) string {
 		return v
 	}
 	return def
+}
+
+func envInt(key string, def int) int {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 1 {
+		return def
+	}
+	return n
 }

@@ -80,6 +80,14 @@ impl ApiError {
     }
   }
 
+  pub fn too_many_requests(message: impl Into<String>) -> Self {
+    Self {
+      status: StatusCode::TOO_MANY_REQUESTS,
+      message: message.into(),
+      retry: None,
+    }
+  }
+
   /// Attach a task retry hint so the scheduler can preserve `retryable`/`code`
   /// across the executor's `Result<_, ApiError>` boundary.
   pub fn with_retry_hint(mut self, hint: RetryHint) -> Self {

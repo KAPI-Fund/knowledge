@@ -82,6 +82,27 @@ describe("useSkillJobPoll", () => {
     await waitFor(() => expect(onProgress.mock.calls.length).toBeGreaterThanOrEqual(1));
   });
 
+  it("reports queue position as synthetic progress while a job is queued", async () => {
+    vi.mocked(fetchSkillJob).mockResolvedValue({
+      status: "queued",
+      result: null,
+      error: null,
+      queuePosition: 3,
+    });
+    const onProgress = vi.fn();
+    render(
+      <Harness
+        jobs={[{ nodeId: "n1", jobId: "j1" }]}
+        onDone={() => {}}
+        onError={() => {}}
+        onProgress={onProgress}
+      />,
+    );
+    await waitFor(() =>
+      expect(onProgress).toHaveBeenCalledWith("n1", { stage: "queued", message: "排队中 · 第 3 位" }),
+    );
+  });
+
   it("does not fire a terminal callback twice for the same job", async () => {
     vi.mocked(fetchSkillJob).mockResolvedValue({
       status: "done",

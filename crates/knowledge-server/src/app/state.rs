@@ -17,4 +17,6 @@ pub struct AppState {
     pub executor: Arc<dyn SkillExecutor>,
     pub agent_cancellations: AgentCancellationRegistry,
     pub global_skills_dir: Option<PathBuf>,
+    /// 单个用户同时在途(queued+running)的 canvas skill job 上限。
+    pub skill_jobs_per_user: usize,
 }

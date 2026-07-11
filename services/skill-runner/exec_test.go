@@ -3,6 +3,9 @@ package main
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -119,6 +122,29 @@ func TestRunExecReportsTimeoutInsteadOfError(t *testing.T) {
 	}
 	if time.Since(start) > 5*time.Second {
 		t.Fatal("timeout did not bound the wait")
+	}
+}
+
+func TestHandleExecRejectsWhenAtCapacity(t *testing.T) {
+	s := newServer(&scriptFactory{sb: &scriptSandbox{}}, "tpl-1", 1)
+	s.sem <- struct{}{} // 占满唯一并发槽
+
+	req := httptest.NewRequest(http.MethodPost, "/exec", strings.NewReader(`{"command":"ls"}`))
+	rec := httptest.NewRecorder()
+	s.handleExec(rec, req)
+
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var errBody map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &errBody); err != nil {
+		t.Fatalf("body not json: %v", err)
+	}
+	if errBody["stage"] != "exec" || errBody["message"] == "" {
+		t.Fatalf("body=%#v", errBody)
+	}
+	if len(s.sem) != 1 {
+		t.Fatal("rejected request must not consume the held slot")
 	}
 }
 

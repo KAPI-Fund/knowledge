@@ -10,11 +10,12 @@ use crate::skills::SkillRuntime;
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
 // 一次 CubeSandbox+codex 渲染可达数分钟；租约须覆盖真实执行墙钟(> sidecar HTTP 660s)。
 const LEASE_SECONDS: i64 = 900;
-const MAX_CONCURRENT: usize = 2;
 const WORKER_OWNER: &str = "canvas-skill-worker";
 
-pub fn spawn_skill_worker(state: crate::AppState) {
-    let permits = Arc::new(Semaphore::new(MAX_CONCURRENT));
+/// `max_concurrent` 同时也是打到 skill-runner/CubeSandbox 主机的并发上限,
+/// 调大之前先确认 KVM 主机能扛住同样数量的微 VM。
+pub fn spawn_skill_worker(state: crate::AppState, max_concurrent: usize) {
+    let permits = Arc::new(Semaphore::new(max_concurrent.max(1)));
     tokio::spawn(async move {
         loop {
             // Only lease when a permit is free, so we never over-subscribe the LLM.

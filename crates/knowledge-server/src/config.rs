@@ -9,6 +9,8 @@ pub struct AppConfig {
   pub session_ttl_hours: u64,
   pub admin_password: Option<String>,
   pub skill_runner_url: String,
+  pub skill_worker_concurrency: usize,
+  pub skill_jobs_per_user: usize,
 }
 
 impl AppConfig {
@@ -24,6 +26,8 @@ impl AppConfig {
       session_ttl_hours: 12,
       admin_password: Some("secret-password".to_string()),
       skill_runner_url: "http://127.0.0.1:4600".to_string(),
+      skill_worker_concurrency: 2,
+      skill_jobs_per_user: 2,
     }
   }
 
@@ -49,6 +53,8 @@ impl AppConfig {
     let admin_password = std::env::var("KNOWLEDGE_ADMIN_PASSWORD").ok();
     let skill_runner_url = std::env::var("KNOWLEDGE_SKILL_RUNNER_URL")
       .unwrap_or_else(|_| "http://127.0.0.1:4600".to_string());
+    let skill_worker_concurrency = env_usize("KNOWLEDGE_SKILL_WORKER_CONCURRENCY", 2);
+    let skill_jobs_per_user = env_usize("KNOWLEDGE_SKILL_JOBS_PER_USER", 2);
 
     Self {
       bind_addr,
@@ -58,6 +64,16 @@ impl AppConfig {
       session_ttl_hours: 12,
       admin_password,
       skill_runner_url,
+      skill_worker_concurrency,
+      skill_jobs_per_user,
     }
   }
+}
+
+fn env_usize(key: &str, default: usize) -> usize {
+  std::env::var(key)
+    .ok()
+    .and_then(|value| value.trim().parse::<usize>().ok())
+    .filter(|value| *value >= 1)
+    .unwrap_or(default)
 }

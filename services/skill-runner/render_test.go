@@ -121,7 +121,7 @@ func TestHandleRenderStreamsNDJSON(t *testing.T) {
 		stdoutLines: []string{"slide 1 done"},
 		files:       map[string]string{"/work/out/deck.html": "<!DOCTYPE html><html>deck</html>"},
 	}
-	s := &server{factory: &fakeFactory{sb: sb}, templateID: "tpl-1"}
+	s := newServer(&fakeFactory{sb: sb}, "tpl-1", 4)
 
 	body, _ := json.Marshal(baseReq())
 	req := httptest.NewRequest(http.MethodPost, "/render", bytes.NewReader(body))
@@ -156,7 +156,7 @@ func TestHandleRenderStreamsNDJSON(t *testing.T) {
 
 func TestHandleRenderStreamsErrorLine(t *testing.T) {
 	sb := &fakeSandbox{runResult: CommandResult{ExitCode: 1, Stderr: "model refused"}}
-	s := &server{factory: &fakeFactory{sb: sb}, templateID: "tpl-1"}
+	s := newServer(&fakeFactory{sb: sb}, "tpl-1", 4)
 
 	body, _ := json.Marshal(baseReq())
 	req := httptest.NewRequest(http.MethodPost, "/render", bytes.NewReader(body))
@@ -177,12 +177,50 @@ func TestHandleRenderStreamsErrorLine(t *testing.T) {
 }
 
 func TestHandleRenderRejectsBadRequestBeforeStream(t *testing.T) {
-	s := &server{factory: &fakeFactory{sb: &fakeSandbox{}}, templateID: "tpl-1"}
+	s := newServer(&fakeFactory{sb: &fakeSandbox{}}, "tpl-1", 4)
 	req := httptest.NewRequest(http.MethodPost, "/render", strings.NewReader(`{"skill_id":""}`))
 	rec := httptest.NewRecorder()
 	s.handleRender(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d", rec.Code)
+	}
+}
+
+func TestHandleRenderRejectsWhenAtCapacity(t *testing.T) {
+	s := newServer(&fakeFactory{sb: &fakeSandbox{}}, "tpl-1", 1)
+	s.sem <- struct{}{} // 占满唯一并发槽
+
+	body, _ := json.Marshal(baseReq())
+	req := httptest.NewRequest(http.MethodPost, "/render", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	s.handleRender(rec, req)
+
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var errBody map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &errBody); err != nil {
+		t.Fatalf("body not json: %v", err)
+	}
+	if errBody["stage"] != "create" || errBody["message"] == "" {
+		t.Fatalf("body=%#v", errBody)
+	}
+
+	// 释放槽后必须恢复受理。
+	<-s.sem
+	sb := &fakeSandbox{
+		runResult: CommandResult{ExitCode: 0},
+		files:     map[string]string{"/work/out/deck.html": "<!DOCTYPE html>"},
+	}
+	s.factory = &fakeFactory{sb: sb}
+	req = httptest.NewRequest(http.MethodPost, "/render", bytes.NewReader(body))
+	rec = httptest.NewRecorder()
+	s.handleRender(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status after release=%d", rec.Code)
+	}
+	if len(s.sem) != 0 {
+		t.Fatal("slot not released after render")
 	}
 }
 

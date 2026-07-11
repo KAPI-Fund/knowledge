@@ -53,6 +53,14 @@ export function useSkillJobPoll(jobs: RunningSkillJob[], handlers: SkillJobHandl
             handlersRef.current.onError(job.nodeId, status.error?.message ?? "生成失败");
           } else if (status.status === "running" && status.progress) {
             handlersRef.current.onProgress?.(job.nodeId, status.progress);
+          } else if (status.status === "queued") {
+            handlersRef.current.onProgress?.(job.nodeId, {
+              stage: "queued",
+              message:
+                typeof status.queuePosition === "number"
+                  ? `排队中 · 第 ${status.queuePosition} 位`
+                  : "排队中",
+            });
           }
         } catch {
           // Transient failures are retried on the next tick.

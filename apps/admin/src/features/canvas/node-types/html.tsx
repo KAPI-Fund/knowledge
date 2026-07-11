@@ -21,6 +21,7 @@ export interface HtmlNodeData {
 }
 
 const STAGE_LABELS: Record<string, string> = {
+  queued: "排队中",
   create: "准备沙箱",
   codex: "生成中",
 };
