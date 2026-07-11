@@ -297,6 +297,7 @@ const searchResultsSchema = z.object({
   mode: z.string(),
   tokenHits: z.number(),
   vectorHits: z.number(),
+  graphHits: z.number(),
   results: z.array(
     z.object({
       path: z.string(),
@@ -304,6 +305,7 @@ const searchResultsSchema = z.object({
       snippet: z.string(),
       score: z.number(),
       titleMatch: z.boolean().optional(),
+      graphRelatedTo: z.array(z.string()).optional(),
       images: z
         .array(
           z.object({

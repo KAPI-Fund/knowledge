@@ -3,6 +3,7 @@ use std::fs;
 use std::path::Path;
 
 use knowledge_core::project::root::ProjectRoot;
+use knowledge_core::retrieval_graph::{blend_graph_results, build_retrieval_graph};
 use knowledge_core::search::{
   extract_image_refs, extract_title, search_project_with_options, ProjectSearchResponse,
   SearchOptions, SearchResult,
@@ -84,6 +85,33 @@ pub async fn load_embedding_config(state: &AppState) -> Result<Option<EmbeddingC
 }
 
 pub async fn search_project_hybrid(
+  state: &AppState,
+  project_id: &str,
+  root: &ProjectRoot,
+  query: &str,
+  options: SearchOptions,
+) -> Result<ProjectSearchResponse, ApiError> {
+  let mut response = search_project_hybrid_core(state, project_id, root, query, options).await?;
+
+  // Graph third channel runs after RRF on every path, keyword-only included
+  // (upstream commands/search.rs L288-311).
+  let wiki_root = root.as_path().join("wiki");
+  let graph = build_retrieval_graph(&wiki_root);
+  let graph_hits = blend_graph_results(
+    &mut response.results,
+    &graph,
+    options.top_k,
+    response.vector_hits,
+    options.include_content,
+    &wiki_root,
+  );
+  response.graph_hits = graph_hits;
+  response.mode =
+    search_mode(response.token_hits == 0, response.vector_hits, graph_hits).to_string();
+  Ok(response)
+}
+
+async fn search_project_hybrid_core(
   state: &AppState,
   project_id: &str,
   root: &ProjectRoot,
@@ -320,6 +348,7 @@ fn merge_keyword_and_vector_results(
       mode: "keyword".to_string(),
       token_hits: keyword.token_hits,
       vector_hits,
+      graph_hits: 0,
       results: merged,
     };
   }
@@ -334,9 +363,10 @@ fn merge_keyword_and_vector_results(
   });
 
   ProjectSearchResponse {
-    mode: search_mode(keyword.token_hits == 0, vector_hits).to_string(),
+    mode: search_mode(keyword.token_hits == 0, vector_hits, 0).to_string(),
     token_hits: keyword.token_hits,
     vector_hits,
+    graph_hits: 0,
     results: merged,
   }
 }
@@ -362,6 +392,7 @@ fn materialize_vector_only_result(
     vector_score: Some(result.score),
     images,
     content: include_content.then_some(content.unwrap_or_default()),
+    graph_related_to: Vec::new(),
   }
 }
 
@@ -407,8 +438,11 @@ fn apply_rrf_scores(
   }
 }
 
-fn search_mode(token_rank_empty: bool, vector_hits: usize) -> &'static str {
-  if vector_hits == 0 {
+// upstream commands/search.rs L519-529
+fn search_mode(token_rank_empty: bool, vector_hits: usize, graph_hits: usize) -> &'static str {
+  if graph_hits > 0 {
+    "hybrid"
+  } else if vector_hits == 0 {
     "keyword"
   } else if token_rank_empty {
     "vector"
@@ -521,6 +555,24 @@ fn map_provider_error(error: ProviderError) -> ApiError {
   } else {
     ApiError::bad_request(error.message().to_string())
   }
+}
+
+#[cfg(test)]
+mod search_mode_tests {
+    use super::search_mode;
+
+    #[test]
+    fn graph_hits_force_hybrid() {
+        assert_eq!(search_mode(true, 0, 1), "hybrid");
+        assert_eq!(search_mode(false, 0, 3), "hybrid");
+    }
+
+    #[test]
+    fn without_graph_hits_keeps_three_state_mode() {
+        assert_eq!(search_mode(false, 0, 0), "keyword");
+        assert_eq!(search_mode(true, 5, 0), "vector");
+        assert_eq!(search_mode(false, 5, 0), "hybrid");
+    }
 }
 
 #[cfg(test)]

@@ -27,6 +27,7 @@ const runSearch = vi.fn().mockResolvedValue({
   mode: "keyword",
   tokenHits: 1,
   vectorHits: 0,
+  graphHits: 0,
   results: [
     {
       path: "wiki/sources/demo.md",

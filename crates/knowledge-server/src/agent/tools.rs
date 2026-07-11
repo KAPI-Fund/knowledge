@@ -215,6 +215,7 @@ pub struct WikiSearchToolOutput {
     pub mode: String,
     pub token_hits: usize,
     pub vector_hits: usize,
+    pub graph_hits: usize,
     pub references: Vec<AgentReference>,
 }
 
@@ -764,6 +765,7 @@ async fn run_wiki_search(
         mode: search.mode,
         token_hits: search.token_hits,
         vector_hits: search.vector_hits,
+        graph_hits: search.graph_hits,
         references,
     })
 }

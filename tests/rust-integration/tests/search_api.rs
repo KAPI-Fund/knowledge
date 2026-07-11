@@ -92,6 +92,71 @@ async fn search_returns_matching_wiki_pages_and_snippets() {
 }
 
 #[tokio::test]
+async fn search_blends_graph_neighbors_into_keyword_results() {
+    let temp = tempdir().unwrap();
+    let _env = TestEnvironment::start("search-graph-blend").await.unwrap();
+    let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
+    let state = bootstrap_state(&config).await.unwrap();
+    let (cookie, csrf) = login_and_csrf(state.clone()).await;
+    let project_root = temp.path().join("search-graph-blend-project");
+    let project_id = create_project(state.clone(), &cookie, &csrf, project_root.clone()).await;
+
+    fs::write(
+    project_root.join("wiki/concepts/chain-of-thought.md"),
+    "---\ntype: concept\ntitle: Chain of Thought\nsources: []\n---\n\n# Chain of Thought\n\nDeliberate traces improve stepwise problem solving. See [[softmax]].\n",
+  )
+  .unwrap();
+    fs::write(
+        project_root.join("wiki/concepts/softmax.md"),
+        "---\ntype: concept\ntitle: Softmax\nsources: []\n---\n\n# Softmax\n\nNormalizes logits into a probability distribution.\n",
+    )
+    .unwrap();
+
+    let response = build_app(state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/projects/{project_id}/search"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .body(Body::from(
+                    json!({
+                      "query": "deliberate traces",
+                      "topK": 5
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload = read_json(response.into_body()).await;
+    // Graph hits force hybrid mode (upstream commands/search.rs L519-529).
+    assert_eq!(payload.get("mode").and_then(Value::as_str), Some("hybrid"));
+    assert!(payload.get("graphHits").and_then(Value::as_u64).unwrap() >= 1);
+    let results = payload.get("results").and_then(Value::as_array).unwrap();
+    let neighbor = results
+        .iter()
+        .find(|result| {
+            result.get("path").and_then(Value::as_str) == Some("wiki/concepts/softmax.md")
+        })
+        .expect("graph neighbor blended into results");
+    assert_eq!(
+        neighbor.get("graphRelatedTo").and_then(Value::as_array),
+        Some(&vec![Value::String("Chain of Thought".to_string())])
+    );
+    assert!(
+        neighbor
+            .get("snippet")
+            .and_then(Value::as_str)
+            .unwrap()
+            .contains("Graph neighbor of Chain of Thought")
+    );
+}
+
+#[tokio::test]
 async fn graph_returns_nodes_and_edges_from_wikilinks() {
     let temp = tempdir().unwrap();
     let _env = TestEnvironment::start("graph-query").await.unwrap();

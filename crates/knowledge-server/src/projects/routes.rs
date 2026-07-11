@@ -1152,6 +1152,7 @@ async fn search_handler(
       "mode": response.mode,
       "tokenHits": response.token_hits,
       "vectorHits": response.vector_hits,
+      "graphHits": response.graph_hits,
       "results": response.results
     })))
 }

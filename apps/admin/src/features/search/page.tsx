@@ -22,11 +22,13 @@ type SearchResponse = {
   mode: string;
   tokenHits: number;
   vectorHits: number;
+  graphHits: number;
   results: Array<{
     path: string;
     title: string;
     snippet: string;
     score: number;
+    graphRelatedTo?: string[];
     images?: Array<{
       url: string;
       alt: string;
@@ -121,6 +123,7 @@ export function SearchPage() {
             <Badge variant="secondary">{`Mode: ${response.mode}`}</Badge>
             <Badge variant="outline">{`Token Hits: ${response.tokenHits}`}</Badge>
             <Badge variant="outline">{`Vector Hits: ${response.vectorHits}`}</Badge>
+            <Badge variant="outline">{`Graph Hits: ${response.graphHits}`}</Badge>
           </CardContent>
         </Card>
       ) : null}
@@ -142,6 +145,11 @@ export function SearchPage() {
               </CardHeader>
               <CardContent className="grid gap-3">
                 <p className="text-sm text-muted-foreground">{result.snippet}</p>
+                {result.graphRelatedTo?.length ? (
+                  <div>
+                    <Badge variant="outline">{`Graph neighbor of ${result.graphRelatedTo.join(", ")}`}</Badge>
+                  </div>
+                ) : null}
                 {result.images?.length ? (
                   <div className="grid gap-2">
                     <p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">

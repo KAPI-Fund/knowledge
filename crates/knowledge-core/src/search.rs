@@ -49,6 +49,8 @@ pub struct SearchResult {
   pub images: Vec<SearchImageRef>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub content: Option<String>,
+  #[serde(default, skip_serializing_if = "Vec::is_empty")]
+  pub graph_related_to: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -58,6 +60,7 @@ pub struct ProjectSearchResponse {
   pub results: Vec<SearchResult>,
   pub token_hits: usize,
   pub vector_hits: usize,
+  pub graph_hits: usize,
 }
 
 pub fn search_project(project_root: &Path, query: &str) -> Result<Vec<SearchResult>, std::io::Error> {
@@ -81,6 +84,7 @@ pub fn search_project_with_options(
       results,
       token_hits: 0,
       vector_hits: 0,
+      graph_hits: 0,
     });
   }
 
@@ -116,6 +120,7 @@ pub fn search_project_with_options(
     results,
     token_hits,
     vector_hits: 0,
+    graph_hits: 0,
   })
 }
 
@@ -315,6 +320,7 @@ fn score_file(
     vector_score: None,
     images: extract_image_refs(content),
     content: include_content.then_some(content.to_string()),
+    graph_related_to: Vec::new(),
   })
 }
 
