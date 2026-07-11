@@ -38,6 +38,15 @@ pub struct UpdateSettingsRequest {
   pub fetch: Option<FetchSettingsBlock>,
   #[serde(default)]
   pub defaults: Option<DefaultsBlock>,
+  #[serde(default)]
+  pub ingest: Option<IngestSettingsBlock>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IngestSettingsBlock {
+    #[serde(default)]
+    pub paused: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -192,16 +201,18 @@ async fn build_settings_response(state: &AppState) -> Result<serde_json::Value, 
         image_timeout_seconds,
         search_provider_configs,
         fetch_provider_configs,
+        ingest_paused,
     ) = sqlx::query_as::<_, (
         bool, Option<String>, Option<String>, Option<String>, Option<i64>,
         Option<String>, Option<String>, Option<String>, String, Option<i64>,
         serde_json::Value,
         serde_json::Value,
+        bool,
     )>(
         "SELECT embedding_enabled, embedding_base_url, embedding_api_key,
                 embedding_model, embedding_timeout_seconds,
                 image_base_url, image_api_key, image_model, image_size, image_timeout_seconds,
-                search_provider_configs, fetch_provider_configs
+                search_provider_configs, fetch_provider_configs, ingest_paused
          FROM system_settings WHERE id = 1",
     )
     .fetch_one(&state.pool)
@@ -246,6 +257,9 @@ async fn build_settings_response(state: &AppState) -> Result<serde_json::Value, 
         "defaults": {
             "language": language,
             "defaultQueryLimit": default_query_limit,
+        },
+        "ingest": {
+            "paused": ingest_paused,
         },
     }))
 }
@@ -604,6 +618,16 @@ async fn update_settings(
       )
       .bind(defaults.language.as_deref())
       .bind(defaults.default_query_limit)
+      .execute(&mut *tx)
+      .await
+      .map_err(ApiError::from)?;
+  }
+
+  if let Some(ingest) = &payload.ingest {
+      sqlx::query(
+          "UPDATE system_settings SET ingest_paused = COALESCE($1, ingest_paused) WHERE id = 1",
+      )
+      .bind(ingest.paused)
       .execute(&mut *tx)
       .await
       .map_err(ApiError::from)?;

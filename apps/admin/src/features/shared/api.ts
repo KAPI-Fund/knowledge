@@ -247,6 +247,7 @@ const fetchProviderConfigsSchema = z.object({
 
 const settingsSchema = z.object({
   connections: z.array(connectionSchema).optional(),
+  ingest: z.object({ paused: z.boolean() }).optional(),
   embedding: z
     .object({
       enabled: z.boolean(),
@@ -1371,6 +1372,9 @@ export async function updateSystemSettings(input: {
     language?: string;
     defaultQueryLimit?: number;
   };
+  ingest?: {
+    paused?: boolean;
+  };
 }) {
   const payload = {
     ...(input.image
@@ -1440,6 +1444,7 @@ export async function updateSystemSettings(input: {
         }
       : {}),
     ...(input.defaults ? { defaults: input.defaults } : {}),
+    ...(input.ingest ? { ingest: input.ingest } : {}),
   };
 
   return apiFetch(

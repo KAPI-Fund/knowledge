@@ -254,6 +254,99 @@ async fn retry_waiting_tasks_are_not_reacquired_before_next_retry_at_and_reenter
     assert_eq!(due.status, "running");
 }
 
+#[tokio::test]
+async fn paused_ingest_tasks_are_not_acquired_but_other_types_are() {
+    let env = TestEnvironment::start("ingest-pause-gating").await.unwrap();
+    let config = AppConfig::for_tests(env.database_url.clone(), env.redis_url.clone());
+    let state = bootstrap_state_without_scheduler(&config).await.unwrap();
+    let (cookie, csrf) = login_and_csrf(state.clone()).await;
+    let project_root = tempdir().unwrap().path().join("ingest-pause-project");
+    let project_id = create_project(state.clone(), &cookie, &csrf, project_root).await;
+    let admin_user_id = sqlx::query_scalar::<_, String>("SELECT id FROM users WHERE username = $1")
+        .bind("admin")
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+
+    let set_paused = |paused: bool| {
+        let state = state.clone();
+        let cookie = cookie.clone();
+        let csrf = csrf.clone();
+        async move {
+            let response = build_app(state)
+                .oneshot(
+                    Request::builder()
+                        .method("PATCH")
+                        .uri("/api/system/settings")
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .header(header::COOKIE, &cookie)
+                        .header("x-csrf-token", &csrf)
+                        .body(Body::from(
+                            json!({ "ingest": { "paused": paused } }).to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            read_json(response.into_body()).await
+        }
+    };
+
+    let body = set_paused(true).await;
+    assert_eq!(body["ingest"]["paused"], json!(true));
+
+    let ingest_task = store::create_task(
+        &state,
+        CreateTaskInput {
+            project_id: project_id.clone(),
+            task_type: "project.ingest_source".to_string(),
+            title: "Ingest source".to_string(),
+            relative_path: None,
+            detail: json!({}),
+            payload: json!({ "sourcePath": "sources/example.md" }),
+            created_by: admin_user_id.clone(),
+            max_attempts: 3,
+        },
+    )
+    .await
+    .unwrap();
+
+    // Paused: the ingest task must not be claimed.
+    assert!(store::acquire_next_task(&state, "worker-1", 30).await.unwrap().is_none());
+
+    // Other task types keep flowing while ingest is paused.
+    let lint_task = store::create_task(
+        &state,
+        CreateTaskInput {
+            project_id,
+            task_type: "project.run_lint".to_string(),
+            title: "Run structural lint".to_string(),
+            relative_path: None,
+            detail: json!({}),
+            payload: json!({ "mode": "structural" }),
+            created_by: admin_user_id,
+            max_attempts: 3,
+        },
+    )
+    .await
+    .unwrap();
+    let leased = store::acquire_next_task(&state, "worker-1", 30)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(leased.id, lint_task.id);
+
+    // Resume: the held ingest task becomes claimable again.
+    let body = set_paused(false).await;
+    assert_eq!(body["ingest"]["paused"], json!(false));
+    let leased = store::acquire_next_task(&state, "worker-1", 30)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(leased.id, ingest_task.id);
+}
+
 async fn login_and_csrf(state: knowledge_server::app::state::AppState) -> (String, String) {
     let login = build_app(state)
         .oneshot(

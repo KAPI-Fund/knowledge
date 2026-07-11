@@ -9,11 +9,15 @@ import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { DataTable, type FacetedFilterConfig } from "@/components/shared/data-table";
 import { PageHeader } from "@/components/shared/page-header";
 import { StatusPill } from "@/components/shared/status-pill";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { normalizeAppError } from "@/lib/app-error";
 
 import { ProjectFileLink } from "../shared/file-links";
+import { useSystemSettingsQuery, useUpdateSystemSettingsMutation } from "../settings/queries";
 import {
   useCancelTaskMutation,
   useProjectTasksQuery,
@@ -41,6 +45,9 @@ export function TasksPage() {
   const tasks = useProjectTasksQuery(projectId);
   const retryTask = useRetryTaskMutation();
   const cancelTask = useCancelTaskMutation();
+  const settings = useSystemSettingsQuery();
+  const updateSettings = useUpdateSystemSettingsMutation();
+  const ingestPaused = settings.data?.ingest?.paused ?? false;
   const [selectedTaskId, setSelectedTaskId] = useState("");
   const [cancelTarget, setCancelTarget] = useState<ProjectTask | null>(null);
 
@@ -145,6 +152,31 @@ export function TasksPage() {
   return (
     <div className="flex h-full min-h-0 flex-col gap-4">
       <PageHeader
+        actions={
+          <div
+            className="flex items-center gap-2"
+            title="Pauses source import/ingest/delete tasks across all projects. Running tasks finish; other task types keep flowing."
+          >
+            {ingestPaused ? <Badge variant="secondary">Ingest paused</Badge> : null}
+            <Label className="text-sm text-muted-foreground" htmlFor="pause-ingest-queue">
+              Pause ingest
+            </Label>
+            <Switch
+              aria-label="Pause ingest queue"
+              checked={ingestPaused}
+              disabled={settings.isLoading || updateSettings.isPending}
+              id="pause-ingest-queue"
+              onCheckedChange={async (paused) => {
+                try {
+                  await updateSettings.mutateAsync({ ingest: { paused } });
+                  toast.success(paused ? "Ingest queue paused." : "Ingest queue resumed.");
+                } catch (error) {
+                  toast.error(normalizeAppError(error).message);
+                }
+              }}
+            />
+          </div>
+        }
         description="Inspect queued work, retry failed jobs, and examine task payloads."
         title="Tasks"
       />
