@@ -58,7 +58,9 @@ services:
       - "4001:4001"
     volumes:
       - knowledge-projects:/data/projects
-      - knowledge-agent-skills:/data/agent-skills
+      # Repo-versioned global agent skills; edits on the host take effect on
+      # the next agent turn without a rebuild.
+      - ./crates/knowledge-server/agent-skills:/data/agent-skills
 
   admin:
     build:
@@ -75,4 +77,3 @@ volumes:
   knowledge-postgres-data:
   knowledge-redis-data:
   knowledge-projects:
-  knowledge-agent-skills:
