@@ -15,6 +15,7 @@ import { ChatPanel, type SkillNodePayload } from "./chat-panel";
 import { HistorySidebar } from "./history-sidebar";
 import { pendingSaveStore } from "./pending-save-store";
 import { useCanvas, useCanvasCacheSave, useSaveCanvas } from "./queries";
+import { recoverOrphanRunningNodes } from "./recover-running-nodes";
 import { runCanvasNode } from "./stream";
 import type { CanvasDocument, CanvasNode } from "./types";
 import { useAutosave, type SaveStatus } from "./use-autosave";
@@ -147,11 +148,12 @@ export function CanvasPage() {
         // must not later overwrite it (P1). Any entry at or below the current
         // seq predates this reopen and is superseded.
         pendingSaveStore.resolve(loaded.id, pendingSaveStore.peekSeq());
-        setDoc(loaded.document);
+        const document = recoverOrphanRunningNodes(loaded.document);
+        setDoc(document);
         setTitle(loaded.title);
         setSelectedNodeIds([]);
         setSidebarCollapsed(false);
-        reset(loaded.document);
+        reset(document);
       }
       return;
     }
@@ -293,7 +295,14 @@ export function CanvasPage() {
             });
           },
           onError: (message) => patchNodeData(nodeId, { status: "error", error: message }),
-        });
+        }).catch((error: unknown) =>
+          // A transport failure (network drop, aborted fetch) rejects instead of
+          // reaching onError; without this the node would stay "running" forever.
+          patchNodeData(nodeId, {
+            status: "error",
+            error: error instanceof Error ? error.message : "运行失败",
+          }),
+        );
       });
     },
     [canvasId, doc, flushCurrent, patchNodeData, retrySkillNode],
@@ -385,13 +394,11 @@ export function CanvasPage() {
             (s): s is string => typeof s === "string" && existingIds.has(s),
           )
         : [];
-      // Auto-connect the new node to the latest node, merged with any explicit
-      // source references and de-duplicated so the chain predecessor doubling as
-      // a source still yields a single edge.
-      const linkSources = new Set(sourceIds);
-      if (latest) {
-        linkSources.add(latest.id);
-      }
+      // Explicit source references (the nodes the skill actually ran against)
+      // win outright; chaining to the latest node is only a fallback for nodes
+      // created without any source context.
+      const linkSources =
+        sourceIds.length > 0 ? new Set(sourceIds) : new Set(latest ? [latest.id] : []);
       const newEdges = [...linkSources].map((src) => ({
         id: uuid(),
         source: src,

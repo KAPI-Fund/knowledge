@@ -333,6 +333,7 @@ fn parse_slash_command(message: &str) -> (Option<&str>, &str) {
 }
 
 fn sse_error(message: &str) -> Event {
+    tracing::error!(target: "canvas_node_run", message, "canvas node run failed");
     Event::default().event("error").data(json!({ "message": message }).to_string())
 }
 
@@ -691,9 +692,12 @@ async fn chat_handler(
                         return;
                     }
                 };
+                // sourceNodeIds tells the frontend which nodes the skill ran
+                // against so the generated node connects to them instead of the
+                // chain predecessor; it is stripped before the node persists.
                 let node = json!({
                     "type": "html",
-                    "data": { "status": "running", "jobId": job_id }
+                    "data": { "status": "running", "jobId": job_id, "sourceNodeIds": selected_ids }
                 });
                 yield Ok(
                     Event::default().event(skill_node_event_name()).data(

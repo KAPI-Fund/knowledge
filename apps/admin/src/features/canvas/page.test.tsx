@@ -246,6 +246,36 @@ describe("CanvasPage", () => {
     });
   });
 
+  it("links a skill node only to its explicit sources, not the latest node", async () => {
+    const data = c1Data();
+    canvasResult = {
+      data: {
+        ...data,
+        document: {
+          ...data.document,
+          nodes: [
+            ...data.document.nodes,
+            { id: "u2", type: "url", x: 320, y: 0, w: 280, h: 160, data: { url: "https://y.test" } },
+          ],
+        },
+      },
+    };
+    render(<CanvasPage />);
+    await waitFor(() => expect(chatProps.onSkillNode).toBeTypeOf("function"));
+    // /ppt ran against the selected node u1; the generated node must connect to
+    // u1 even though u2 is the most recently created (rightmost) node.
+    chatProps.onSkillNode?.({
+      node: { type: "html", data: { status: "running", jobId: "j1", sourceNodeIds: ["u1"] } },
+      x: 0,
+      y: 0,
+    });
+    await waitFor(() => expect((boardProps.document?.nodes ?? []).length).toBe(3));
+    const added = (boardProps.document?.nodes ?? []).find((n) => n.id !== "u1" && n.id !== "u2");
+    const edges = boardProps.document?.edges ?? [];
+    expect(edges.some((e) => e.source === "u1" && e.target === added?.id)).toBe(true);
+    expect(edges.some((e) => e.source === "u2")).toBe(false);
+  });
+
   it("does not persist sourceNodeIds onto the created node's data", async () => {
     render(<CanvasPage />);
     await waitFor(() => expect(chatProps.onSkillNode).toBeTypeOf("function"));

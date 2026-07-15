@@ -336,17 +336,20 @@ impl OpenAiCompatibleProvider {
 
         // gpt-image-* returns b64_json unconditionally and 400s if response_format
         // is present; other backends (DALL·E, compatible servers) still need it.
-        let response_format = if self.model.starts_with("gpt-image") {
-            None
-        } else {
-            Some("b64_json".to_string())
-        };
+        // Streaming (with partial images) keeps bytes flowing during a long
+        // generation so the gateway's ~60s idle timeout never fires — a
+        // non-streamed generation over 60s gets its connection cut (verified
+        // live). Only gpt-image-* supports stream on the images endpoint.
+        let streaming = self.model.starts_with("gpt-image");
+        let response_format = if streaming { None } else { Some("b64_json".to_string()) };
         let body = ImageGenerationRequest {
             model: self.model.clone(),
             prompt: request.prompt,
             size: request.size,
             n: 1,
             response_format,
+            stream: streaming.then_some(true),
+            partial_images: streaming.then_some(1),
         };
 
         let response = self
@@ -359,31 +362,37 @@ impl OpenAiCompatibleProvider {
             .map_err(map_transport_error)?;
 
         let status = response.status();
-        let text = response.text().await.map_err(map_transport_error)?;
-        let payload: Value = serde_json::from_str(&text).map_err(|error| {
-            ProviderError::new(
-                "provider_invalid_response",
-                format!("provider returned invalid JSON: {error}"),
-                false,
-            )
-        })?;
-
         if !status.is_success() {
+            let text = response.text().await.map_err(map_transport_error)?;
+            let payload: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
             return Err(map_provider_error(status, &payload));
         }
 
-        let b64 = payload
-            .get("data")
-            .and_then(|data| data.get(0))
-            .and_then(|item| item.get("b64_json"))
-            .and_then(Value::as_str)
-            .ok_or_else(|| {
+        let b64 = if streaming {
+            read_image_stream_b64(response).await?
+        } else {
+            let text = response.text().await.map_err(map_transport_error)?;
+            let payload: Value = serde_json::from_str(&text).map_err(|error| {
                 ProviderError::new(
                     "provider_invalid_response",
-                    "provider did not return data[0].b64_json",
+                    format!("provider returned invalid JSON: {error}"),
                     false,
                 )
             })?;
+            payload
+                .get("data")
+                .and_then(|data| data.get(0))
+                .and_then(|item| item.get("b64_json"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .ok_or_else(|| {
+                    ProviderError::new(
+                        "provider_invalid_response",
+                        "provider did not return data[0].b64_json",
+                        false,
+                    )
+                })?
+        };
 
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(b64)
@@ -418,6 +427,46 @@ fn embeddings_url(base_url: &str) -> String {
     } else {
         format!("{trimmed}/v1/embeddings")
     }
+}
+
+/// Consume a streamed images/generations SSE body and return the final image's
+/// b64_json (from the `image_generation.completed` event). Partial-image events
+/// are ignored; their arrival is what keeps the connection alive.
+async fn read_image_stream_b64(response: reqwest::Response) -> Result<String, ProviderError> {
+    let mut b64: Option<String> = None;
+    let mut bytes_stream = response.bytes_stream();
+    let mut buffer = String::new();
+    while let Some(chunk) = bytes_stream.next().await {
+        let chunk = chunk.map_err(map_transport_error)?;
+        buffer.push_str(&String::from_utf8_lossy(&chunk));
+        while let Some(newline) = buffer.find('\n') {
+            let line = buffer[..newline].trim().to_string();
+            buffer.drain(..=newline);
+            if let Some(value) = completed_image_b64(&line) {
+                b64 = Some(value);
+            }
+        }
+    }
+    if let Some(value) = completed_image_b64(buffer.trim()) {
+        b64 = Some(value);
+    }
+    b64.ok_or_else(|| {
+        ProviderError::new(
+            "provider_invalid_response",
+            "provider stream ended without a completed image",
+            false,
+        )
+    })
+}
+
+/// b64_json from an `image_generation.completed` SSE data line, else None.
+fn completed_image_b64(line: &str) -> Option<String> {
+    let data = line.strip_prefix("data:")?.trim();
+    let payload: Value = serde_json::from_str(data).ok()?;
+    if payload.get("type").and_then(Value::as_str) != Some("image_generation.completed") {
+        return None;
+    }
+    payload.get("b64_json").and_then(Value::as_str).map(str::to_string)
 }
 
 fn map_transport_error(error: reqwest::Error) -> ProviderError {
@@ -667,6 +716,10 @@ struct ImageGenerationRequest {
     // response_format, so it is omitted for them (None -> not serialized).
     #[serde(skip_serializing_if = "Option::is_none")]
     response_format: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stream: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    partial_images: Option<u8>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -945,12 +998,16 @@ mod image_tests {
       size: "1024x1024".to_string(),
       n: 1,
       response_format: Some("b64_json".to_string()),
+      stream: None,
+      partial_images: None,
     };
     let json = serde_json::to_value(&body).unwrap();
     assert_eq!(json["model"], "dall-e-3");
     assert_eq!(json["prompt"], "a red fox");
     assert_eq!(json["n"], 1);
     assert_eq!(json["response_format"], "b64_json");
+    assert!(json.get("stream").is_none(), "stream must be omitted when None");
+    assert!(json.get("partial_images").is_none());
   }
 
   #[test]
@@ -961,6 +1018,8 @@ mod image_tests {
       size: "1024x1024".to_string(),
       n: 1,
       response_format: None,
+      stream: Some(true),
+      partial_images: Some(1),
     };
     let json = serde_json::to_value(&body).unwrap();
     assert!(
@@ -984,11 +1043,14 @@ mod image_tests {
   }
 
   #[tokio::test]
-  async fn generate_image_decodes_b64_payload() {
+  async fn generate_image_decodes_streamed_completed_event() {
     let raw = vec![1u8, 2, 3, 4];
     let b64 = base64::engine::general_purpose::STANDARD.encode(&raw);
-    let body = format!("{{\"data\":[{{\"b64_json\":\"{b64}\"}}]}}");
-    let (handle, base) = spawn_mock_images_server(body).await;
+    let partial = base64::engine::general_purpose::STANDARD.encode([9u8, 9, 9]);
+    let body = format!(
+      ": keep-alive\n\nevent: image_generation.partial_image\ndata: {{\"type\":\"image_generation.partial_image\",\"partial_image_index\":0,\"b64_json\":\"{partial}\"}}\n\nevent: image_generation.completed\ndata: {{\"type\":\"image_generation.completed\",\"b64_json\":\"{b64}\"}}\n\n"
+    );
+    let (handle, base) = spawn_mock_images_server_with_content_type(body, "text/event-stream").await;
 
     let provider =
       OpenAiCompatibleProvider::new(base, "key".to_string(), "gpt-image-1".to_string(), 30);
@@ -1002,6 +1064,40 @@ mod image_tests {
     handle.abort();
   }
 
+  #[tokio::test]
+  async fn generate_image_decodes_b64_payload() {
+    let raw = vec![1u8, 2, 3, 4];
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&raw);
+    let body = format!("{{\"data\":[{{\"b64_json\":\"{b64}\"}}]}}");
+    let (handle, base) = spawn_mock_images_server(body).await;
+
+    // dall-e-3 takes the non-streamed JSON path.
+    let provider =
+      OpenAiCompatibleProvider::new(base, "key".to_string(), "dall-e-3".to_string(), 30);
+    let result = provider
+      .generate_image(ProviderImageRequest { prompt: "x".to_string(), size: "1024x1024".to_string() })
+      .await
+      .expect("image generated");
+
+    assert_eq!(result.mime, "image/png");
+    assert_eq!(result.bytes, raw);
+    handle.abort();
+  }
+
+  #[test]
+  fn completed_image_b64_only_matches_completed_events() {
+    assert_eq!(completed_image_b64(": keep-alive"), None);
+    assert_eq!(completed_image_b64("event: image_generation.completed"), None);
+    assert_eq!(
+      completed_image_b64("data: {\"type\":\"image_generation.partial_image\",\"b64_json\":\"cGFydGlhbA==\"}"),
+      None
+    );
+    assert_eq!(
+      completed_image_b64("data: {\"type\":\"image_generation.completed\",\"b64_json\":\"ZmluYWw=\"}"),
+      Some("ZmluYWw=".to_string())
+    );
+  }
+
   #[test]
   fn image_generation_request_serializes_size() {
     let body = ImageGenerationRequest {
@@ -1010,13 +1106,24 @@ mod image_tests {
       size: "512x512".to_string(),
       n: 1,
       response_format: None,
+      stream: Some(true),
+      partial_images: Some(1),
     };
     let json = serde_json::to_value(&body).unwrap();
     assert_eq!(json["size"], "512x512");
     assert_eq!(json["model"], "gpt-image-1");
+    assert_eq!(json["stream"], true);
+    assert_eq!(json["partial_images"], 1);
   }
 
   async fn spawn_mock_images_server(json_body: String) -> (tokio::task::JoinHandle<()>, String) {
+    spawn_mock_images_server_with_content_type(json_body, "application/json").await
+  }
+
+  async fn spawn_mock_images_server_with_content_type(
+    body: String,
+    content_type: &'static str,
+  ) -> (tokio::task::JoinHandle<()>, String) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -1025,9 +1132,10 @@ mod image_tests {
         let mut buf = [0u8; 2048];
         let _ = sock.read(&mut buf).await;
         let resp = format!(
-          "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-          json_body.len(),
-          json_body
+          "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: {}\r\n\r\n{}",
+          content_type,
+          body.len(),
+          body
         );
         let _ = sock.write_all(resp.as_bytes()).await;
         let _ = sock.flush().await;

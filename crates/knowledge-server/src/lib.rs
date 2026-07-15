@@ -32,9 +32,16 @@ use time::format_description::well_known::Rfc3339;
 use uuid::Uuid;
 
 pub async fn run() -> anyhow::Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
     let config = AppConfig::from_env();
     let state = bootstrap_state(&config).await?;
     let listener = tokio::net::TcpListener::bind(config.bind_addr).await?;
+    tracing::info!(addr = %config.bind_addr, "knowledge-server listening");
     axum::serve(listener, build_app(state)).await?;
     Ok(())
 }
