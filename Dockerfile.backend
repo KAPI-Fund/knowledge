@@ -18,11 +18,23 @@ RUN cargo build -p knowledge-server --release
 
 FROM debian:bookworm-slim
 
+ARG PDFIUM_RELEASE=chromium/7988
+ARG PDFIUM_SHA256=7358c15e26a746cd67854887ea11b3b807c436056788eee9294fb972b8f8e0be
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
   ca-certificates \
   curl \
+  gzip \
   libssl3 \
-  && rm -rf /var/lib/apt/lists/*
+  && rm -rf /var/lib/apt/lists/* \
+  && curl -fsSL \
+    "https://github.com/bblanchon/pdfium-binaries/releases/download/${PDFIUM_RELEASE}/pdfium-linux-x64.tgz" \
+    -o /tmp/pdfium.tgz \
+  && echo "${PDFIUM_SHA256}  /tmp/pdfium.tgz" | sha256sum -c - \
+  && mkdir -p /tmp/pdfium \
+  && tar -xzf /tmp/pdfium.tgz -C /tmp/pdfium \
+  && install -m 0755 /tmp/pdfium/lib/libpdfium.so /usr/local/lib/libpdfium.so \
+  && rm -rf /tmp/pdfium.tgz /tmp/pdfium
 
 WORKDIR /app
 
@@ -35,6 +47,7 @@ ENV KNOWLEDGE_BIND_ADDR=0.0.0.0:4001
 ENV KNOWLEDGE_DATABASE_URL=postgres://postgres:postgres@postgres:5432/knowledge?sslmode=disable
 ENV KNOWLEDGE_REDIS_URL=redis://redis:6379/
 ENV KNOWLEDGE_SKILLS_DIR=/app/skills
+ENV PDFIUM_DYNAMIC_LIB_PATH=/usr/local/lib/libpdfium.so
 ENV KNOWLEDGE_PROVIDER_MODE=openai-compatible
 ENV KNOWLEDGE_PROVIDER_BASE_URL=https://backend.intelalloc.com
 ENV KNOWLEDGE_PROVIDER_MODEL=gpt-5.4

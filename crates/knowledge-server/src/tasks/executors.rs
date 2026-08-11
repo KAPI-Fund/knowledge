@@ -434,10 +434,35 @@ async fn run_ingest_source_executor(
       {
         cached
       } else {
-        let caption = caption_image(provider, &extracted_image.data_base64, &saved_image.mime_type)
-          .await
-          .map_err(TaskExecutionError::from_provider_error)
-          .map_err(TaskExecutionError::into_api_error)?;
+        let caption = match tokio::time::timeout(
+          std::time::Duration::from_secs(30),
+          caption_image(provider, &extracted_image.data_base64, &saved_image.mime_type),
+        )
+        .await
+        {
+          Ok(Ok(caption)) if !caption.trim().is_empty() => caption,
+          Ok(Ok(_)) => {
+            eprintln!(
+              "[ingest] image caption provider returned empty content for {} image {}",
+              source_name, saved_image.index
+            );
+            continue;
+          }
+          Ok(Err(error)) => {
+            eprintln!(
+              "[ingest] image caption failed for {} image {}: {}",
+              source_name, saved_image.index, error
+            );
+            continue;
+          }
+          Err(_) => {
+            eprintln!(
+              "[ingest] image caption timed out for {} image {}",
+              source_name, saved_image.index
+            );
+            continue;
+          }
+        };
         let _ = save_cached_caption(&state.cache, &saved_image.sha256, &caption).await;
         caption
       };
