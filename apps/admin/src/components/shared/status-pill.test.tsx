@@ -11,16 +11,16 @@ describe("StatusPill", () => {
 
   it("maps a known status to its variant classes", () => {
     render(<StatusPill value="succeeded" />);
-    expect(screen.getByText("succeeded").className).toContain("bg-[#ddf4e4]");
+    expect(screen.getByText("succeeded").className).toContain("bg-emerald-50");
   });
 
   it("maps completed onto the succeeded variant", () => {
     render(<StatusPill value="completed" />);
-    expect(screen.getByText("completed").className).toContain("bg-[#ddf4e4]");
+    expect(screen.getByText("completed").className).toContain("bg-emerald-50");
   });
 
   it("falls back to the queued variant for unknown statuses", () => {
     render(<StatusPill value="mystery" />);
-    expect(screen.getByText("mystery").className).toContain("bg-[#eaeef2]");
+    expect(screen.getByText("mystery").className).toContain("bg-muted");
   });
 });

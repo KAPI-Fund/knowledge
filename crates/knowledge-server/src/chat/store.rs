@@ -22,6 +22,8 @@ pub struct MessageRecord {
     pub role: String,
     pub content: String,
     pub context_summary: Option<String>,
+    pub agent_mode: Option<String>,
+    pub agent_events: Option<serde_json::Value>,
     pub created_at: String,
 }
 
@@ -141,13 +143,37 @@ pub async fn list_messages(
     conversation_id: &str,
 ) -> Result<Vec<MessageRecord>, ApiError> {
     sqlx::query_as::<_, MessageRecord>(
-        "SELECT id, conversation_id, role, content, context_summary, created_at
+        "SELECT id, conversation_id, role, content, context_summary, agent_mode, agent_events, created_at
          FROM conversation_messages
          WHERE conversation_id = $1
          ORDER BY created_at ASC, id ASC",
     )
     .bind(conversation_id)
     .fetch_all(pool)
+    .await
+    .map_err(ApiError::from)
+}
+
+/// Scoped like `find_conversation`: the JOIN enforces that the message belongs
+/// to the given conversation, project, and requesting user.
+pub async fn find_message_by_id(
+    pool: &PgPool,
+    project_id: &str,
+    conversation_id: &str,
+    user_id: &str,
+    message_id: &str,
+) -> Result<Option<MessageRecord>, ApiError> {
+    sqlx::query_as::<_, MessageRecord>(
+        "SELECT m.id, m.conversation_id, m.role, m.content, m.context_summary, m.agent_mode, m.agent_events, m.created_at
+         FROM conversation_messages m
+         JOIN conversations c ON c.id = m.conversation_id
+         WHERE m.id = $1 AND m.conversation_id = $2 AND c.project_id = $3 AND c.user_id = $4",
+    )
+    .bind(message_id)
+    .bind(conversation_id)
+    .bind(project_id)
+    .bind(user_id)
+    .fetch_optional(pool)
     .await
     .map_err(ApiError::from)
 }
@@ -159,25 +185,45 @@ pub async fn append_message(
     content: &str,
     context_summary: Option<&str>,
 ) -> Result<MessageRecord, ApiError> {
+    append_agent_message(pool, conversation_id, role, content, context_summary, None, None).await
+}
+
+pub async fn append_agent_message(
+    pool: &PgPool,
+    conversation_id: &str,
+    role: &str,
+    content: &str,
+    context_summary: Option<&str>,
+    agent_mode: Option<&str>,
+    agent_events: Option<&serde_json::Value>,
+) -> Result<MessageRecord, ApiError> {
     let now = now_rfc3339()?;
+    let agent_events_json = agent_events
+        .map(|value| serde_json::to_string(value))
+        .transpose()
+        .map_err(|error| ApiError::internal(error.to_string()))?;
     let record = MessageRecord {
         id: Uuid::new_v4().to_string(),
         conversation_id: conversation_id.to_string(),
         role: role.to_string(),
         content: content.to_string(),
         context_summary: context_summary.map(str::to_string),
+        agent_mode: agent_mode.map(str::to_string),
+        agent_events: agent_events.cloned(),
         created_at: now.clone(),
     };
 
     sqlx::query(
-        "INSERT INTO conversation_messages (id, conversation_id, role, content, context_summary, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6)",
+        "INSERT INTO conversation_messages (id, conversation_id, role, content, context_summary, agent_mode, agent_events, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)",
     )
     .bind(&record.id)
     .bind(&record.conversation_id)
     .bind(&record.role)
     .bind(&record.content)
     .bind(&record.context_summary)
+    .bind(&record.agent_mode)
+    .bind(&agent_events_json)
     .bind(&record.created_at)
     .execute(pool)
     .await

@@ -72,7 +72,7 @@ describe("deep research page", () => {
       },
     ]);
     renderPage();
-    expect(screen.getByText("Deep research: KG")).toBeInTheDocument();
+    expect(screen.getAllByText("Deep research: KG").length).toBeGreaterThan(0);
     expect(screen.queryByText("Ingest")).not.toBeInTheDocument();
   });
 

@@ -7,13 +7,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { GraphPage } from "../graph/page";
 import { ReviewsPage } from "../reviews/page";
 import { SearchPage } from "../search/page";
-import { SettingsPage } from "../settings/page";
+import { DefaultsSection } from "../settings/sections/defaults-section";
 import { SourcesPage } from "../sources/page";
 import { TasksPage } from "../tasks/page";
 
 const retryTask = vi.fn();
 const cancelTask = vi.fn();
 const updateReview = vi.fn();
+const resolveReviews = vi
+  .fn()
+  .mockResolvedValue({ resolved: ["review-1"], notFound: [], count: 1 });
 const sweepReviews = vi.fn();
 const updateSettings = vi.fn();
 const importSource = vi.fn();
@@ -24,6 +27,7 @@ const runSearch = vi.fn().mockResolvedValue({
   mode: "keyword",
   tokenHits: 1,
   vectorHits: 0,
+  graphHits: 0,
   results: [
     {
       path: "wiki/sources/demo.md",
@@ -101,6 +105,10 @@ vi.mock("../reviews/queries", () => ({
   useUpdateReviewMutation: () => ({
     mutateAsync: updateReview,
   }),
+  useResolveReviewsMutation: () => ({
+    mutateAsync: resolveReviews,
+    isPending: false,
+  }),
   useSweepReviewsMutation: () => ({
     mutateAsync: sweepReviews,
   }),
@@ -169,6 +177,16 @@ vi.mock("../search/queries", () => ({
 vi.mock("../graph/graph-canvas", () => ({
   GraphCanvas: ({ nodes }: { nodes: { id: string; label: string }[] }) => (
     <div data-testid="graph-canvas">
+      {nodes.map((node) => (
+        <span key={node.id}>{node.label}</span>
+      ))}
+    </div>
+  ),
+}));
+
+vi.mock("../graph/starfield-canvas", () => ({
+  StarfieldCanvas: ({ nodes }: { nodes: { id: string; label: string }[] }) => (
+    <div data-testid="starfield-canvas">
       {nodes.map((node) => (
         <span key={node.id}>{node.label}</span>
       ))}
@@ -256,6 +274,7 @@ describe("operations actions", () => {
     });
 
     await user.click(screen.getByRole("button", { name: "Delete" }));
+    await user.click(await screen.findByRole("button", { name: "Delete source" }));
     expect(deleteSource).toHaveBeenCalledWith({
       projectId: "project-1",
       relativePath: "demo.md",
@@ -296,7 +315,7 @@ describe("operations actions", () => {
       </QueryClientProvider>,
     );
 
-    expect(screen.getByTestId("graph-canvas")).toBeInTheDocument();
+    expect(await screen.findByTestId("starfield-canvas")).toBeInTheDocument();
     expect(screen.getByText("Demo")).toBeInTheDocument();
     await user.type(screen.getByLabelText("Search graph"), "demo");
     expect(graphQuerySpy).toHaveBeenLastCalledWith("project-1");
@@ -308,7 +327,6 @@ describe("operations actions", () => {
           <Routes>
             <Route path="projects/:projectId/tasks" element={<TasksPage />} />
             <Route path="projects/:projectId/reviews" element={<ReviewsPage />} />
-            <Route path="settings" element={<SettingsPage />} />
           </Routes>
         </MemoryRouter>
       </QueryClientProvider>,
@@ -320,6 +338,7 @@ describe("operations actions", () => {
     expect(screen.getByText(/"size": 42/)).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Cancel" }));
+    await user.click(await screen.findByRole("button", { name: "Cancel task" }));
     expect(cancelTask).toHaveBeenCalledWith({ projectId: "project-1", taskId: "task-1" });
 
     cleanup();
@@ -339,31 +358,27 @@ describe("operations actions", () => {
     });
 
     await user.click(screen.getByRole("button", { name: "Resolve" }));
-    expect(updateReview).toHaveBeenCalledWith({
+    expect(resolveReviews).toHaveBeenCalledWith({
       projectId: "project-1",
-      reviewId: "review-1",
-      status: "resolved",
+      ids: ["review-1"],
+      action: "resolve",
     });
 
     cleanup();
     render(
       <QueryClientProvider client={queryClient}>
-        <MemoryRouter initialEntries={["/settings"]}>
+        <MemoryRouter initialEntries={["/settings/defaults"]}>
           <Routes>
-            <Route path="settings" element={<SettingsPage />} />
+            <Route path="settings/defaults" element={<DefaultsSection />} />
           </Routes>
         </MemoryRouter>
       </QueryClientProvider>,
     );
 
-    await user.click(screen.getByRole("button", { name: "Defaults" }));
     await user.clear(screen.getByLabelText("Default Query Limit"));
     await user.type(screen.getByLabelText("Default Query Limit"), "5");
     await user.click(screen.getByRole("button", { name: "Save" }));
     expect(updateSettings).toHaveBeenCalledWith({
-      providerMode: "deterministic",
-      language: "en",
-      defaultQueryLimit: 5,
       defaults: { language: "en", defaultQueryLimit: 5 },
     });
   });

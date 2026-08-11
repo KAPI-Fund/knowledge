@@ -11,6 +11,7 @@ pub struct ProviderQueryRequest {
 pub struct ProviderTextRequest {
   pub system_prompt: String,
   pub user_prompt: String,
+  pub max_tokens: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -6,6 +6,7 @@ use std::fs;
 use std::path::Path;
 
 use crate::graph::{STRUCTURAL_IDS, normalize_target};
+use crate::search::{SearchResult, extract_image_refs};
 
 type RawNode = (String, String, String, String, Vec<String>, Vec<String>);
 
@@ -13,6 +14,12 @@ const DIRECT_LINK_WEIGHT: f64 = 3.0;
 const SOURCE_OVERLAP_WEIGHT: f64 = 4.0;
 const COMMON_NEIGHBOR_WEIGHT: f64 = 1.5;
 const TYPE_AFFINITY_WEIGHT: f64 = 1.0;
+
+// Graph search channel constants, upstream commands/search.rs L14-26.
+const RRF_K: f64 = 60.0;
+const MIN_GRAPH_RESULT_RATIO: f64 = 0.15;
+const MAX_GRAPH_RESULT_RATIO: f64 = 0.30;
+const MAX_GRAPH_SEEDS: usize = 20;
 
 #[derive(Debug, Clone)]
 pub struct RetrievalNode {
@@ -77,6 +84,140 @@ pub fn build_retrieval_graph(wiki_root: &Path) -> RetrievalGraph {
     }
 
     RetrievalGraph { nodes }
+}
+
+/// Reserve 15-30% of the final window for one-hop graph expansion. A full
+/// vector window leaves the minimum graph share; sparse vector retrieval moves
+/// progressively toward the maximum. Upstream commands/search.rs L335-348.
+pub fn graph_result_quota(limit: usize, vector_hits: usize) -> usize {
+    if limit < 2 {
+        return 0;
+    }
+    let vector_coverage = vector_hits.min(limit) as f64 / limit as f64;
+    let ratio = MAX_GRAPH_RESULT_RATIO
+        - (MAX_GRAPH_RESULT_RATIO - MIN_GRAPH_RESULT_RATIO) * vector_coverage;
+    ((limit as f64 * ratio).ceil() as usize).clamp(1, limit - 1)
+}
+
+/// One-hop graph expansion over ranked search results, ported from upstream
+/// commands/search.rs L349-488. Adjacency comes from the prebuilt
+/// RetrievalGraph (out_links ∪ in_links) instead of upstream's ad-hoc
+/// alias/adjacency maps; graph-only results read page content from disk.
+pub fn blend_graph_results(
+    ranked_results: &mut Vec<SearchResult>,
+    graph: &RetrievalGraph,
+    limit: usize,
+    vector_hits: usize,
+    include_content: bool,
+    wiki_root: &Path,
+) -> usize {
+    if ranked_results.is_empty() || graph.nodes.is_empty() {
+        ranked_results.truncate(limit);
+        return 0;
+    }
+
+    let seed_paths: Vec<String> = ranked_results
+        .iter()
+        .take(limit.min(MAX_GRAPH_SEEDS))
+        .map(|result| graph_node_key(&result.path))
+        .collect();
+    let seed_set: BTreeSet<String> = seed_paths.iter().cloned().collect();
+    let mut candidate_scores = BTreeMap::<String, f64>::new();
+    let mut candidate_seeds = BTreeMap::<String, BTreeSet<String>>::new();
+    for (rank, seed) in seed_paths.iter().enumerate() {
+        let Some(seed_node) = graph.nodes.get(seed) else {
+            continue;
+        };
+        for neighbor in seed_node.out_links.iter().chain(seed_node.in_links.iter()) {
+            if seed_set.contains(neighbor) {
+                continue;
+            }
+            *candidate_scores.entry(neighbor.clone()).or_default() += 1.0 / (rank + 1) as f64;
+            candidate_seeds
+                .entry(neighbor.clone())
+                .or_default()
+                .insert(seed_node.title.clone());
+        }
+    }
+
+    let mut candidates: Vec<(String, f64)> = candidate_scores.into_iter().collect();
+    candidates.sort_by(|(path_a, score_a), (path_b, score_b)| {
+        score_b
+            .partial_cmp(score_a)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| path_a.cmp(path_b))
+    });
+    candidates.truncate(graph_result_quota(limit, vector_hits));
+    if candidates.is_empty() {
+        ranked_results.truncate(limit);
+        return 0;
+    }
+
+    let selected_paths: BTreeSet<String> =
+        candidates.iter().map(|(path, _)| path.clone()).collect();
+    let mut existing = BTreeMap::<String, SearchResult>::new();
+    let mut ranked_paths = Vec::new();
+    for result in ranked_results.drain(..) {
+        let path = graph_node_key(&result.path);
+        ranked_paths.push(path.clone());
+        existing.insert(path, result);
+    }
+
+    let graph_count = candidates.len();
+    let base_limit = limit.saturating_sub(graph_count);
+    let mut base_results: Vec<SearchResult> = ranked_paths
+        .iter()
+        .filter(|path| !selected_paths.contains(*path))
+        .filter_map(|path| existing.get(path).cloned())
+        .take(base_limit)
+        .collect();
+
+    for (path, graph_score) in candidates {
+        if let Some(mut result) = existing.remove(&path) {
+            result.graph_related_to = candidate_seeds
+                .remove(&path)
+                .unwrap_or_default()
+                .into_iter()
+                .collect();
+            base_results.push(result);
+            continue;
+        }
+        let Some(node) = graph.nodes.get(&path) else {
+            continue;
+        };
+        let Ok(content) = fs::read_to_string(wiki_root.join(&node.relative_path)) else {
+            continue;
+        };
+        let related_titles = candidate_seeds
+            .remove(&path)
+            .unwrap_or_default()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let related = related_titles.join(", ");
+        base_results.push(SearchResult {
+            path: format!("wiki/{}", node.relative_path),
+            title: node.title.clone(),
+            snippet: format!("Graph neighbor of {related}"),
+            title_match: false,
+            score: graph_score / (RRF_K + 1.0),
+            vector_score: None,
+            images: extract_image_refs(&content),
+            content: include_content.then_some(content),
+            graph_related_to: related_titles,
+        });
+    }
+    *ranked_results = base_results;
+    graph_count
+}
+
+// SearchResult paths are project-relative ("wiki/concepts/x.md") while
+// RetrievalGraph node keys are wiki-relative ("concepts/x.md").
+fn graph_node_key(path: &str) -> String {
+    let normalized = path.replace('\\', "/");
+    normalized
+        .strip_prefix("wiki/")
+        .unwrap_or(&normalized)
+        .to_string()
 }
 
 fn collect_markdown(wiki_root: &Path, dir: &Path, raw_nodes: &mut Vec<RawNode>) {
@@ -374,5 +515,109 @@ mod tests {
         assert_eq!(type_affinity("concept", "synthesis"), 1.2);
         assert_eq!(type_affinity("source", "source"), 0.5);
         assert_eq!(type_affinity("other", "concept"), 0.5);
+    }
+
+    fn keyword_result(path: &str, title: &str, score: f64) -> SearchResult {
+        SearchResult {
+            path: path.to_string(),
+            title: title.to_string(),
+            snippet: String::new(),
+            title_match: false,
+            score,
+            vector_score: None,
+            images: Vec::new(),
+            content: None,
+            graph_related_to: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn graph_result_quota_tracks_vector_coverage() {
+        // Full vector coverage → 15% floor; ceil(10 * 0.15) = 2.
+        assert_eq!(graph_result_quota(10, 10), 2);
+        // No vector hits → 30%; ceil(10 * 0.30) = 3.
+        assert_eq!(graph_result_quota(10, 0), 3);
+        assert_eq!(graph_result_quota(1, 0), 0);
+        assert_eq!(graph_result_quota(0, 0), 0);
+        // Clamped to limit - 1.
+        assert_eq!(graph_result_quota(2, 0), 1);
+    }
+
+    #[test]
+    fn blend_injects_one_hop_neighbors_with_synthetic_scores() {
+        let temp = tempfile::tempdir().unwrap();
+        let wiki = temp.path().join("wiki");
+        write_page(
+            &wiki,
+            "concepts/attention.md",
+            "---\ntitle: Attention\n---\n\nUses [[KV Cache]] and [[Softmax]].\n",
+        );
+        write_page(&wiki, "concepts/kv-cache.md", "---\ntitle: KV Cache\n---\n\nCache.\n");
+        write_page(&wiki, "concepts/softmax.md", "---\ntitle: Softmax\n---\n\nSoftmax.\n");
+
+        let graph = build_retrieval_graph(&wiki);
+        let mut results = vec![keyword_result("wiki/concepts/attention.md", "Attention", 5.0)];
+        let graph_hits = blend_graph_results(&mut results, &graph, 3, 0, false, &wiki);
+
+        assert_eq!(graph_hits, 1); // quota for limit=3, vector=0 is ceil(0.9)=1
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].path, "wiki/concepts/attention.md");
+        let neighbor = &results[1];
+        assert_eq!(neighbor.path, "wiki/concepts/kv-cache.md");
+        assert_eq!(neighbor.snippet, "Graph neighbor of Attention");
+        assert_eq!(neighbor.graph_related_to, vec!["Attention".to_string()]);
+        // Seed rank 0 contributes 1.0/(0+1); synthetic score = 1.0 / (RRF_K + 1.0).
+        assert!((neighbor.score - 1.0 / 61.0).abs() < 1e-9);
+        assert!(neighbor.content.is_none());
+    }
+
+    #[test]
+    fn blend_promotes_existing_results_in_place_without_duplicates() {
+        let temp = tempfile::tempdir().unwrap();
+        let wiki = temp.path().join("wiki");
+        write_page(&wiki, "concepts/a.md", "---\ntitle: Alpha\n---\n\nLinks [[Delta]].\n");
+        write_page(&wiki, "concepts/b.md", "---\ntitle: Beta\n---\n\nBeta.\n");
+        write_page(&wiki, "concepts/c.md", "---\ntitle: Gamma\n---\n\nGamma.\n");
+        write_page(&wiki, "concepts/delta.md", "---\ntitle: Delta\n---\n\nDelta.\n");
+
+        let graph = build_retrieval_graph(&wiki);
+        // Delta sits below the seed window (seeds = first limit.min(20) = 3),
+        // so it becomes a graph candidate that must be promoted, not duplicated.
+        let mut results = vec![
+            keyword_result("wiki/concepts/a.md", "Alpha", 5.0),
+            keyword_result("wiki/concepts/b.md", "Beta", 4.0),
+            keyword_result("wiki/concepts/c.md", "Gamma", 3.0),
+            keyword_result("wiki/concepts/delta.md", "Delta", 2.0),
+        ];
+        let graph_hits = blend_graph_results(&mut results, &graph, 3, 0, false, &wiki);
+
+        assert_eq!(graph_hits, 1); // quota(3, 0) = 1
+        let paths: Vec<&str> = results.iter().map(|result| result.path.as_str()).collect();
+        // base_limit = 2 keeps Alpha/Beta; Gamma is displaced; Delta promoted.
+        assert_eq!(
+            paths,
+            vec!["wiki/concepts/a.md", "wiki/concepts/b.md", "wiki/concepts/delta.md"],
+        );
+        let unique: BTreeSet<&str> = paths.iter().copied().collect();
+        assert_eq!(unique.len(), paths.len());
+        assert_eq!(results[2].graph_related_to, vec!["Alpha".to_string()]);
+        // Promoted result keeps its keyword score (not the synthetic graph score).
+        assert_eq!(results[2].score, 2.0);
+    }
+
+    #[test]
+    fn blend_returns_zero_for_empty_results_or_graph() {
+        let temp = tempfile::tempdir().unwrap();
+        let wiki = temp.path().join("wiki");
+        write_page(&wiki, "concepts/a.md", "---\ntitle: Alpha\n---\n\nSolo.\n");
+        let graph = build_retrieval_graph(&wiki);
+
+        let mut empty_results: Vec<SearchResult> = Vec::new();
+        assert_eq!(blend_graph_results(&mut empty_results, &graph, 5, 0, false, &wiki), 0);
+
+        let empty_graph = RetrievalGraph::default();
+        let mut results = vec![keyword_result("wiki/concepts/a.md", "Alpha", 5.0)];
+        assert_eq!(blend_graph_results(&mut results, &empty_graph, 5, 0, false, &wiki), 0);
+        assert_eq!(results.len(), 1);
     }
 }

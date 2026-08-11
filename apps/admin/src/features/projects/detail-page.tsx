@@ -1,4 +1,12 @@
 import type { ColumnDef } from "@tanstack/react-table";
+import {
+  ArrowRight,
+  ClipboardCheck,
+  Database,
+  FileText,
+  ListTodo,
+  type LucideIcon,
+} from "lucide-react";
 import { Link, useParams } from "react-router-dom";
 
 import { EmptyState } from "@/components/layout/empty-state";
@@ -6,7 +14,15 @@ import { RouteStatePane } from "@/components/layout/route-state-pane";
 import { DataTable } from "@/components/shared/data-table";
 import { PageHeader } from "@/components/shared/page-header";
 import { StatusPill } from "@/components/shared/status-pill";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { normalizeAppError } from "@/lib/app-error";
 
 import { useProjectAuditLogsQuery } from "../audit/queries";
@@ -31,7 +47,7 @@ const sourceColumns: ColumnDef<SourceRow>[] = [
   {
     accessorKey: "size",
     header: "Size",
-    cell: ({ row }) => <span className="text-sm text-muted-foreground">{row.original.size}</span>,
+    cell: ({ row }) => <span className="text-muted-foreground">{row.original.size}</span>,
   },
 ];
 
@@ -47,6 +63,36 @@ const taskColumns: ColumnDef<TaskRow>[] = [
     cell: ({ row }) => <StatusPill value={row.original.status} />,
   },
 ];
+
+function MetricCard({
+  icon: Icon,
+  label,
+  to,
+  value,
+}: {
+  icon: LucideIcon;
+  label: string;
+  to: string;
+  value: number;
+}) {
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+        <CardDescription className="text-sm font-medium text-foreground">{label}</CardDescription>
+        <Icon className="size-4 text-muted-foreground" />
+      </CardHeader>
+      <CardContent className="flex items-end justify-between">
+        <p className="text-2xl font-semibold tracking-tight">{value}</p>
+        <Button asChild className="text-muted-foreground" size="sm" variant="ghost">
+          <Link to={to}>
+            View all
+            <ArrowRight />
+          </Link>
+        </Button>
+      </CardContent>
+    </Card>
+  );
+}
 
 export function ProjectDetailPage() {
   const { projectId = "" } = useParams();
@@ -91,6 +137,7 @@ export function ProjectDetailPage() {
   const recentTasks = (tasks.data ?? []).slice(0, 5);
   const recentReviews = (reviews.data ?? []).slice(0, 5);
   const recentAudit = (auditLogs.data ?? []).slice(0, 5);
+  const base = `/projects/${detail.id}`;
 
   return (
     <div className="grid gap-6">
@@ -100,62 +147,103 @@ export function ProjectDetailPage() {
       />
 
       <div className="grid gap-4 md:grid-cols-3">
-        <MetricCard label="Sources" value={detail.sourceCount} />
-        <MetricCard label="Tasks" value={detail.taskCount} />
-        <MetricCard label="Reviews" value={detail.reviewCount} />
+        <MetricCard icon={Database} label="Sources" to={`${base}/sources`} value={detail.sourceCount} />
+        <MetricCard icon={ListTodo} label="Tasks" to={`${base}/tasks`} value={detail.taskCount} />
+        <MetricCard
+          icon={ClipboardCheck}
+          label="Reviews"
+          to={`${base}/reviews`}
+          value={detail.reviewCount}
+        />
       </div>
 
       <Card>
-        <CardHeader>
-          <CardTitle>Project Health</CardTitle>
-          <CardDescription>Current ingestion watch state and filesystem root.</CardDescription>
+        <CardHeader className="flex flex-row items-center justify-between space-y-0">
+          <div className="grid gap-1">
+            <CardTitle>Project Health</CardTitle>
+            <CardDescription>Current ingestion watch state and filesystem root.</CardDescription>
+          </div>
+          <Button asChild size="sm" variant="ghost">
+            <Link to={`${base}/source-watch`}>
+              Configure
+              <ArrowRight />
+            </Link>
+          </Button>
         </CardHeader>
-        <CardContent className="grid gap-3 text-sm md:grid-cols-2">
-          <div className="space-y-1">
-            <p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-              Source Watch
-            </p>
-            <p>{sourceWatch.data?.enabled ? "Source watch enabled" : "Source watch disabled"}</p>
+        <CardContent className="grid gap-4 text-sm md:grid-cols-2">
+          <div className="grid gap-1.5">
+            <p className="text-xs font-medium text-muted-foreground">Source Watch</p>
+            <div>
+              <Badge variant={sourceWatch.data?.enabled ? "default" : "secondary"}>
+                {sourceWatch.data?.enabled ? "Enabled" : "Disabled"}
+              </Badge>
+            </div>
           </div>
-          <div className="space-y-1">
-            <p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-              Auto Ingest
-            </p>
-            <p>{sourceWatch.data?.autoIngest ? "Ingest tasks are queued automatically." : "Manual ingest only."}</p>
+          <div className="grid gap-1.5">
+            <p className="text-xs font-medium text-muted-foreground">Auto Ingest</p>
+            <div>
+              <Badge variant={sourceWatch.data?.autoIngest ? "default" : "secondary"}>
+                {sourceWatch.data?.autoIngest ? "Automatic" : "Manual"}
+              </Badge>
+            </div>
           </div>
-          <div className="space-y-1 md:col-span-2">
-            <p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-              Watch Path
-            </p>
-            <p>{sourceWatch.data?.path || detail.rootPath}</p>
+          <div className="grid gap-1.5 md:col-span-2">
+            <p className="text-xs font-medium text-muted-foreground">Watch Path</p>
+            <p className="font-mono text-xs">{sourceWatch.data?.path || detail.rootPath}</p>
           </div>
         </CardContent>
       </Card>
 
-      <div className="grid gap-6 xl:grid-cols-2">
-        <div className="grid gap-3">
-          <h2 className="text-sm font-medium text-muted-foreground">Recent Sources</h2>
-          {recentSources.length ? (
-            <DataTable columns={sourceColumns} data={recentSources} isLoading={sources.isLoading} />
-          ) : (
-            <EmptyState
-              description="Import sources before running project workflows."
-              title="No sources yet"
-            />
-          )}
-        </div>
+      <div className="grid gap-4 xl:grid-cols-2">
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0">
+            <div className="grid gap-1">
+              <CardTitle>Recent Sources</CardTitle>
+              <CardDescription>Latest imported documents.</CardDescription>
+            </div>
+            <Button asChild className="text-muted-foreground" size="icon-sm" variant="ghost">
+              <Link aria-label="Open Sources" to={`${base}/sources`}>
+                <ArrowRight />
+              </Link>
+            </Button>
+          </CardHeader>
+          <CardContent>
+            {recentSources.length ? (
+              <DataTable columns={sourceColumns} data={recentSources} isLoading={sources.isLoading} />
+            ) : (
+              <EmptyState
+                description="Import sources before running project workflows."
+                icon={FileText}
+                title="No sources yet"
+              />
+            )}
+          </CardContent>
+        </Card>
 
-        <div className="grid gap-3">
-          <h2 className="text-sm font-medium text-muted-foreground">Recent Tasks</h2>
-          {recentTasks.length ? (
-            <DataTable columns={taskColumns} data={recentTasks} isLoading={tasks.isLoading} />
-          ) : (
-            <EmptyState
-              description="No project tasks have been queued yet."
-              title="No tasks yet"
-            />
-          )}
-        </div>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0">
+            <div className="grid gap-1">
+              <CardTitle>Recent Tasks</CardTitle>
+              <CardDescription>Latest queued and completed work.</CardDescription>
+            </div>
+            <Button asChild className="text-muted-foreground" size="icon-sm" variant="ghost">
+              <Link aria-label="Open Tasks" to={`${base}/tasks`}>
+                <ArrowRight />
+              </Link>
+            </Button>
+          </CardHeader>
+          <CardContent>
+            {recentTasks.length ? (
+              <DataTable columns={taskColumns} data={recentTasks} isLoading={tasks.isLoading} />
+            ) : (
+              <EmptyState
+                description="No project tasks have been queued yet."
+                icon={ListTodo}
+                title="No tasks yet"
+              />
+            )}
+          </CardContent>
+        </Card>
       </div>
 
       <div className="grid gap-4 xl:grid-cols-2">
@@ -167,13 +255,10 @@ export function ProjectDetailPage() {
           <CardContent className="grid gap-3">
             {recentReviews.length ? (
               recentReviews.map((review) => (
-                <div
-                  key={review.id}
-                  className="rounded-xl border border-border/70 bg-muted/30 p-4"
-                >
+                <div className="rounded-lg border border-border p-4" key={review.id}>
                   <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div className="space-y-1">
-                      <p className="font-medium">{review.title}</p>
+                    <div className="grid gap-1">
+                      <p className="text-sm font-medium">{review.title}</p>
                       {review.description ? (
                         <p className="text-sm text-muted-foreground">{review.description}</p>
                       ) : null}
@@ -185,6 +270,7 @@ export function ProjectDetailPage() {
             ) : (
               <EmptyState
                 description="Review items will appear here after ingest and lint workflows run."
+                icon={ClipboardCheck}
                 title="No reviews yet"
               />
             )}
@@ -199,14 +285,9 @@ export function ProjectDetailPage() {
           <CardContent className="grid gap-3">
             {recentAudit.length ? (
               recentAudit.map((item) => (
-                <div
-                  key={item.id}
-                  className="rounded-xl border border-border/70 bg-muted/30 p-4"
-                >
-                  <p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-                    {item.action}
-                  </p>
-                  <p className="mt-1 font-medium">{item.summary}</p>
+                <div className="rounded-lg border border-border p-4" key={item.id}>
+                  <p className="font-mono text-xs text-muted-foreground">{item.action}</p>
+                  <p className="mt-1 text-sm font-medium">{item.summary}</p>
                 </div>
               ))
             ) : (
@@ -218,35 +299,6 @@ export function ProjectDetailPage() {
           </CardContent>
         </Card>
       </div>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Workspace Shortcuts</CardTitle>
-          <CardDescription>Jump directly into project operations.</CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-wrap gap-4 text-sm">
-          <Link className="inline-link" to={`/projects/${detail.id}/files`}>
-            Open Files
-          </Link>
-          <Link className="inline-link" to={`/projects/${detail.id}/sources`}>
-            Open Sources
-          </Link>
-          <Link className="inline-link" to={`/projects/${detail.id}/tasks`}>
-            Open Tasks
-          </Link>
-        </CardContent>
-      </Card>
     </div>
-  );
-}
-
-function MetricCard({ label, value }: { label: string; value: number }) {
-  return (
-    <Card>
-      <CardHeader>
-        <CardDescription>{label}</CardDescription>
-        <CardTitle className="text-2xl font-semibold">{value}</CardTitle>
-      </CardHeader>
-    </Card>
   );
 }

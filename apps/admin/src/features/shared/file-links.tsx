@@ -19,7 +19,10 @@ export function ProjectFileLink({
   children?: ReactNode;
 }) {
   return (
-    <Link className="inline-link" to={projectFilesHref(projectId, path)}>
+    <Link
+      className="break-all text-primary underline-offset-4 hover:underline"
+      to={projectFilesHref(projectId, path)}
+    >
       {children ?? path}
     </Link>
   );

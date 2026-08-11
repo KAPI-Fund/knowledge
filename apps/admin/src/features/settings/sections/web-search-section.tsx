@@ -4,13 +4,21 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Select } from "@/components/ui/select";
+import { Label } from "@/components/ui/label";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import {
   useRunWebSearchMutation,
   useSystemSettingsQuery,
   useUpdateSystemSettingsMutation,
 } from "../queries";
-import { useSettingsTopLevel } from "./use-settings-top-level";
 
 // Editable per-provider fields. apiKey is always a plain editable string; blank
 // means "keep the stored key" (backend deep-merge skips empty-string fields).
@@ -25,6 +33,10 @@ interface SearchFields {
   searxngCategories: string;
   ollamaApiKey: string;
   ollamaUrl: string;
+  braveApiKey: string;
+  braveBaseUrl: string;
+  firecrawlApiKey: string;
+  firecrawlBaseUrl: string;
 }
 
 const EMPTY: SearchFields = {
@@ -38,15 +50,28 @@ const EMPTY: SearchFields = {
   searxngCategories: "general",
   ollamaApiKey: "",
   ollamaUrl: "",
+  braveApiKey: "",
+  braveBaseUrl: "",
+  firecrawlApiKey: "",
+  firecrawlBaseUrl: "",
 };
 
 export function WebSearchSection() {
   const settings = useSystemSettingsQuery();
   const update = useUpdateSystemSettingsMutation();
   const runWebSearch = useRunWebSearchMutation();
-  const topLevel = useSettingsTopLevel(settings.data);
 
   const [fields, setFields] = useState<SearchFields>(EMPTY);
+  // Per-provider "remove the stored api key" toggles. Separate from `fields`
+  // because a key can only ever be kept, replaced, or cleared — never edited in
+  // place (GET redacts it). When on, save sends apiKey=null (backend clears it).
+  const [clearKeys, setClearKeys] = useState({
+    tavily: false,
+    serpapi: false,
+    ollama: false,
+    brave: false,
+    firecrawl: false,
+  });
   const [testQuery, setTestQuery] = useState("");
   const [testError, setTestError] = useState("");
   const hydratedFrom = useRef<string>("");
@@ -73,7 +98,12 @@ export function WebSearchSection() {
       searxngCategories: (p.searxng?.categories ?? ["general"]).join(", "),
       ollamaApiKey: "",
       ollamaUrl: p.ollama?.url ?? "",
+      braveApiKey: "",
+      braveBaseUrl: p.brave?.baseUrl ?? "",
+      firecrawlApiKey: "",
+      firecrawlBaseUrl: p.firecrawl?.baseUrl ?? "",
     });
+    setClearKeys({ tavily: false, serpapi: false, ollama: false, brave: false, firecrawl: false });
   }, [settings.data?.search]);
 
   function set<K extends keyof SearchFields>(key: K, value: SearchFields[K]) {
@@ -85,25 +115,54 @@ export function WebSearchSection() {
       .split(",")
       .map((v) => v.trim())
       .filter((v) => v.length > 0);
+    // Visible URL fields: a blank box means "clear it" (revert to the provider
+    // default) -> send null. A typed value sets it. api.ts passes null through
+    // and the backend merge drops the stored field.
+    const urlOrClear = (v: string): string | null => (v.trim() === "" ? null : v.trim());
+    // api key: clear toggle wins (null = remove stored key); otherwise "" keeps
+    // the stored key and a typed value replaces it.
+    const keyValue = (cleared: boolean, typed: string): string | null =>
+      cleared ? null : typed.trim();
     // Send every provider block so switching providers never drops a stored
-    // field. apiKey = "" means keep; a typed value replaces (backend merge).
+    // field.
     await update.mutateAsync({
-      ...topLevel,
       search: {
         provider: fields.provider,
         providers: {
-          tavily: { apiKey: fields.tavilyApiKey.trim(), baseUrl: fields.tavilyBaseUrl },
-          serpapi: {
-            apiKey: fields.serpapiApiKey.trim(),
-            engine: fields.serpapiEngine,
-            baseUrl: fields.serpapiBaseUrl,
+          tavily: {
+            apiKey: keyValue(clearKeys.tavily, fields.tavilyApiKey),
+            baseUrl: urlOrClear(fields.tavilyBaseUrl),
           },
-          searxng: { url: fields.searxngUrl, categories: categories.length ? categories : ["general"] },
-          ollama: { apiKey: fields.ollamaApiKey.trim(), url: fields.ollamaUrl },
+          serpapi: {
+            apiKey: keyValue(clearKeys.serpapi, fields.serpapiApiKey),
+            engine: fields.serpapiEngine,
+            baseUrl: urlOrClear(fields.serpapiBaseUrl),
+          },
+          searxng: { url: urlOrClear(fields.searxngUrl), categories: categories.length ? categories : ["general"] },
+          ollama: {
+            apiKey: keyValue(clearKeys.ollama, fields.ollamaApiKey),
+            url: urlOrClear(fields.ollamaUrl),
+          },
+          brave: {
+            apiKey: keyValue(clearKeys.brave, fields.braveApiKey),
+            baseUrl: urlOrClear(fields.braveBaseUrl),
+          },
+          firecrawl: {
+            apiKey: keyValue(clearKeys.firecrawl, fields.firecrawlApiKey),
+            baseUrl: urlOrClear(fields.firecrawlBaseUrl),
+          },
         },
       },
     });
-    setFields((f) => ({ ...f, tavilyApiKey: "", serpapiApiKey: "", ollamaApiKey: "" }));
+    setFields((f) => ({
+      ...f,
+      tavilyApiKey: "",
+      serpapiApiKey: "",
+      ollamaApiKey: "",
+      braveApiKey: "",
+      firecrawlApiKey: "",
+    }));
+    setClearKeys({ tavily: false, serpapi: false, ollama: false, brave: false, firecrawl: false });
   }
 
   const configured = settings.data?.search?.providers;
@@ -115,20 +174,23 @@ export function WebSearchSection() {
         <CardDescription>Search provider for the canvas search node.</CardDescription>
       </CardHeader>
       <CardContent className="grid gap-4">
-        <label className="grid gap-1.5 text-sm font-medium">
-          Search Provider
-          <Select
-            aria-label="Search Provider"
-            value={fields.provider}
-            onChange={(e) => set("provider", e.target.value)}
-          >
-            <option value="none">none</option>
-            <option value="tavily">tavily</option>
-            <option value="serpapi">serpapi</option>
-            <option value="searxng">searxng</option>
-            <option value="ollama">ollama</option>
+        <div className="grid gap-1.5">
+          <Label htmlFor="search-provider">Search Provider</Label>
+          <Select value={fields.provider} onValueChange={(value) => set("provider", value)}>
+            <SelectTrigger id="search-provider" aria-label="Search Provider" className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none">none</SelectItem>
+              <SelectItem value="tavily">tavily</SelectItem>
+              <SelectItem value="serpapi">serpapi</SelectItem>
+              <SelectItem value="searxng">searxng</SelectItem>
+              <SelectItem value="ollama">ollama</SelectItem>
+              <SelectItem value="brave">brave</SelectItem>
+              <SelectItem value="firecrawl">firecrawl</SelectItem>
+            </SelectContent>
           </Select>
-        </label>
+        </div>
 
         {fields.provider === "tavily" ? (
           <>
@@ -136,6 +198,7 @@ export function WebSearchSection() {
               Tavily API Key
               <Input
                 type="password"
+                disabled={clearKeys.tavily}
                 placeholder={
                   configured?.tavily?.apiKeyConfigured
                     ? "Leave blank to keep the current key"
@@ -145,6 +208,16 @@ export function WebSearchSection() {
                 onChange={(e) => set("tavilyApiKey", e.target.value)}
               />
             </label>
+            {configured?.tavily?.apiKeyConfigured ? (
+              <label className="flex items-center justify-between text-sm text-muted-foreground">
+                <span>Clear stored key</span>
+                <Switch
+                  aria-label="Clear stored Tavily key"
+                  checked={clearKeys.tavily}
+                  onCheckedChange={(v) => setClearKeys((c) => ({ ...c, tavily: v }))}
+                />
+              </label>
+            ) : null}
             <label className="grid gap-1.5 text-sm font-medium">
               Tavily Base URL
               <Input
@@ -162,6 +235,7 @@ export function WebSearchSection() {
               SerpApi API Key
               <Input
                 type="password"
+                disabled={clearKeys.serpapi}
                 placeholder={
                   configured?.serpapi?.apiKeyConfigured
                     ? "Leave blank to keep the current key"
@@ -171,20 +245,34 @@ export function WebSearchSection() {
                 onChange={(e) => set("serpapiApiKey", e.target.value)}
               />
             </label>
-            <label className="grid gap-1.5 text-sm font-medium">
-              SerpApi Engine
+            {configured?.serpapi?.apiKeyConfigured ? (
+              <label className="flex items-center justify-between text-sm text-muted-foreground">
+                <span>Clear stored key</span>
+                <Switch
+                  aria-label="Clear stored SerpApi key"
+                  checked={clearKeys.serpapi}
+                  onCheckedChange={(v) => setClearKeys((c) => ({ ...c, serpapi: v }))}
+                />
+              </label>
+            ) : null}
+            <div className="grid gap-1.5">
+              <Label htmlFor="serpapi-engine">SerpApi Engine</Label>
               <Select
-                aria-label="SerpApi Engine"
                 value={fields.serpapiEngine}
-                onChange={(e) => set("serpapiEngine", e.target.value)}
+                onValueChange={(value) => set("serpapiEngine", value)}
               >
-                <option value="google">google</option>
-                <option value="google_news">google_news</option>
-                <option value="google_scholar">google_scholar</option>
-                <option value="bing">bing</option>
-                <option value="duckduckgo">duckduckgo</option>
+                <SelectTrigger id="serpapi-engine" aria-label="SerpApi Engine" className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="google">google</SelectItem>
+                  <SelectItem value="google_news">google_news</SelectItem>
+                  <SelectItem value="google_scholar">google_scholar</SelectItem>
+                  <SelectItem value="bing">bing</SelectItem>
+                  <SelectItem value="duckduckgo">duckduckgo</SelectItem>
+                </SelectContent>
               </Select>
-            </label>
+            </div>
             <label className="grid gap-1.5 text-sm font-medium">
               SerpApi Base URL
               <Input
@@ -222,6 +310,7 @@ export function WebSearchSection() {
               Ollama API Key
               <Input
                 type="password"
+                disabled={clearKeys.ollama}
                 placeholder={
                   configured?.ollama?.apiKeyConfigured
                     ? "Leave blank to keep the current key"
@@ -231,12 +320,99 @@ export function WebSearchSection() {
                 onChange={(e) => set("ollamaApiKey", e.target.value)}
               />
             </label>
+            {configured?.ollama?.apiKeyConfigured ? (
+              <label className="flex items-center justify-between text-sm text-muted-foreground">
+                <span>Clear stored key</span>
+                <Switch
+                  aria-label="Clear stored Ollama key"
+                  checked={clearKeys.ollama}
+                  onCheckedChange={(v) => setClearKeys((c) => ({ ...c, ollama: v }))}
+                />
+              </label>
+            ) : null}
             <label className="grid gap-1.5 text-sm font-medium">
               Ollama Search URL
               <Input
                 value={fields.ollamaUrl}
                 onChange={(e) => set("ollamaUrl", e.target.value)}
                 placeholder="https://ollama.com"
+              />
+            </label>
+          </>
+        ) : null}
+
+        {fields.provider === "brave" ? (
+          <>
+            <label className="grid gap-1.5 text-sm font-medium">
+              Brave API Key
+              <Input
+                type="password"
+                disabled={clearKeys.brave}
+                placeholder={
+                  configured?.brave?.apiKeyConfigured
+                    ? "Leave blank to keep the current key"
+                    : "Enter your Brave Search API subscription token"
+                }
+                value={fields.braveApiKey}
+                onChange={(e) => set("braveApiKey", e.target.value)}
+              />
+            </label>
+            {configured?.brave?.apiKeyConfigured ? (
+              <label className="flex items-center justify-between text-sm text-muted-foreground">
+                <span>Clear stored key</span>
+                <Switch
+                  aria-label="Clear stored Brave key"
+                  checked={clearKeys.brave}
+                  onCheckedChange={(v) => setClearKeys((c) => ({ ...c, brave: v }))}
+                />
+              </label>
+            ) : null}
+            <label className="grid gap-1.5 text-sm font-medium">
+              Brave Base URL
+              <Input
+                value={fields.braveBaseUrl}
+                onChange={(e) => set("braveBaseUrl", e.target.value)}
+                placeholder="https://api.search.brave.com"
+              />
+            </label>
+          </>
+        ) : null}
+
+        {fields.provider === "firecrawl" ? (
+          <>
+            <label className="grid gap-1.5 text-sm font-medium">
+              Firecrawl API Key
+              <Input
+                type="password"
+                disabled={clearKeys.firecrawl}
+                placeholder={
+                  configured?.firecrawl?.apiKeyConfigured
+                    ? "Leave blank to keep the current key"
+                    : "fc-..."
+                }
+                value={fields.firecrawlApiKey}
+                onChange={(e) => set("firecrawlApiKey", e.target.value)}
+              />
+              <span className="text-xs font-normal text-muted-foreground">
+                Optional — anonymous access works but may be rejected by IP.
+              </span>
+            </label>
+            {configured?.firecrawl?.apiKeyConfigured ? (
+              <label className="flex items-center justify-between text-sm text-muted-foreground">
+                <span>Clear stored key</span>
+                <Switch
+                  aria-label="Clear stored Firecrawl key"
+                  checked={clearKeys.firecrawl}
+                  onCheckedChange={(v) => setClearKeys((c) => ({ ...c, firecrawl: v }))}
+                />
+              </label>
+            ) : null}
+            <label className="grid gap-1.5 text-sm font-medium">
+              Firecrawl Base URL
+              <Input
+                value={fields.firecrawlBaseUrl}
+                onChange={(e) => set("firecrawlBaseUrl", e.target.value)}
+                placeholder="https://api.firecrawl.dev"
               />
             </label>
           </>
@@ -280,19 +456,21 @@ export function WebSearchSection() {
             </Alert>
           ) : null}
           {runWebSearch.data?.results.length ? (
-            <ul className="grid gap-3">
-              {runWebSearch.data.results.map((result) => (
-                <li key={result.url} className="rounded border p-3">
-                  <a className="font-medium" href={result.url} rel="noreferrer" target="_blank">
-                    {result.title}
-                  </a>
-                  {result.source ? (
-                    <p className="text-xs text-muted-foreground">{result.source}</p>
-                  ) : null}
-                  {result.snippet ? <p className="mt-1 text-sm">{result.snippet}</p> : null}
-                </li>
-              ))}
-            </ul>
+            <ScrollArea className="max-h-72 pr-2">
+              <ul className="grid gap-3">
+                {runWebSearch.data.results.map((result) => (
+                  <li key={result.url} className="rounded border p-3">
+                    <a className="font-medium" href={result.url} rel="noreferrer" target="_blank">
+                      {result.title}
+                    </a>
+                    {result.source ? (
+                      <p className="text-xs text-muted-foreground">{result.source}</p>
+                    ) : null}
+                    {result.snippet ? <p className="mt-1 text-sm">{result.snippet}</p> : null}
+                  </li>
+                ))}
+              </ul>
+            </ScrollArea>
           ) : null}
         </div>
       </CardContent>

@@ -1,56 +1,96 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { LintPage } from "./page";
 
 const mockCreateLintTask = vi.fn();
 const mockTaskDetail = vi.fn();
+const mockLintItems = vi.fn();
+const mockFixLintItem = vi.fn();
+const mockDeleteLintOrphan = vi.fn();
+const mockDismissLintItems = vi.fn();
+const mockSendLintItemsToReview = vi.fn();
 
 vi.mock("./queries", () => ({
   useCreateLintTaskMutation: () => ({
     mutateAsync: mockCreateLintTask,
+    isPending: false,
   }),
   useLintTaskDetailQuery: () => ({
     data: mockTaskDetail(),
   }),
+  useLintItemsQuery: () => ({
+    data: mockLintItems(),
+    isLoading: false,
+  }),
+  useFixLintItemMutation: () => ({
+    mutateAsync: mockFixLintItem,
+    isPending: false,
+  }),
+  useDeleteLintOrphanMutation: () => ({
+    mutateAsync: mockDeleteLintOrphan,
+    isPending: false,
+  }),
+  useDismissLintItemsMutation: () => ({
+    mutateAsync: mockDismissLintItems,
+    isPending: false,
+  }),
+  useSendLintItemsToReviewMutation: () => ({
+    mutateAsync: mockSendLintItemsToReview,
+    isPending: false,
+  }),
 }));
 
+const brokenLinkItem = {
+  id: "item-1",
+  issueType: "broken-link",
+  severity: "warning",
+  page: "concepts/attention.md",
+  detail: "Broken link: [[attention-mechanisms]] - target page not found.",
+  brokenTarget: "attention-mechanisms",
+  suggestedTarget: "concepts/attention-mechanism.md",
+  mode: "structural",
+  createdAt: "2026-07-11T00:00:00Z",
+};
+
+const orphanItem = {
+  id: "item-2",
+  issueType: "orphan",
+  severity: "warning",
+  page: "notes/loose.md",
+  detail: "Page has no incoming wikilinks.",
+  mode: "structural",
+  createdAt: "2026-07-11T00:00:00Z",
+};
+
+function renderPage() {
+  const queryClient = new QueryClient();
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter initialEntries={["/projects/project-1/lint"]}>
+        <Routes>
+          <Route path="projects/:projectId/lint" element={<LintPage />} />
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+}
+
 describe("lint page", () => {
-  it("runs structural lint and renders returned issues", async () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockTaskDetail.mockReturnValue(undefined);
+    mockLintItems.mockReturnValue([brokenLinkItem, orphanItem]);
+  });
+
+  it("queues a structural lint task", async () => {
     const user = userEvent.setup();
-    const queryClient = new QueryClient();
-
     mockCreateLintTask.mockResolvedValue({ taskId: "task-1", status: "queued" });
-    mockTaskDetail
-      .mockReturnValueOnce(undefined)
-      .mockReturnValueOnce({
-        id: "task-1",
-        status: "succeeded",
-        result: {
-          mode: "structural",
-          issues: [
-            {
-              issueType: "broken-link",
-              severity: "warning",
-              page: "concepts/attention.md",
-              detail: "Broken link: [[missing-page]] - target page not found.",
-            },
-          ],
-        },
-      });
 
-    render(
-      <QueryClientProvider client={queryClient}>
-        <MemoryRouter initialEntries={["/projects/project-1/lint"]}>
-          <Routes>
-            <Route path="projects/:projectId/lint" element={<LintPage />} />
-          </Routes>
-        </MemoryRouter>
-      </QueryClientProvider>,
-    );
+    renderPage();
 
     await user.click(screen.getByRole("button", { name: "Run Structural Lint" }));
 
@@ -58,54 +98,85 @@ describe("lint page", () => {
       projectId: "project-1",
       mode: "structural",
     });
-    expect(await screen.findByText("broken-link")).toBeInTheDocument();
-    expect(screen.getByText("wiki/concepts/attention.md")).toBeInTheDocument();
-    expect(screen.getByText("Broken link: [[missing-page]] - target page not found.")).toBeInTheDocument();
   });
 
-  it("runs semantic lint and renders semantic issues", async () => {
+  it("renders suggestion badges and review fallback", () => {
+    renderPage();
+
+    expect(screen.getByText("concepts/attention-mechanism.md")).toBeInTheDocument();
+    expect(screen.getByText("→ Review")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Broken Link" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Orphan Page" })).toBeInTheDocument();
+  });
+
+  it("fixes an item from the detail card", async () => {
     const user = userEvent.setup();
-    const queryClient = new QueryClient();
+    mockFixLintItem.mockResolvedValue({ action: "fixed", changedPaths: ["wiki/concepts/attention.md"] });
 
-    mockCreateLintTask.mockResolvedValue({ taskId: "task-2", status: "queued" });
-    mockTaskDetail
-      .mockReturnValueOnce(undefined)
-      .mockReturnValueOnce({
-        id: "task-2",
-        status: "succeeded",
-        result: {
-          mode: "semantic",
-          issues: [
-            {
-              issueType: "semantic",
-              severity: "warning",
-              page: "Conflicting attention claims",
-              detail: "[contradiction] Two pages describe attention with conflicting scope.",
-              affectedPages: ["concepts/attention.md", "concepts/attention-mechanism.md"],
-            },
-          ],
-        },
-      });
+    renderPage();
 
-    render(
-      <QueryClientProvider client={queryClient}>
-        <MemoryRouter initialEntries={["/projects/project-1/lint"]}>
-          <Routes>
-            <Route path="projects/:projectId/lint" element={<LintPage />} />
-          </Routes>
-        </MemoryRouter>
-      </QueryClientProvider>,
-    );
+    await user.click(screen.getByRole("button", { name: "Broken Link" }));
+    expect(screen.getByText("Suggested target: concepts/attention-mechanism.md")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Run Semantic Lint" }));
+    await user.click(screen.getByRole("button", { name: "Fix" }));
 
-    expect(mockCreateLintTask).toHaveBeenCalledWith({
+    expect(mockFixLintItem).toHaveBeenCalledWith({
       projectId: "project-1",
-      mode: "semantic",
+      itemId: "item-1",
     });
-    expect(await screen.findByRole("heading", { name: "semantic" })).toBeInTheDocument();
-    expect(screen.getByText("[contradiction] Two pages describe attention with conflicting scope.")).toBeInTheDocument();
-    expect(screen.getByText("wiki/concepts/attention.md")).toBeInTheDocument();
-    expect(screen.getByText("wiki/concepts/attention-mechanism.md")).toBeInTheDocument();
+  });
+
+  it("dismisses selected items from the batch toolbar", async () => {
+    const user = userEvent.setup();
+    mockDismissLintItems.mockResolvedValue({ dismissedIds: ["item-1", "item-2"] });
+
+    renderPage();
+
+    await user.click(screen.getByRole("checkbox", { name: "Select all" }));
+    expect(screen.getByText("2 selected")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Ignore selected" }));
+
+    expect(mockDismissLintItems).toHaveBeenCalledWith({
+      projectId: "project-1",
+      ids: ["item-1", "item-2"],
+    });
+  });
+
+  it("sends selected items to review", async () => {
+    const user = userEvent.setup();
+    mockSendLintItemsToReview.mockResolvedValue({ reviewIds: ["lint-1"] });
+
+    renderPage();
+
+    await user.click(screen.getByRole("checkbox", { name: "Select concepts/attention.md" }));
+    await user.click(screen.getByRole("button", { name: "Send selected to Review" }));
+
+    expect(mockSendLintItemsToReview).toHaveBeenCalledWith({
+      projectId: "project-1",
+      ids: ["item-1"],
+    });
+  });
+
+  it("deletes an orphan page through the confirm dialog", async () => {
+    const user = userEvent.setup();
+    mockDeleteLintOrphan.mockResolvedValue({ deletedPaths: ["wiki/notes/loose.md"], rewrittenFiles: 1 });
+
+    renderPage();
+
+    await user.click(screen.getByRole("button", { name: "Orphan Page" }));
+    await user.click(screen.getByRole("button", { name: "Delete" }));
+
+    const dialog = await screen.findByRole("alertdialog");
+    expect(
+      within(dialog).getByText('Delete orphan page "notes/loose.md"?'),
+    ).toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole("button", { name: "Delete" }));
+
+    expect(mockDeleteLintOrphan).toHaveBeenCalledWith({
+      projectId: "project-1",
+      itemId: "item-2",
+    });
   });
 });

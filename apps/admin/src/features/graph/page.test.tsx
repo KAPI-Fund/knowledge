@@ -35,6 +35,51 @@ vi.mock("./graph-canvas", () => ({
   ),
 }));
 
+vi.mock("./starfield-canvas", () => ({
+  StarfieldCanvas: ({
+    nodes,
+    layout,
+    selectedNodeId,
+    highlightedNodes,
+    onNodeClick,
+    onNodeContextMenu,
+    onBackgroundClick,
+  }: {
+    nodes: { id: string; label: string }[];
+    layout: string;
+    selectedNodeId: string | null;
+    highlightedNodes: Set<string>;
+    onNodeClick: (id: string) => void;
+    onNodeContextMenu?: (id: string, x: number, y: number) => void;
+    onBackgroundClick?: () => void;
+  }) => (
+    <div
+      data-testid="starfield-canvas"
+      data-layout={layout}
+      data-selected={selectedNodeId ?? ""}
+      data-highlighted={[...highlightedNodes].join(",")}
+    >
+      {nodes.map((node) => (
+        <div key={node.id}>
+          <button onClick={() => onNodeClick(node.id)} type="button">
+            {node.label}
+          </button>
+          <button
+            aria-label={`context ${node.label}`}
+            onClick={() => onNodeContextMenu?.(node.id, 130, 90)}
+            type="button"
+          >
+            ctx {node.label}
+          </button>
+        </div>
+      ))}
+      <button onClick={() => onBackgroundClick?.()} type="button">
+        starfield background
+      </button>
+    </div>
+  ),
+}));
+
 vi.mock("./queries", () => ({
   GRAPH_NODE_LIMIT: 1000,
   useProjectGraphQuery: () => ({
@@ -92,13 +137,46 @@ function renderWithProjectNav() {
 }
 
 describe("GraphPage", () => {
-  it("mounts the canvas, search control, and node labels", () => {
+  it("mounts the 3D starfield by default with search control and node labels", async () => {
     renderPage();
     expect(screen.getByRole("heading", { name: "Graph" })).toBeInTheDocument();
-    expect(screen.getByTestId("graph-canvas")).toBeInTheDocument();
+    expect(await screen.findByTestId("starfield-canvas")).toBeInTheDocument();
+    expect(screen.queryByTestId("graph-canvas")).not.toBeInTheDocument();
     expect(screen.getByLabelText("Search graph")).toBeInTheDocument();
     expect(screen.getByText("Alpha")).toBeInTheDocument();
     expect(screen.getByText("Beta")).toBeInTheDocument();
+  });
+
+  it("switches between the 3D and 2D views", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    expect(await screen.findByTestId("starfield-canvas")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "2D" }));
+    expect(screen.getByTestId("graph-canvas")).toBeInTheDocument();
+    expect(screen.queryByTestId("starfield-canvas")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "3D" }));
+    expect(await screen.findByTestId("starfield-canvas")).toBeInTheDocument();
+  });
+
+  it("changes the 3D layout via the starfield controls", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    const canvas = await screen.findByTestId("starfield-canvas");
+    expect(canvas).toHaveAttribute("data-layout", "sphere");
+    await user.click(screen.getByRole("button", { name: "Ring layout" }));
+    expect(canvas).toHaveAttribute("data-layout", "ring");
+    await user.click(screen.getByRole("button", { name: "Tornado layout" }));
+    expect(canvas).toHaveAttribute("data-layout", "tornado");
+  });
+
+  it("selects a node in 3D and clears the selection on background click", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    const canvas = await screen.findByTestId("starfield-canvas");
+    await user.click(screen.getByRole("button", { name: "Alpha" }));
+    expect(canvas).toHaveAttribute("data-selected", "a");
+    await user.click(screen.getByRole("button", { name: "starfield background" }));
+    expect(canvas).toHaveAttribute("data-selected", "");
   });
 
   it("legend reflects the full graph, including types filtered from the view", () => {
@@ -112,11 +190,12 @@ describe("GraphPage", () => {
   it("clears the highlight when the insights panel is closed", async () => {
     const user = userEvent.setup();
     renderPage();
+    const canvas = await screen.findByTestId("starfield-canvas");
     await user.click(screen.getByRole("button", { name: "Insights" }));
     await user.click(screen.getByRole("button", { name: /isolated page/i }));
-    expect(screen.getByTestId("graph-canvas")).toHaveAttribute("data-highlighted", "iso");
+    expect(canvas).toHaveAttribute("data-highlighted", "iso");
     await user.click(screen.getByRole("button", { name: "Close insights" }));
-    expect(screen.getByTestId("graph-canvas")).toHaveAttribute("data-highlighted", "");
+    expect(canvas).toHaveAttribute("data-highlighted", "");
   });
 
   it("keeps dismissed insights dismissed across a panel toggle", async () => {
@@ -135,18 +214,19 @@ describe("GraphPage", () => {
   it("clears a matching highlight when its insight is dismissed", async () => {
     const user = userEvent.setup();
     renderPage();
+    const canvas = await screen.findByTestId("starfield-canvas");
     await user.click(screen.getByRole("button", { name: "Insights" }));
     await user.click(screen.getByRole("button", { name: /isolated page/i }));
-    expect(screen.getByTestId("graph-canvas")).toHaveAttribute("data-highlighted", "iso");
+    expect(canvas).toHaveAttribute("data-highlighted", "iso");
     const gapButton = screen.getByRole("button", { name: /isolated page/i });
     await user.click(within(gapButton.closest("li")!).getByRole("button", { name: "Dismiss insight" }));
-    expect(screen.getByTestId("graph-canvas")).toHaveAttribute("data-highlighted", "");
+    expect(canvas).toHaveAttribute("data-highlighted", "");
   });
 
   it("hides a node via the context menu and restores it from the hidden panel", async () => {
     const user = userEvent.setup();
     renderPage();
-    expect(screen.getByRole("button", { name: "Alpha" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Alpha" })).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "context Alpha" }));
     await user.click(screen.getByRole("button", { name: "Hide this node" }));
@@ -172,7 +252,7 @@ describe("GraphPage", () => {
 
     try {
       renderPage();
-      await user.click(screen.getByRole("button", { name: "context Alpha" }));
+      await user.click(await screen.findByRole("button", { name: "context Alpha" }));
       // mock canvas forwards client (130, 90); container rect is (20, 10),
       // so the menu must render at (110, 80) — container-relative (upstream
       // graph-view.tsx:660-671).
@@ -188,11 +268,11 @@ describe("GraphPage", () => {
     const user = userEvent.setup();
     renderWithProjectNav();
 
-    await user.click(screen.getByRole("button", { name: "context Alpha" }));
+    await user.click(await screen.findByRole("button", { name: "context Alpha" }));
     await user.click(screen.getByRole("button", { name: "Hide this node" }));
     expect(screen.queryByRole("button", { name: "Alpha" })).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "go p2" }));
-    expect(screen.getByRole("button", { name: "Alpha" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Alpha" })).toBeInTheDocument();
   });
 });

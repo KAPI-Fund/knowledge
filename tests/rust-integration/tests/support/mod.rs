@@ -105,6 +105,59 @@ pub async fn bootstrap_state_without_scheduler(config: &AppConfig) -> Result<App
     })
 }
 
+/// Seed an active LLM connection for chat/analyze. Mirrors what the admin UI does
+/// (create_connection makes the first connection active), replacing the old
+/// legacy flat `provider_*` column writes that were dropped in migration 0016.
+#[allow(dead_code)]
+pub async fn seed_provider_connection(
+    pool: &sqlx::PgPool,
+    base_url: &str,
+    api_key: &str,
+    model: &str,
+    timeout_seconds: i64,
+) {
+    knowledge_server::providers::create_connection(
+        pool,
+        &knowledge_server::providers::NewConnection {
+            label: "Test".to_string(),
+            base_url: base_url.to_string(),
+            api_key: Some(api_key.to_string()),
+            model: model.to_string(),
+            timeout_seconds: Some(timeout_seconds),
+        },
+    )
+    .await
+    .expect("failed to seed provider connection");
+}
+
+/// Seed the independent embedding block on the singleton settings row, replacing
+/// the old `provider_embedding_model` legacy column write.
+#[allow(dead_code)]
+pub async fn seed_embedding(
+    pool: &sqlx::PgPool,
+    base_url: &str,
+    api_key: &str,
+    model: &str,
+    timeout_seconds: i64,
+) {
+    sqlx::query(
+        "UPDATE system_settings
+         SET embedding_enabled = true,
+             embedding_base_url = $1,
+             embedding_api_key = $2,
+             embedding_model = $3,
+             embedding_timeout_seconds = $4
+         WHERE id = 1",
+    )
+    .bind(base_url)
+    .bind(api_key)
+    .bind(model)
+    .bind(timeout_seconds)
+    .execute(pool)
+    .await
+    .expect("failed to seed embedding config");
+}
+
 #[allow(dead_code)]
 pub fn bind_project_root_alias(alias: &Path, target: &Path) -> Result<()> {
     if let Some(parent) = alias.parent() {

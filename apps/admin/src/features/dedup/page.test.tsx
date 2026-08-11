@@ -78,8 +78,10 @@ describe("dedup page", () => {
     expect(screen.getByText("attention / attention-mechanism")).toBeInTheDocument();
     expect(screen.getByText("Both describe the attention mechanism.")).toBeInTheDocument();
 
-    await user.selectOptions(screen.getByLabelText("Canonical Slug"), "attention-mechanism");
+    await user.click(screen.getByRole("combobox", { name: "Canonical Slug" }));
+    await user.click(await screen.findByRole("option", { name: "attention-mechanism" }));
     await user.click(screen.getByRole("button", { name: "Merge" }));
+    await user.click(await screen.findByRole("button", { name: "Merge pages" }));
 
     expect(mockMergeGroup).toHaveBeenCalledWith({
       projectId: "project-1",

@@ -44,7 +44,9 @@ pub fn image_config_from_row(
         api_key: api_key.unwrap_or_default(),
         model,
         size,
-        timeout_seconds: timeout_seconds.unwrap_or(60),
+        // Image generation is slow (multi-MB base64 payloads, tens of seconds to a
+        // few minutes), so default the request timeout to 5 minutes.
+        timeout_seconds: timeout_seconds.unwrap_or(300),
     })
 }
 
@@ -58,6 +60,48 @@ pub async fn load_image_config(state: &AppState) -> Result<ImageConfig, ApiError
         .await
         .map_err(ApiError::from)?;
     image_config_from_row(base_url, api_key, model, size, timeout_seconds)
+}
+
+const GPT_IMAGE_SIZES: &[&str] = &["1024x1024", "1024x1536", "1536x1024"];
+const DALLE3_SIZES: &[&str] = &["1024x1024", "1024x1792", "1792x1024"];
+const DALLE2_SIZES: &[&str] = &["256x256", "512x512", "1024x1024"];
+
+/// The fixed size set a known OpenAI image model family accepts, or `None` for an
+/// unrecognized model. Mirrors the admin UI's `allowedSizesForModel`, but returns
+/// `None` (rather than a catch-all list) for unknown models so a custom endpoint's
+/// bespoke size is left unrestricted server-side.
+fn allowed_sizes_for_model(model: &str) -> Option<&'static [&'static str]> {
+    let m = model.trim().to_lowercase();
+    if m.starts_with("gpt-image") {
+        Some(GPT_IMAGE_SIZES)
+    } else if m.starts_with("dall-e-3") || m.starts_with("dalle-3") {
+        Some(DALLE3_SIZES)
+    } else if m.starts_with("dall-e-2") || m.starts_with("dalle-2") {
+        Some(DALLE2_SIZES)
+    } else {
+        None
+    }
+}
+
+/// Reject a size a known model family does not support (e.g. dall-e-3 + 512x512),
+/// so an incompatible combination can't be persisted only to fail at canvas
+/// runtime. Unknown models and blank sizes pass through (validated/defaulted
+/// elsewhere).
+pub fn validate_image_size(model: &str, size: &str) -> Result<(), ApiError> {
+    let size = size.trim();
+    if size.is_empty() {
+        return Ok(());
+    }
+    if let Some(allowed) = allowed_sizes_for_model(model) {
+        if !allowed.contains(&size) {
+            return Err(ApiError::bad_request(format!(
+                "image size {size:?} is not supported by model {:?}; allowed: {}",
+                model.trim(),
+                allowed.join(", ")
+            )));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -82,7 +126,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(cfg.size, "1024x1024");
-        assert_eq!(cfg.timeout_seconds, 60);
+        assert_eq!(cfg.timeout_seconds, 300);
         assert_eq!(cfg.api_key, "");
     }
 
@@ -98,5 +142,27 @@ mod tests {
         .unwrap();
         assert_eq!(cfg.size, "512x512");
         assert_eq!(cfg.timeout_seconds, 90);
+    }
+
+    #[test]
+    fn validate_image_size_enforces_known_families() {
+        // gpt-image-1 supports 1536x1024 but not 512x512.
+        assert!(validate_image_size("gpt-image-1", "1536x1024").is_ok());
+        assert!(validate_image_size("gpt-image-1", "512x512").is_err());
+        // dall-e-3 supports 1792x1024 but not 512x512.
+        assert!(validate_image_size("dall-e-3", "1792x1024").is_ok());
+        assert!(validate_image_size("dall-e-3", "512x512").is_err());
+        // dall-e-2 supports 512x512 but not 1536x1024.
+        assert!(validate_image_size("dall-e-2", "512x512").is_ok());
+        assert!(validate_image_size("dall-e-2", "1536x1024").is_err());
+    }
+
+    #[test]
+    fn validate_image_size_passes_unknown_model_and_blank_size() {
+        // Custom endpoints (unknown model) are left unrestricted.
+        assert!(validate_image_size("my-custom-model", "999x999").is_ok());
+        // Blank size is validated/defaulted elsewhere, not here.
+        assert!(validate_image_size("dall-e-3", "").is_ok());
+        assert!(validate_image_size("dall-e-3", "   ").is_ok());
     }
 }

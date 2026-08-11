@@ -20,7 +20,7 @@ export function ProjectHeader({
           <h1 className="text-2xl font-semibold tracking-tight">{name}</h1>
           <p className="text-sm text-muted-foreground">{rootPath}</p>
         </div>
-        <div className="stats">
+        <div className="flex flex-wrap gap-3 text-sm text-muted-foreground">
           <span>{sourceCount} sources</span>
           <span>{taskCount} tasks</span>
           <span>{reviewCount} reviews</span>

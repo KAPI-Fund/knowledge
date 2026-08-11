@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 const removeGrantMock = vi.fn();
@@ -60,15 +61,14 @@ describe("ManageAccessDialog", () => {
     expect(removeGrantMock).toHaveBeenCalledWith({ userId: "u2" });
   });
 
-  it("adds a grant for a chosen candidate", () => {
+  it("adds a grant for a chosen candidate", async () => {
+    const user = userEvent.setup();
     renderDialog();
-    fireEvent.change(screen.getByLabelText("Add user"), {
-      target: { value: "u3" },
-    });
-    fireEvent.change(screen.getByLabelText("Grant role"), {
-      target: { value: "editor" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: /add grant/i }));
+    await user.click(screen.getByRole("combobox", { name: "Add user" }));
+    await user.click(await screen.findByRole("option", { name: "carol" }));
+    await user.click(screen.getByRole("combobox", { name: "Grant role" }));
+    await user.click(await screen.findByRole("option", { name: "editor" }));
+    await user.click(screen.getByRole("button", { name: /add grant/i }));
     expect(upsertGrantMock).toHaveBeenCalledWith({ userId: "u3", role: "editor" });
   });
 });

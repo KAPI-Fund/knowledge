@@ -16,11 +16,13 @@ import {
   type NodeProps,
   type NodeTypes,
 } from "@xyflow/react";
+import { useTheme } from "next-themes";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useSystemSettingsQuery } from "../settings/queries";
 import { AiAnalyzeNode, type AiAnalyzeNodeData } from "./node-types/ai-analyze";
 import { AiImageNode, type AiImageNodeData } from "./node-types/ai-image";
+import { HtmlNode, type HtmlNodeData } from "./node-types/html";
 import { KbNode, type KbNodeData } from "./node-types/kb";
 import { NoteNode, type NoteNodeData } from "./node-types/note";
 import { SearchNode, type SearchNodeData } from "./node-types/search";
@@ -31,7 +33,6 @@ interface NodeCallbacks {
   onPatch: (patch: Record<string, unknown>) => void;
   onRun: () => void;
   onFetchUrl: () => void;
-  onSearch: () => void;
 }
 
 function callbacks(data: Record<string, unknown>): NodeCallbacks {
@@ -40,7 +41,6 @@ function callbacks(data: Record<string, unknown>): NodeCallbacks {
       onPatch: () => {},
       onRun: () => {},
       onFetchUrl: () => {},
-      onSearch: () => {},
     }
   );
 }
@@ -89,7 +89,7 @@ function SearchAdapter({ id, data, selected }: NodeProps) {
       index={indexOf(data)}
       selected={selected}
       onQueryChange={(query) => cb.onPatch({ query })}
-      onSearch={cb.onSearch}
+      onRun={cb.onRun}
     />
   );
 }
@@ -132,6 +132,19 @@ function ImageAdapter({ id, data, selected }: NodeProps) {
   );
 }
 
+function HtmlAdapter({ id, data, selected }: NodeProps) {
+  const cb = callbacks(data);
+  return (
+    <HtmlNode
+      data={data as unknown as HtmlNodeData}
+      nodeId={id}
+      index={indexOf(data)}
+      selected={selected}
+      onRetry={cb.onRun}
+    />
+  );
+}
+
 const nodeTypes: NodeTypes = {
   note: NoteAdapter,
   url: UrlAdapter,
@@ -139,6 +152,7 @@ const nodeTypes: NodeTypes = {
   kb: KbAdapter,
   ai_analyze: AnalyzeAdapter,
   ai_image: ImageAdapter,
+  html: HtmlAdapter,
 };
 
 interface CanvasBoardProps {
@@ -146,7 +160,6 @@ interface CanvasBoardProps {
   onChange: (next: CanvasDocument) => void;
   onRunNode: (nodeId: string) => void;
   onFetchUrl: (nodeId: string) => void;
-  onSearchNode: (nodeId: string) => void;
   onSelectionChange?: (nodeIds: string[]) => void;
 }
 
@@ -162,7 +175,106 @@ export function pruneDanglingEdges(
   return edges.filter((e) => ids.has(e.source) && ids.has(e.target));
 }
 
-export function CanvasBoard({ document, onChange, onRunNode, onFetchUrl, onSearchNode, onSelectionChange }: CanvasBoardProps) {
+// Valid edge targets: consumers that read upstream content when run, plus html,
+// whose incoming edge records which nodes the skill deck was generated from.
+// Must stay in sync with prune_invalid_edges on the server, or a client-visible
+// edge would be silently dropped on save.
+const CONSUMER_TYPES = ["search", "ai_analyze", "ai_image", "html"];
+
+// A connection is valid iff: the endpoints differ, the target is a consumer
+// (see CONSUMER_TYPES), it does not duplicate an existing edge, and it
+// would not create a cycle (walking forward from target must not reach source).
+// React Flow calls this during a drag, so an illegal handle never highlights and
+// a release over it makes no edge (§3.2 "middle" blocking).
+export function isValidConnection(
+  nodes: { id: string; type?: string }[],
+  edges: { source: string; target: string }[],
+  conn: { source: string | null; target: string | null },
+): boolean {
+  const { source, target } = conn;
+  if (!source || !target || source === target) {
+    return false;
+  }
+  const targetNode = nodes.find((n) => n.id === target);
+  if (!targetNode || !CONSUMER_TYPES.includes(targetNode.type ?? "")) {
+    return false;
+  }
+  if (edges.some((e) => e.source === source && e.target === target)) {
+    return false;
+  }
+  const adjacency = new Map<string, string[]>();
+  for (const e of edges) {
+    const list = adjacency.get(e.source);
+    if (list) {
+      list.push(e.target);
+    } else {
+      adjacency.set(e.source, [e.target]);
+    }
+  }
+  const stack = [target];
+  const seen = new Set<string>();
+  while (stack.length > 0) {
+    const cur = stack.pop() as string;
+    if (cur === source) {
+      return false;
+    }
+    if (seen.has(cur)) {
+      continue;
+    }
+    seen.add(cur);
+    for (const next of adjacency.get(cur) ?? []) {
+      stack.push(next);
+    }
+  }
+  return true;
+}
+
+// True only for the change that *ends* a NodeResizer drag (`resizing === false`).
+// A dimensions change with `resizing === true` is mid-drag, and a dimensions
+// change with no `resizing` flag is a passive ResizeObserver measurement -- both
+// must be kept out of the document so we persist exactly once per resize.
+export function isResizeEndChange(change: NodeChange): boolean {
+  return change.type === "dimensions" && change.resizing === false;
+}
+
+// Minimal view of a React Flow node needed to snapshot its geometry back into the
+// document. NodeResizer writes the committed size onto `width`/`height`; we fall
+// back to the measured box and finally the stored size so a node never collapses.
+interface GeometrySource {
+  id: string;
+  position: { x: number; y: number };
+  width?: number | null;
+  height?: number | null;
+  measured?: { width?: number | null; height?: number | null };
+}
+
+// Rebuild the document's nodes from React Flow's live nodes, capturing both
+// position (drag) and size (resize), and prune any edges the change orphaned.
+// Shared by drag-end, resize-end, and deletion so all three commit identically.
+export function commitNodeGeometry(
+  document: CanvasDocument,
+  rfNodes: GeometrySource[],
+): CanvasDocument {
+  const nodes = rfNodes
+    .map((n) => {
+      const orig = document.nodes.find((d) => d.id === n.id);
+      if (!orig) {
+        return null;
+      }
+      return {
+        ...orig,
+        x: n.position.x,
+        y: n.position.y,
+        w: n.width ?? n.measured?.width ?? orig.w,
+        h: n.height ?? n.measured?.height ?? orig.h,
+      };
+    })
+    .filter((n): n is CanvasDocument["nodes"][number] => n !== null);
+  return { ...document, nodes, edges: pruneDanglingEdges(nodes, document.edges) };
+}
+
+export function CanvasBoard({ document, onChange, onRunNode, onFetchUrl, onSelectionChange }: CanvasBoardProps) {
+  const { resolvedTheme } = useTheme();
   const settings = useSystemSettingsQuery().data;
   const analyzeModel = settings?.connections?.find((c) => c.isActive)?.model ?? null;
   const imageModel = settings?.image?.model ?? null;
@@ -211,11 +323,10 @@ export function CanvasBoard({ document, onChange, onRunNode, onFetchUrl, onSearc
             onPatch: (patch: Record<string, unknown>) => patchNode(n.id, patch),
             onRun: () => onRunNode(n.id),
             onFetchUrl: () => onFetchUrl(n.id),
-            onSearch: () => onSearchNode(n.id),
           } satisfies NodeCallbacks,
         },
       })),
-    [document.nodes, patchNode, onRunNode, onFetchUrl, onSearchNode, analyzeModel, imageModel, selectedIds],
+    [document.nodes, patchNode, onRunNode, onFetchUrl, analyzeModel, imageModel, selectedIds],
   );
 
   // React Flow's live node state. It owns positions during a drag so nodes follow
@@ -273,18 +384,18 @@ export function CanvasBoard({ document, onChange, onRunNode, onFetchUrl, onSearc
         return;
       }
 
-      // Commit only structural changes (drag end, deletions) to the document. A
-      // batch that is purely selection or measurement leaves the document alone.
-      if (!changes.some((c) => c.type === "position" || c.type === "remove")) {
+      // Commit structural geometry changes to the document: drag end, deletions,
+      // and the end of a NodeResizer drag (resize-end). A batch that is purely
+      // selection or passive measurement leaves the document alone -- crucially,
+      // mid-resize and ResizeObserver measurement `dimensions` changes are
+      // excluded so we neither churn the document nor persist a half-drag size.
+      const structural = changes.some(
+        (c) => c.type === "position" || c.type === "remove" || isResizeEndChange(c),
+      );
+      if (!structural) {
         return;
       }
-      const nodes = next
-        .map((n) => {
-          const orig = document.nodes.find((d) => d.id === n.id);
-          return orig ? { ...orig, x: n.position.x, y: n.position.y } : null;
-        })
-        .filter((n): n is (typeof document.nodes)[number] => n !== null);
-      onChange({ ...document, nodes, edges: pruneDanglingEdges(nodes, document.edges) });
+      onChange(commitNodeGeometry(document, next as GeometrySource[]));
     },
     [document, onChange, rfNodes, selectedIds, onSelectionChange],
   );
@@ -318,6 +429,11 @@ export function CanvasBoard({ document, onChange, onRunNode, onFetchUrl, onSearc
     [document, onChange, rfEdges],
   );
 
+  const validateConnection = useCallback(
+    (conn: Connection | Edge) => isValidConnection(rfNodes, rfEdges, conn),
+    [rfNodes, rfEdges],
+  );
+
   return (
     <div className="h-full w-full">
       <ReactFlowProvider>
@@ -328,8 +444,10 @@ export function CanvasBoard({ document, onChange, onRunNode, onFetchUrl, onSearc
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onConnect={onConnect}
+          isValidConnection={validateConnection}
           deleteKeyCode={["Delete", "Backspace"]}
           defaultViewport={document.viewport}
+          colorMode={resolvedTheme === "dark" ? "dark" : "light"}
         >
           <Background />
           <Controls />

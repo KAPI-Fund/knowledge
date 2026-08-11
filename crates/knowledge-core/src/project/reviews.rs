@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
@@ -44,6 +44,14 @@ pub struct ReviewSweepResult {
   pub unresolved_ids: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewBatchUpdateResult {
+  pub updated_ids: Vec<String>,
+  pub not_found_ids: Vec<String>,
+  pub count: usize,
+}
+
 #[derive(Debug, Default)]
 struct WikiIndex {
   by_id: BTreeSet<String>,
@@ -61,6 +69,10 @@ const REVIEW_OPENER_PREFIX: &str = "---REVIEW:";
 const REVIEW_CLOSER: &str = "---END REVIEW---";
 
 pub fn load_reviews(root: &ProjectRoot) -> Result<ReviewStore, ProjectRootError> {
+  load_review_store_raw(root).map(normalize_review_store)
+}
+
+fn load_review_store_raw(root: &ProjectRoot) -> Result<ReviewStore, ProjectRootError> {
   let path = root.safe_join(".knowledge/reviews/items.json")?;
   let raw = fs::read_to_string(path)?;
   serde_json::from_str(&raw).map_err(|error| ProjectRootError::InvalidSourcePayload(error.to_string()))
@@ -68,7 +80,8 @@ pub fn load_reviews(root: &ProjectRoot) -> Result<ReviewStore, ProjectRootError>
 
 pub fn save_reviews(root: &ProjectRoot, store: &ReviewStore) -> Result<(), ProjectRootError> {
   let path = root.safe_join(".knowledge/reviews/items.json")?;
-  let json = serde_json::to_string(store)
+  let normalized = normalize_review_store(store.clone());
+  let json = serde_json::to_string(&normalized)
     .map_err(|error| ProjectRootError::InvalidSourcePayload(error.to_string()))?;
   fs::write(path, json)?;
   Ok(())
@@ -83,14 +96,8 @@ pub fn maybe_add_review_for_source(
     return Ok(());
   }
 
-  let mut store = load_reviews(root)?;
-  let id = format!("review-{}", source_name.trim_end_matches(".md"));
-  if store.reviews.iter().any(|review| review.id == id) {
-    return Ok(());
-  }
-
-  store.reviews.push(ReviewItem {
-    id,
+  let mut review = ReviewItem {
+    id: String::new(),
     status: "open".to_string(),
     review_type: "suggestion".to_string(),
     title: format!("Review {source_name}"),
@@ -99,8 +106,9 @@ pub fn maybe_add_review_for_source(
     affected_pages: None,
     search_queries: None,
     options: default_review_options(),
-  });
-  save_reviews(root, &store)
+  };
+  review.id = stable_review_id(&review);
+  append_review_items(root, vec![review]).map(|_| ())
 }
 
 pub fn save_generated_reviews(
@@ -113,22 +121,27 @@ pub fn save_generated_reviews(
     return Ok(0);
   }
 
+  append_review_items(root, parsed).map(|ids| ids.len())
+}
+
+pub fn append_review_items(
+  root: &ProjectRoot,
+  reviews: Vec<ReviewItem>,
+) -> Result<Vec<String>, ProjectRootError> {
+  if reviews.is_empty() {
+    return Ok(Vec::new());
+  }
+
   let mut store = load_reviews(root)?;
-  let mut inserted = 0usize;
-
-  for review in parsed {
-    if store.reviews.iter().any(|item| item.id == review.id) {
-      continue;
-    }
-    store.reviews.push(review);
-    inserted += 1;
+  let mut ids = Vec::new();
+  for review in reviews {
+    let mut normalized = review;
+    normalized.id = stable_review_id(&normalized);
+    ids.push(normalized.id.clone());
+    upsert_review_item(&mut store.reviews, normalized);
   }
-
-  if inserted > 0 {
-    save_reviews(root, &store)?;
-  }
-
-  Ok(inserted)
+  save_reviews(root, &store)?;
+  Ok(ids)
 }
 
 pub fn update_review_status(
@@ -136,16 +149,69 @@ pub fn update_review_status(
   review_id: &str,
   status: &str,
 ) -> Result<ReviewItem, ProjectRootError> {
-  let mut store = load_reviews(root)?;
-  let review = store
+  let result = update_review_statuses(root, &[review_id.to_string()], status)?;
+  let Some(updated_id) = result.updated_ids.first() else {
+    return Err(ProjectRootError::InvalidSourcePayload("review not found".to_string()));
+  };
+  let store = load_reviews(root)?;
+  store
     .reviews
-    .iter_mut()
-    .find(|review| review.id == review_id)
-    .ok_or_else(|| ProjectRootError::InvalidSourcePayload("review not found".to_string()))?;
-  review.status = status.to_string();
-  let updated = review.clone();
-  save_reviews(root, &store)?;
-  Ok(updated)
+    .into_iter()
+    .find(|review| review.id == *updated_id)
+    .ok_or_else(|| ProjectRootError::InvalidSourcePayload("review not found".to_string()))
+}
+
+pub fn update_review_statuses(
+  root: &ProjectRoot,
+  review_ids: &[String],
+  status: &str,
+) -> Result<ReviewBatchUpdateResult, ProjectRootError> {
+  if status != "resolved" && status != "dismissed" && status != "open" {
+    return Err(ProjectRootError::InvalidSourcePayload(format!(
+      "unsupported review status {status}"
+    )));
+  }
+
+  let raw_store = load_review_store_raw(root)?;
+  let mut id_aliases = BTreeMap::new();
+  for review in &raw_store.reviews {
+    id_aliases.insert(review.id.clone(), stable_review_id(review));
+  }
+  let mut store = normalize_review_store(raw_store);
+  let mut updated_ids = Vec::new();
+  let mut not_found_ids = Vec::new();
+  let mut changed = false;
+
+  for requested_id in review_ids {
+    let stable_requested_id = id_aliases.get(requested_id).unwrap_or(requested_id);
+    let Some(review) = store
+      .reviews
+      .iter_mut()
+      .find(|review| review.id == *stable_requested_id || stable_review_id(review) == *stable_requested_id)
+    else {
+      not_found_ids.push(requested_id.clone());
+      continue;
+    };
+
+    let stable_id = stable_review_id(review);
+    review.id = stable_id.clone();
+    if review.status != status {
+      review.status = status.to_string();
+    }
+    updated_ids.push(stable_id);
+    changed = true;
+  }
+
+  if changed {
+    store = normalize_review_store(store);
+    save_reviews(root, &store)?;
+  }
+
+  Ok(ReviewBatchUpdateResult {
+    count: updated_ids.len(),
+    updated_ids,
+    not_found_ids,
+  })
 }
 
 pub fn sweep_resolved_reviews(root: &ProjectRoot) -> Result<ReviewSweepResult, ProjectRootError> {
@@ -269,34 +335,10 @@ pub fn resolve_review_ids(
   root: &ProjectRoot,
   review_ids: &[String],
 ) -> Result<ReviewSweepResult, ProjectRootError> {
-  let mut store = load_reviews(root)?;
-  let wanted = review_ids.iter().cloned().collect::<BTreeSet<_>>();
-  let mut resolved_ids = Vec::new();
-  let mut unresolved_ids = Vec::new();
-
-  for review in &mut store.reviews {
-    if review.status != "open" {
-      continue;
-    }
-    if wanted.contains(&review.id) {
-      review.status = "resolved".to_string();
-      resolved_ids.push(review.id.clone());
-    }
-  }
-
-  for review_id in review_ids {
-    if !resolved_ids.iter().any(|resolved| resolved == review_id) {
-      unresolved_ids.push(review_id.clone());
-    }
-  }
-
-  if !resolved_ids.is_empty() {
-    save_reviews(root, &store)?;
-  }
-
+  let result = update_review_statuses(root, review_ids, "resolved")?;
   Ok(ReviewSweepResult {
-    resolved_ids,
-    unresolved_ids,
+    resolved_ids: result.updated_ids,
+    unresolved_ids: result.not_found_ids,
   })
 }
 
@@ -308,7 +350,6 @@ fn parse_review_blocks(source_name: &str, text: &str) -> Vec<ReviewItem> {
   let normalized = text.replace("\r\n", "\n");
   let mut reviews = Vec::new();
   let mut remaining = normalized.as_str();
-  let source_stem = source_name.trim_end_matches(".md");
 
   while let Some(start) = remaining.find(REVIEW_OPENER_PREFIX) {
     remaining = &remaining[start + REVIEW_OPENER_PREFIX.len()..];
@@ -349,13 +390,8 @@ fn parse_review_blocks(source_name: &str, text: &str) -> Vec<ReviewItem> {
       .trim()
       .to_string();
 
-    reviews.push(ReviewItem {
-      id: format!(
-        "review-{}-{}-{}",
-        source_stem,
-        slugify(&review_type),
-        slugify(title)
-      ),
+    let mut review = ReviewItem {
+      id: String::new(),
       status: "open".to_string(),
       review_type: normalize_review_type(&review_type).to_string(),
       title: title.to_string(),
@@ -368,7 +404,9 @@ fn parse_review_blocks(source_name: &str, text: &str) -> Vec<ReviewItem> {
       affected_pages,
       search_queries,
       options,
-    });
+    };
+    review.id = stable_review_id(&review);
+    reviews.push(review);
   }
 
   reviews
@@ -416,6 +454,86 @@ fn collect_wiki_index(root: &Path, index: &mut WikiIndex) -> Result<(), ProjectR
   Ok(())
 }
 
+pub fn stable_review_id(review: &ReviewItem) -> String {
+  review_id_for_parts(&review.review_type, &review.title)
+}
+
+pub fn review_id_for_parts(review_type: &str, title: &str) -> String {
+  // upstream_llm_wiki/src/stores/review-store.ts reviewIdFor (L49-57):
+  // FNV-1a over UTF-16 code units to match JavaScript charCodeAt.
+  let key = format!("{}::{}", review_type, normalize_review_title(title));
+  let mut hash = 0x811c9dc5u32;
+  for unit in key.encode_utf16() {
+    hash ^= u32::from(unit);
+    hash = hash.wrapping_mul(0x0100_0193);
+  }
+  format!("review-{hash:08x}")
+}
+
+fn normalize_review_store(store: ReviewStore) -> ReviewStore {
+  let mut reviews = Vec::new();
+  for mut review in store.reviews {
+    review.id = stable_review_id(&review);
+    upsert_review_item(&mut reviews, review);
+  }
+  ReviewStore { reviews }
+}
+
+fn upsert_review_item(reviews: &mut Vec<ReviewItem>, review: ReviewItem) {
+  if let Some(existing) = reviews.iter_mut().find(|existing| existing.id == review.id) {
+    *existing = merge_review_items(existing.clone(), review);
+  } else {
+    reviews.push(review);
+  }
+}
+
+fn merge_review_items(a: ReviewItem, b: ReviewItem) -> ReviewItem {
+  let status = merge_review_status(&a.status, &b.status).to_string();
+  ReviewItem {
+    id: a.id,
+    status,
+    review_type: a.review_type,
+    title: a.title,
+    description: if a.description.trim().is_empty() {
+      b.description
+    } else {
+      a.description
+    },
+    source_path: a.source_path.or(b.source_path),
+    affected_pages: union_optional_strings(a.affected_pages, b.affected_pages),
+    search_queries: union_optional_strings(a.search_queries, b.search_queries),
+    options: merge_review_options(a.options, b.options),
+  }
+}
+
+fn merge_review_status(a: &str, b: &str) -> &'static str {
+  if a == "resolved" || b == "resolved" {
+    "resolved"
+  } else if a == "dismissed" || b == "dismissed" {
+    "dismissed"
+  } else {
+    "open"
+  }
+}
+
+fn union_optional_strings(a: Option<Vec<String>>, b: Option<Vec<String>>) -> Option<Vec<String>> {
+  let mut values = Vec::new();
+  for value in a.into_iter().flatten().chain(b.into_iter().flatten()) {
+    if !values.iter().any(|existing| existing == &value) {
+      values.push(value);
+    }
+  }
+  if values.is_empty() { None } else { Some(values) }
+}
+
+fn merge_review_options(a: Vec<ReviewOption>, b: Vec<ReviewOption>) -> Vec<ReviewOption> {
+  let mut by_action = BTreeMap::new();
+  for option in a.into_iter().chain(b) {
+    by_action.entry(option.action.clone()).or_insert(option);
+  }
+  by_action.into_values().collect()
+}
+
 fn should_auto_resolve_review(review: &ReviewItem, index: &WikiIndex) -> bool {
   match review.review_type.as_str() {
     "missing-page" => extract_candidate_page_names(review)
@@ -441,22 +559,38 @@ fn extract_candidate_page_names(review: &ReviewItem) -> Vec<String> {
 }
 
 fn normalize_review_title(title: &str) -> String {
-  let trimmed = title.trim();
+  // upstream_llm_wiki/src/lib/review-utils.ts normalizeReviewTitle (L21-28).
+  let trimmed = title.trim_start();
   if trimmed.is_empty() {
     return String::new();
   }
 
-  let lower = trimmed.to_lowercase();
   let prefixes = [
-    "missing page:",
-    "missing-page:",
-    "duplicate page:",
-    "possible duplicate:",
+    "missing page",
+    "missing-page",
+    "missingpage",
+    "duplicate page",
+    "duplicate-page",
+    "duplicatepage",
+    "possible duplicate",
+    "possible-duplicate",
+    "possibleduplicate",
+    "缺失页面",
+    "缺少页面",
+    "重复页面",
+    "疑似重复",
   ];
-
+  let lower = trimmed.to_lowercase();
   for prefix in prefixes {
-    if let Some(stripped) = lower.strip_prefix(prefix) {
-      return collapse_whitespace(stripped);
+    if let Some(rest) = lower.strip_prefix(prefix) {
+      let original_rest = &trimmed[trimmed.len() - rest.len()..];
+      if original_rest.starts_with(':') || original_rest.starts_with('：') {
+        let stripped = original_rest
+          .trim_start_matches(':')
+          .trim_start_matches('：')
+          .trim();
+        return collapse_whitespace(&stripped.to_lowercase());
+      }
     }
   }
 
@@ -646,30 +780,17 @@ fn default_review_options() -> Vec<ReviewOption> {
   ]
 }
 
-fn slugify(value: &str) -> String {
-  let mut slug = String::new();
-  let mut last_dash = false;
-
-  for ch in value.chars() {
-    if ch.is_ascii_alphanumeric() {
-      slug.push(ch.to_ascii_lowercase());
-      last_dash = false;
-    } else if !last_dash && !slug.is_empty() {
-      slug.push('-');
-      last_dash = true;
-    }
-  }
-
-  slug.trim_matches('-').to_string()
-}
-
 #[cfg(test)]
 mod tests {
   use tempfile::tempdir;
 
   use crate::project::scaffold::initialize_project;
 
-  use super::{ReviewItem, ReviewStore, default_review_options, save_reviews, sweep_resolved_reviews};
+  use super::{
+    ReviewItem, ReviewOption, ReviewStore, default_review_options, maybe_add_review_for_source,
+    normalize_review_title, parse_review_blocks, review_id_for_parts, save_reviews, stable_review_id,
+    sweep_resolved_reviews, update_review_statuses,
+  };
 
   #[test]
   fn review_store_deserializes_legacy_items_without_structured_fields() {
@@ -694,6 +815,126 @@ mod tests {
     assert_eq!(review.affected_pages, None);
     assert_eq!(review.search_queries, None);
     assert_eq!(review.options.len(), default_review_options().len());
+  }
+
+  #[test]
+  fn stable_review_ids_normalize_common_title_prefixes() {
+    let english = review_id_for_parts("missing-page", "Missing page: Attention Mechanism");
+    let chinese = review_id_for_parts("missing-page", "缺失页面： Attention Mechanism");
+    let bare = review_id_for_parts("missing-page", "Attention   Mechanism");
+    let duplicate = review_id_for_parts("duplicate", "Attention Mechanism");
+
+    assert_eq!(english, chinese);
+    assert_eq!(english, bare);
+    assert_ne!(english, duplicate);
+    assert_eq!(normalize_review_title("Missing page Attention"), "missing page attention");
+    assert_eq!(normalize_review_title("疑似重复 注意力"), "疑似重复 注意力");
+  }
+
+  #[test]
+  fn load_reviews_migrates_legacy_ids_and_merges_duplicates() {
+    let temp = tempdir().expect("tempdir");
+    let root = initialize_project(temp.path()).expect("project");
+    save_reviews(
+      &root,
+      &ReviewStore {
+        reviews: vec![
+          ReviewItem {
+            id: "review-old-open".to_string(),
+            status: "open".to_string(),
+            review_type: "missing-page".to_string(),
+            title: "Attention".to_string(),
+            description: "".to_string(),
+            source_path: Some("raw/sources/a.md".to_string()),
+            affected_pages: Some(vec!["wiki/a.md".to_string()]),
+            search_queries: Some(vec!["attention".to_string()]),
+            options: vec![ReviewOption {
+              label: "Open".to_string(),
+              action: "open:a".to_string(),
+            }],
+          },
+          ReviewItem {
+            id: "review-old-resolved".to_string(),
+            status: "resolved".to_string(),
+            review_type: "missing-page".to_string(),
+            title: "Missing page: Attention".to_string(),
+            description: "Resolved copy".to_string(),
+            source_path: None,
+            affected_pages: Some(vec!["wiki/b.md".to_string()]),
+            search_queries: Some(vec!["attention".to_string(), "transformer".to_string()]),
+            options: vec![ReviewOption {
+              label: "Skip".to_string(),
+              action: "Skip".to_string(),
+            }],
+          },
+        ],
+      },
+    )
+    .expect("save reviews");
+
+    let store = super::load_reviews(&root).expect("load reviews");
+    assert_eq!(store.reviews.len(), 1);
+    let review = &store.reviews[0];
+    assert_eq!(review.id, review_id_for_parts("missing-page", "Attention"));
+    assert_eq!(review.status, "resolved");
+    assert_eq!(review.affected_pages.as_ref().expect("pages").len(), 2);
+    assert_eq!(review.search_queries.as_ref().expect("queries").len(), 2);
+    assert_eq!(review.options.len(), 2);
+  }
+
+  #[test]
+  fn batch_update_accepts_legacy_ids_and_reports_not_found() {
+    let temp = tempdir().expect("tempdir");
+    let root = initialize_project(temp.path()).expect("project");
+    let review = ReviewItem {
+      id: "review-legacy-id".to_string(),
+      status: "open".to_string(),
+      review_type: "suggestion".to_string(),
+      title: "Review legacy source".to_string(),
+      description: "Needs attention".to_string(),
+      source_path: None,
+      affected_pages: None,
+      search_queries: None,
+      options: default_review_options(),
+    };
+    let stable_id = stable_review_id(&review);
+    std::fs::write(
+      temp.path().join(".knowledge/reviews/items.json"),
+      serde_json::to_string(&ReviewStore { reviews: vec![review] }).expect("json"),
+    )
+    .expect("legacy review sidecar");
+
+    let result = update_review_statuses(
+      &root,
+      &["review-legacy-id".to_string(), "review-missing".to_string()],
+      "dismissed",
+    )
+    .expect("batch update");
+
+    assert_eq!(result.updated_ids, vec![stable_id.clone()]);
+    assert_eq!(result.not_found_ids, vec!["review-missing".to_string()]);
+    assert_eq!(result.count, 1);
+
+    let store = super::load_reviews(&root).expect("load reviews");
+    assert_eq!(store.reviews[0].id, stable_id);
+    assert_eq!(store.reviews[0].status, "dismissed");
+  }
+
+  #[test]
+  fn generated_reviews_use_stable_ids() {
+    let parsed = parse_review_blocks(
+      "source.md",
+      "---REVIEW:missing-page|Missing page: Attention---\nCreate it\n---END REVIEW---",
+    );
+    assert_eq!(parsed.len(), 1);
+    assert_eq!(parsed[0].id, review_id_for_parts("missing-page", "Attention"));
+
+    let temp = tempdir().expect("tempdir");
+    let root = initialize_project(temp.path()).expect("project");
+    maybe_add_review_for_source(&root, "source.md", "missing question")
+      .expect("add review");
+    let store = super::load_reviews(&root).expect("load reviews");
+    assert_eq!(store.reviews[0].id, stable_review_id(&store.reviews[0]));
   }
 
   #[test]

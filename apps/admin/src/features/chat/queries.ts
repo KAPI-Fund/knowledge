@@ -3,16 +3,28 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   createConversation,
   deleteConversation,
+  listAgentSkills,
   listConversationMessages,
   listConversations,
   renameConversation,
+  saveMessageToWiki,
 } from "../shared/api";
 
 export const conversationKeys = {
   list: (projectId: string) => ["conversations", projectId] as const,
   messages: (projectId: string, conversationId: string) =>
     ["conversation-messages", projectId, conversationId] as const,
+  agentSkills: (projectId: string) => ["agent-skills", projectId] as const,
 };
+
+export function useAgentSkillsQuery(projectId: string) {
+  return useQuery({
+    queryKey: conversationKeys.agentSkills(projectId),
+    queryFn: () => listAgentSkills(projectId),
+    enabled: Boolean(projectId),
+    staleTime: 60_000,
+  });
+}
 
 export function useConversationsQuery(projectId: string) {
   return useQuery({
@@ -47,6 +59,17 @@ export function useRenameConversationMutation(projectId: string) {
       renameConversation({ projectId, ...input }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: conversationKeys.list(projectId) });
+    },
+  });
+}
+
+export function useSaveMessageToWikiMutation(projectId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { conversationId: string; messageId: string }) =>
+      saveMessageToWiki({ projectId, ...input }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["project-files", projectId] });
     },
   });
 }

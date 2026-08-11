@@ -4,8 +4,8 @@ import { useParams } from "react-router-dom";
 
 import { EmptyState } from "@/components/layout/empty-state";
 import { DataTable } from "@/components/shared/data-table";
-import { FilterToolbar } from "@/components/shared/filter-toolbar";
 import { PageHeader } from "@/components/shared/page-header";
+import { Input } from "@/components/ui/input";
 
 import { useProjectAuditLogsQuery } from "./queries";
 
@@ -52,10 +52,12 @@ export function AuditPage() {
       />
       {rows.length ? (
         <div className="grid gap-3">
-          <FilterToolbar
-            onSearchChange={setFilter}
-            searchPlaceholder="Filter by action or summary"
-            searchValue={filter}
+          <Input
+            aria-label="Filter audit records"
+            className="h-8 w-40 lg:w-64"
+            onChange={(event) => setFilter(event.target.value)}
+            placeholder="Filter by action or summary"
+            value={filter}
           />
           <DataTable columns={columns} data={filtered} isLoading={items.isLoading} />
         </div>

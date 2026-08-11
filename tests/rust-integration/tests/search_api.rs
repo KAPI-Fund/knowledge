@@ -92,6 +92,71 @@ async fn search_returns_matching_wiki_pages_and_snippets() {
 }
 
 #[tokio::test]
+async fn search_blends_graph_neighbors_into_keyword_results() {
+    let temp = tempdir().unwrap();
+    let _env = TestEnvironment::start("search-graph-blend").await.unwrap();
+    let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
+    let state = bootstrap_state(&config).await.unwrap();
+    let (cookie, csrf) = login_and_csrf(state.clone()).await;
+    let project_root = temp.path().join("search-graph-blend-project");
+    let project_id = create_project(state.clone(), &cookie, &csrf, project_root.clone()).await;
+
+    fs::write(
+    project_root.join("wiki/concepts/chain-of-thought.md"),
+    "---\ntype: concept\ntitle: Chain of Thought\nsources: []\n---\n\n# Chain of Thought\n\nDeliberate traces improve stepwise problem solving. See [[softmax]].\n",
+  )
+  .unwrap();
+    fs::write(
+        project_root.join("wiki/concepts/softmax.md"),
+        "---\ntype: concept\ntitle: Softmax\nsources: []\n---\n\n# Softmax\n\nNormalizes logits into a probability distribution.\n",
+    )
+    .unwrap();
+
+    let response = build_app(state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/projects/{project_id}/search"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .body(Body::from(
+                    json!({
+                      "query": "deliberate traces",
+                      "topK": 5
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload = read_json(response.into_body()).await;
+    // Graph hits force hybrid mode (upstream commands/search.rs L519-529).
+    assert_eq!(payload.get("mode").and_then(Value::as_str), Some("hybrid"));
+    assert!(payload.get("graphHits").and_then(Value::as_u64).unwrap() >= 1);
+    let results = payload.get("results").and_then(Value::as_array).unwrap();
+    let neighbor = results
+        .iter()
+        .find(|result| {
+            result.get("path").and_then(Value::as_str) == Some("wiki/concepts/softmax.md")
+        })
+        .expect("graph neighbor blended into results");
+    assert_eq!(
+        neighbor.get("graphRelatedTo").and_then(Value::as_array),
+        Some(&vec![Value::String("Chain of Thought".to_string())])
+    );
+    assert!(
+        neighbor
+            .get("snippet")
+            .and_then(Value::as_str)
+            .unwrap()
+            .contains("Graph neighbor of Chain of Thought")
+    );
+}
+
+#[tokio::test]
 async fn graph_returns_nodes_and_edges_from_wikilinks() {
     let temp = tempdir().unwrap();
     let _env = TestEnvironment::start("graph-query").await.unwrap();
@@ -289,24 +354,9 @@ async fn search_uses_provider_embeddings_for_vector_only_retrieval() {
   )
   .unwrap();
 
-    sqlx::query(
-        "UPDATE system_settings
-     SET provider_mode = $1,
-         provider_base_url = $2,
-         provider_api_key = $3,
-         provider_model = $4,
-         provider_embedding_model = $5,
-         provider_timeout_seconds = $6",
-    )
-    .bind("openai-compatible")
-    .bind(mock.base_url())
-    .bind("test-key")
-    .bind("mock-model")
-    .bind("mock-embedding")
-    .bind(30_i64)
-    .execute(&state.pool)
-    .await
-    .unwrap();
+    support::seed_provider_connection(&state.pool, &mock.base_url(), "test-key", "mock-model", 30)
+        .await;
+    support::seed_embedding(&state.pool, &mock.base_url(), "test-key", "mock-embedding", 30).await;
 
     let response = build_app(state)
         .oneshot(
@@ -436,24 +486,9 @@ async fn same_stem_wiki_pages_index_and_delete_independently() {
   )
   .unwrap();
 
-    sqlx::query(
-        "UPDATE system_settings
-     SET provider_mode = $1,
-         provider_base_url = $2,
-         provider_api_key = $3,
-         provider_model = $4,
-         provider_embedding_model = $5,
-         provider_timeout_seconds = $6",
-    )
-    .bind("openai-compatible")
-    .bind(mock.base_url())
-    .bind("test-key")
-    .bind("mock-model")
-    .bind("mock-embedding")
-    .bind(30_i64)
-    .execute(&state.pool)
-    .await
-    .unwrap();
+    support::seed_provider_connection(&state.pool, &mock.base_url(), "test-key", "mock-model", 30)
+        .await;
+    support::seed_embedding(&state.pool, &mock.base_url(), "test-key", "mock-embedding", 30).await;
 
     // Hybrid search triggers the embedding index refresh.
     let response = build_app(state.clone())

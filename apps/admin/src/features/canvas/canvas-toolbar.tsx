@@ -2,7 +2,13 @@ import { Database, FileText, Globe, ImageIcon, Search, Sparkles } from "lucide-r
 import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 import type { SkillNodePayload } from "./chat-panel";
 import { KbProjectPicker } from "./kb-picker";
@@ -69,6 +75,9 @@ export function CanvasToolbar({ onAdd }: CanvasToolbarProps) {
           <DialogContent>
             <DialogHeader>
               <DialogTitle>Select knowledge base</DialogTitle>
+              <DialogDescription>
+                Pick a knowledge base you can access to add it to the canvas.
+              </DialogDescription>
             </DialogHeader>
             <KbProjectPicker
               onPick={(project) => {

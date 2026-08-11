@@ -141,6 +141,52 @@ async fn resolve_target_space(
     Ok(space_id.to_string())
 }
 
+/// Every project the user can access, per `tenancy::access::project_access_role`.
+/// The SQL only narrows candidates (personal-owned, org-member, and org's team
+/// spaces); the per-row role check is the authorization source of truth.
+pub async fn list_accessible_projects_for_user(
+    state: &AppState,
+    user_id: &str,
+) -> Result<Vec<ProjectDto>, ApiError> {
+    let candidates = sqlx::query_as::<_, (String, String, String, String)>(
+        "SELECT p.id, p.name, p.root_path, p.created_at \
+         FROM projects p JOIN spaces s ON s.id = p.space_id \
+         WHERE s.kind = 'personal' AND s.owner_user_id = $1 \
+         UNION \
+         SELECT p.id, p.name, p.root_path, p.created_at \
+         FROM projects p JOIN spaces s ON s.id = p.space_id \
+         WHERE s.kind = 'org' \
+           AND s.org_id IN (SELECT org_id FROM organization_members WHERE user_id = $1) \
+         UNION \
+         SELECT p.id, p.name, p.root_path, p.created_at \
+         FROM projects p JOIN spaces s ON s.id = p.space_id \
+         JOIN teams t ON t.id = s.team_id \
+         WHERE s.kind = 'team' \
+           AND t.org_id IN (SELECT org_id FROM organization_members WHERE user_id = $1) \
+         ORDER BY 4 ASC",
+    )
+    .bind(user_id)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(ApiError::from)?;
+
+    let mut projects = Vec::new();
+    for (id, name, root_path, created_at) in candidates {
+        let role = crate::tenancy::access::project_access_role(&state.pool, &id, user_id)
+            .await
+            .map_err(ApiError::from)?;
+        if role.is_some() {
+            projects.push(ProjectDto {
+                id,
+                name,
+                root_path: normalize_project_path_string(&root_path),
+                created_at,
+            });
+        }
+    }
+    Ok(projects)
+}
+
 pub async fn project_root_for_id(
     state: &AppState,
     project_id: &str,

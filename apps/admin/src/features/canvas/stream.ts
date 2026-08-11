@@ -37,6 +37,7 @@ export interface NodeRunHandlers {
     createdAt: string;
     content?: string;
     url?: string;
+    markdown?: string;
   }) => void;
   onError: (message: string) => void;
 }

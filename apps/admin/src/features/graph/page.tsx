@@ -1,6 +1,6 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
-import { EyeOff, Filter, Lightbulb, Palette } from "lucide-react";
+import { EyeOff, Filter, Grid2x2, Lightbulb, Palette, Rotate3d } from "lucide-react";
 
 import { RouteStatePane } from "@/components/layout/route-state-pane";
 import { PageHeader } from "@/components/shared/page-header";
@@ -17,8 +17,14 @@ import { applyGraphSearch } from "./graph-search";
 import { detectKnowledgeGaps, findSurprisingConnections, knowledgeGapKey } from "./graph-insights";
 import { buildGraphModel } from "./wiki-graph";
 import { useProjectGraphQuery } from "./queries";
+import { StarfieldControls } from "./starfield-controls";
 import type { ColorMode } from "./graph-loader";
+import type { StarfieldLayout } from "./starfield-forces";
 import type { GraphFilterState } from "./types";
+
+const StarfieldCanvas = lazy(() =>
+  import("./starfield-canvas").then((module) => ({ default: module.StarfieldCanvas })),
+);
 
 export function GraphPage() {
   const { projectId = "" } = useParams();
@@ -37,6 +43,8 @@ function GraphView({ projectId }: { projectId: string }) {
     hiddenNodeIds: new Set(),
   }));
   const [colorMode, setColorMode] = useState<ColorMode>("type");
+  const [viewMode, setViewMode] = useState<"3d" | "2d">("3d");
+  const [layout3d, setLayout3d] = useState<StarfieldLayout>("sphere");
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [highlightedNodes, setHighlightedNodes] = useState<Set<string>>(() => new Set());
   const [showInsights, setShowInsights] = useState(false);
@@ -132,12 +140,30 @@ function GraphView({ projectId }: { projectId: string }) {
   const graphError = graph.error ? normalizeAppError(graph.error) : null;
 
   return (
-    <div className="grid gap-6">
+    <div className="flex h-full min-h-0 flex-col gap-6">
       <PageHeader
         description="Explore the project knowledge graph: search, filter, and inspect node neighborhoods."
         title="Graph"
         actions={
           <div className="flex flex-wrap items-center gap-2">
+          <Button
+            aria-pressed={viewMode === "3d"}
+            onClick={() => setViewMode("3d")}
+            size="sm"
+            variant={viewMode === "3d" ? "default" : "outline"}
+          >
+            <Rotate3d className="mr-1.5 h-3.5 w-3.5" />
+            3D
+          </Button>
+          <Button
+            aria-pressed={viewMode === "2d"}
+            onClick={() => setViewMode("2d")}
+            size="sm"
+            variant={viewMode === "2d" ? "default" : "outline"}
+          >
+            <Grid2x2 className="mr-1.5 h-3.5 w-3.5" />
+            2D
+          </Button>
           <Button
             aria-pressed={filters.hideStructural}
             onClick={() => setFilters((prev) => ({ ...prev, hideStructural: !prev.hideStructural }))}
@@ -199,18 +225,41 @@ function GraphView({ projectId }: { projectId: string }) {
       ) : graph.isLoading && !graph.data ? (
         <RouteStatePane description="Loading project graph." state="loading" title="Graph" />
       ) : (
-        <div className="graph-layout">
-          <div ref={graphContainerRef} className="relative h-[680px] overflow-hidden rounded-lg border">
+        <div className="grid min-h-0 flex-1 gap-6 xl:grid-cols-[minmax(0,1.3fr)_360px]">
+          <div ref={graphContainerRef} className="relative h-[680px] overflow-hidden rounded-lg border xl:h-full xl:min-h-0">
             {searched.nodes.length > 0 ? (
               <>
-                <GraphCanvas
-                  nodes={searched.nodes}
-                  edges={searched.edges}
-                  colorMode={colorMode}
-                  highlightedNodes={highlightedNodes}
-                  onNodeClick={handleNodeClick}
-                  onNodeContextMenu={handleNodeContextMenu}
-                />
+                {viewMode === "3d" ? (
+                  <Suspense
+                    fallback={
+                      <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                        Loading 3D view...
+                      </div>
+                    }
+                  >
+                    <StarfieldCanvas
+                      nodes={searched.nodes}
+                      edges={searched.edges}
+                      colorMode={colorMode}
+                      layout={layout3d}
+                      selectedNodeId={selectedNodeId}
+                      highlightedNodes={highlightedNodes}
+                      onNodeClick={handleNodeClick}
+                      onNodeContextMenu={handleNodeContextMenu}
+                      onBackgroundClick={() => setSelectedNodeId(null)}
+                    />
+                    <StarfieldControls layout={layout3d} onLayoutChange={setLayout3d} />
+                  </Suspense>
+                ) : (
+                  <GraphCanvas
+                    nodes={searched.nodes}
+                    edges={searched.edges}
+                    colorMode={colorMode}
+                    highlightedNodes={highlightedNodes}
+                    onNodeClick={handleNodeClick}
+                    onNodeContextMenu={handleNodeContextMenu}
+                  />
+                )}
                 <GraphLegend
                   nodes={model.nodes}
                   communities={model.communities}
@@ -235,15 +284,15 @@ function GraphView({ projectId }: { projectId: string }) {
                   type="button"
                 />
                 <div
-                  className="absolute z-20 w-48 rounded-md border bg-background py-1 text-xs shadow-lg"
+                  className="absolute z-20 w-48 overflow-hidden rounded-md border bg-popover p-1 text-xs text-popover-foreground shadow-md"
                   style={{ left: contextMenu.x, top: contextMenu.y }}
                 >
-                  <div className="border-b px-3 py-2">
-                    <div className="truncate font-medium text-foreground">{contextNode.label}</div>
+                  <div className="border-b px-2 py-1.5">
+                    <div className="truncate font-medium">{contextNode.label}</div>
                     <div className="text-muted-foreground">{contextNode.linkCount} links</div>
                   </div>
                   <button
-                    className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-accent"
+                    className="mt-1 flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left hover:bg-accent hover:text-accent-foreground"
                     onClick={() => hideNode(contextNode.id)}
                     type="button"
                   >
@@ -255,9 +304,9 @@ function GraphView({ projectId }: { projectId: string }) {
             ) : null}
           </div>
 
-          <div className="grid gap-6">
+          <div className="grid gap-6 xl:h-full xl:min-h-0 xl:overflow-y-auto xl:pr-1">
             {filters.hiddenNodeIds.size > 0 ? (
-              <div className="rounded-lg border p-3 text-xs">
+              <div className="rounded-xl border bg-card p-3 text-xs text-card-foreground shadow-sm">
                 <div className="mb-2 font-medium text-muted-foreground">Hidden nodes</div>
                 <div className="grid max-h-24 gap-1 overflow-y-auto">
                   {[...filters.hiddenNodeIds].map((nodeId) => {

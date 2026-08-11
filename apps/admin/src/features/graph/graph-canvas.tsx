@@ -32,7 +32,9 @@ export function GraphCanvas({
   const [hoverState, setHoverState] = useState<HoverState>(null);
 
   return (
-    <div data-testid="graph-canvas" className="relative h-full w-full">
+    // The sigma palette is light-only (see graph-colors.ts), so the canvas
+    // keeps a light backdrop even when the app theme is dark.
+    <div data-testid="graph-canvas" className="relative h-full w-full bg-white">
       <SigmaContainer style={{ height: "100%", width: "100%" }} settings={SIGMA_BASE_SETTINGS}>
         <GraphLoader
           nodes={nodes}

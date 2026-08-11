@@ -5,7 +5,6 @@ import { pendingSaveStore } from "./pending-save-store";
 import type { CanvasDocument } from "./types";
 
 const extractUrl = vi.fn();
-const searchWeb = vi.fn();
 const saveCanvas = vi.fn();
 const runCanvasNode = vi.fn();
 
@@ -29,7 +28,6 @@ beforeEach(() => {
   currentParams = { canvasId: "c1" };
   canvasResult = { data: c1Data() };
   extractUrl.mockReset();
-  searchWeb.mockReset();
   saveCanvas.mockReset();
   saveCanvas.mockResolvedValue(undefined);
   runCanvasNode.mockReset();
@@ -39,7 +37,6 @@ beforeEach(() => {
 vi.mock("react-router-dom", () => ({ useParams: () => currentParams }));
 vi.mock("./api", () => ({
   extractUrl: (url: string) => extractUrl(url),
-  searchWeb: (query: string) => searchWeb(query),
   saveCanvas: (id: string, body: unknown) => saveCanvas(id, body),
 }));
 vi.mock("./stream", () => ({
@@ -67,7 +64,6 @@ vi.mock("./chat-panel", () => ({
 
 let boardProps: {
   onFetchUrl?: (id: string) => void;
-  onSearchNode?: (id: string) => void;
   onRunNode?: (id: string) => void;
   onSelectionChange?: (ids: string[]) => void;
   document?: {
@@ -183,7 +179,7 @@ describe("CanvasPage", () => {
     await waitFor(() => expect(extractUrl).toHaveBeenCalledWith("https://x.test"));
   });
 
-  it("runs a search node through the search endpoint", async () => {
+  it("runs a search node through the unified run endpoint", async () => {
     canvasResult = {
       data: {
         ...c1Data(),
@@ -196,11 +192,41 @@ describe("CanvasPage", () => {
         },
       },
     };
-    searchWeb.mockResolvedValue({ status: "ok", query: "cats", markdown: "# results", error: null });
     render(<CanvasPage />);
-    await waitFor(() => expect(boardProps.onSearchNode).toBeTypeOf("function"));
-    boardProps.onSearchNode?.("s1");
-    await waitFor(() => expect(searchWeb).toHaveBeenCalledWith("cats"));
+    await waitFor(() => expect(boardProps.onRunNode).toBeTypeOf("function"));
+    boardProps.onRunNode?.("s1");
+    await waitFor(() =>
+      expect(runCanvasNode).toHaveBeenCalledWith("c1", "s1", expect.anything()),
+    );
+  });
+
+  it("writes search results to markdown without appending a version", async () => {
+    canvasResult = {
+      data: {
+        ...c1Data(),
+        document: {
+          nodes: [
+            { id: "s1", type: "search", x: 0, y: 0, w: 280, h: 160, data: { query: "cats" } } as unknown as ReturnType<typeof c1Data>["document"]["nodes"][number],
+          ],
+          edges: [],
+          viewport: { x: 0, y: 0, zoom: 1 },
+        },
+      },
+    };
+    runCanvasNode.mockImplementation(
+      (_id: string, _nodeId: string, handlers: { onDone: (p: unknown) => void }) => {
+        handlers.onDone({ markdown: "# results" });
+        return Promise.resolve(undefined);
+      },
+    );
+    render(<CanvasPage />);
+    await waitFor(() => expect(boardProps.onRunNode).toBeTypeOf("function"));
+    boardProps.onRunNode?.("s1");
+    await waitFor(() => {
+      const node = boardProps.document?.nodes.find((n) => n.id === "s1");
+      expect(node?.data?.markdown).toBe("# results");
+      expect(node?.data?.versions).toBeUndefined();
+    });
   });
 
   it("creates reference edges when an analyze skill node references selected nodes", async () => {
@@ -218,6 +244,53 @@ describe("CanvasPage", () => {
       const edges = boardProps.document?.edges ?? [];
       expect(edges.some((e) => e.source === "u1")).toBe(true);
     });
+  });
+
+  it("links a skill node only to its explicit sources, not the latest node", async () => {
+    const data = c1Data();
+    canvasResult = {
+      data: {
+        ...data,
+        document: {
+          ...data.document,
+          nodes: [
+            ...data.document.nodes,
+            { id: "u2", type: "url", x: 320, y: 0, w: 280, h: 160, data: { url: "https://y.test" } },
+          ],
+        },
+      },
+    };
+    render(<CanvasPage />);
+    await waitFor(() => expect(chatProps.onSkillNode).toBeTypeOf("function"));
+    // /ppt ran against the selected node u1; the generated node must connect to
+    // u1 even though u2 is the most recently created (rightmost) node.
+    chatProps.onSkillNode?.({
+      node: { type: "html", data: { status: "running", jobId: "j1", sourceNodeIds: ["u1"] } },
+      x: 0,
+      y: 0,
+    });
+    await waitFor(() => expect((boardProps.document?.nodes ?? []).length).toBe(3));
+    const added = (boardProps.document?.nodes ?? []).find((n) => n.id !== "u1" && n.id !== "u2");
+    const edges = boardProps.document?.edges ?? [];
+    expect(edges.some((e) => e.source === "u1" && e.target === added?.id)).toBe(true);
+    expect(edges.some((e) => e.source === "u2")).toBe(false);
+  });
+
+  it("does not persist sourceNodeIds onto the created node's data", async () => {
+    render(<CanvasPage />);
+    await waitFor(() => expect(chatProps.onSkillNode).toBeTypeOf("function"));
+    chatProps.onSkillNode?.({
+      node: { type: "ai_analyze", data: { prompt: "sum", sourceNodeIds: ["u1"] } },
+      x: 0,
+      y: 0,
+    });
+    await waitFor(() => expect((boardProps.document?.nodes ?? []).length).toBe(2));
+    const added = (boardProps.document?.nodes ?? []).find((n) => n.id !== "u1");
+    expect(added?.data).not.toHaveProperty("sourceNodeIds");
+    expect(added?.data?.prompt).toBe("sum");
+    // The edge is still wired from the referenced source.
+    const edges = boardProps.document?.edges ?? [];
+    expect(edges.some((e) => e.source === "u1" && e.target === added?.id)).toBe(true);
   });
 
   it("derives the chat placement origin from the current viewport", async () => {

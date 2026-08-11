@@ -26,10 +26,14 @@ function MessagePane({
   title: string;
 }) {
   return (
-    <div className="grid place-items-center gap-2 rounded-md border border-border bg-card p-8 text-center">
-      <div className="text-muted-foreground">{icon}</div>
-      <p className="text-sm font-semibold text-foreground">{title}</p>
-      {description ? <p className="text-[13px] text-muted-foreground">{description}</p> : null}
+    <div className="grid place-items-center gap-3 rounded-lg border border-border bg-card px-6 py-10 text-center">
+      <div className="flex size-10 items-center justify-center rounded-full bg-muted text-muted-foreground">
+        {icon}
+      </div>
+      <div className="grid max-w-sm gap-1">
+        <p className="text-sm font-medium text-foreground">{title}</p>
+        {description ? <p className="text-sm text-muted-foreground">{description}</p> : null}
+      </div>
       {action}
     </div>
   );

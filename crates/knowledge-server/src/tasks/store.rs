@@ -93,12 +93,19 @@ pub async fn acquire_next_task(
     .map_err(|_| ApiError::internal("failed to format lease expiry"))?;
   let started_at = now_rfc3339()?;
 
+  // Ingest-queue pause (upstream ingest-queue.ts pause semantics, drain
+  // variant): while system_settings.ingest_paused, ingest-class tasks are not
+  // claimed; already-running tasks finish and other task types keep flowing.
   let task = sqlx::query_as::<_, TaskRecord>(
     "WITH next_task AS (
       SELECT id
       FROM project_tasks
       WHERE status IN ('queued', 'retry_waiting')
         AND (next_retry_at IS NULL OR next_retry_at <= $3)
+        AND (
+          task_type NOT IN ('project.import_source', 'project.ingest_source', 'project.delete_source')
+          OR NOT (SELECT ingest_paused FROM system_settings WHERE id = 1)
+        )
       ORDER BY created_at ASC
       LIMIT 1
       FOR UPDATE SKIP LOCKED

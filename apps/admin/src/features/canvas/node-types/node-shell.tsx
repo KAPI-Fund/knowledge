@@ -1,4 +1,4 @@
-import { Handle, Position } from "@xyflow/react";
+import { Handle, NodeResizer, Position } from "@xyflow/react";
 import type { ReactNode } from "react";
 
 import { Badge } from "@/components/ui/badge";
@@ -80,6 +80,17 @@ export function NodeShell({
         selected && "ring-2 ring-primary ring-offset-1 ring-offset-background",
       )}
     >
+      {/* Drag the bottom-right handle to resize; only shown while selected. The
+          committed size is persisted via the board's resize-end handler. */}
+      <NodeResizer
+        nodeId={nodeId}
+        isVisible={Boolean(selected)}
+        minWidth={200}
+        minHeight={120}
+        lineClassName="!border-primary/40"
+        handleClassName="!size-2.5 !rounded-sm !border-2 !border-background !bg-primary"
+      />
+
       {targetHandle ? (
         <Handle
           type="target"
@@ -109,7 +120,10 @@ export function NodeShell({
         </div>
       </div>
 
-      <div className="flex min-h-0 flex-1 flex-col gap-2 p-2.5">{children}</div>
+      {/* `nowheel` tells React Flow to let wheel events scroll this content
+          natively instead of zooming the canvas when the pointer is over a node.
+          `overflow-auto` gives overflowing bodies their own scrollbar. */}
+      <div className="nowheel flex min-h-0 flex-1 flex-col gap-2 overflow-auto p-2.5">{children}</div>
 
       <Handle
         type="source"

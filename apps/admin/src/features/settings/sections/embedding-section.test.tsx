@@ -17,7 +17,6 @@ describe("EmbeddingSection", () => {
     const user = userEvent.setup();
     updateSettings.mockResolvedValue({});
     settingsData.mockReturnValue({
-      providerMode: "openai-compatible",
       defaults: { language: "en", defaultQueryLimit: 8 },
       embedding: {
         enabled: true,
@@ -42,15 +41,13 @@ describe("EmbeddingSection", () => {
       model: "text-embedding-3-large",
     });
     expect(payload.embedding).not.toHaveProperty("apiKey");
-    // Top-level required fields still present.
-    expect(payload).toMatchObject({ providerMode: "openai-compatible", language: "en", defaultQueryLimit: 8 });
+    expect(Object.keys(payload)).toEqual(["embedding"]);
   });
 
   it("toggles enabled off and includes it in the block", async () => {
     const user = userEvent.setup();
     updateSettings.mockResolvedValue({});
     settingsData.mockReturnValue({
-      providerMode: "openai-compatible",
       defaults: { language: "en", defaultQueryLimit: 8 },
       embedding: { enabled: true, baseUrl: "", model: "", timeoutSeconds: null, apiKeyConfigured: false },
     });
@@ -60,5 +57,31 @@ describe("EmbeddingSection", () => {
     await user.click(screen.getByRole("button", { name: /save/i }));
 
     expect(updateSettings.mock.calls[0][0].embedding.enabled).toBe(false);
+  });
+
+  it("sends clearApiKey when the clear-key switch is on and no new key is typed", async () => {
+    const user = userEvent.setup();
+    updateSettings.mockResolvedValue({});
+    settingsData.mockReturnValue({
+      defaults: { language: "en", defaultQueryLimit: 8 },
+      embedding: {
+        enabled: true,
+        baseUrl: "https://emb.example.com",
+        model: "text-embedding-3-small",
+        timeoutSeconds: 60,
+        apiKeyConfigured: true,
+      },
+    });
+
+    render(<EmbeddingSection />);
+
+    await user.click(screen.getByRole("switch", { name: /clear saved key/i }));
+    expect(screen.getByLabelText(/api key/i)).toBeDisabled();
+
+    await user.click(screen.getByRole("button", { name: /save/i }));
+
+    const payload = updateSettings.mock.calls[0][0];
+    expect(payload.embedding).toMatchObject({ clearApiKey: true });
+    expect(payload.embedding).not.toHaveProperty("apiKey");
   });
 });

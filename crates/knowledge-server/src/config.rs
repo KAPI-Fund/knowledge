@@ -6,13 +6,11 @@ pub struct AppConfig {
   pub database_url: String,
   pub redis_url: String,
   pub project_root: String,
-  pub provider_mode: Option<String>,
-  pub provider_base_url: Option<String>,
-  pub provider_api_key: Option<String>,
-  pub provider_model: Option<String>,
-  pub provider_timeout_seconds: Option<i64>,
   pub session_ttl_hours: u64,
   pub admin_password: Option<String>,
+  pub skill_runner_url: String,
+  pub skill_worker_concurrency: usize,
+  pub skill_jobs_per_user: usize,
 }
 
 impl AppConfig {
@@ -25,13 +23,11 @@ impl AppConfig {
         .join("knowledge-projects")
         .to_string_lossy()
         .to_string(),
-      provider_mode: None,
-      provider_base_url: None,
-      provider_api_key: None,
-      provider_model: None,
-      provider_timeout_seconds: None,
       session_ttl_hours: 12,
       admin_password: Some("secret-password".to_string()),
+      skill_runner_url: "http://127.0.0.1:4600".to_string(),
+      skill_worker_concurrency: 2,
+      skill_jobs_per_user: 2,
     }
   }
 
@@ -54,27 +50,30 @@ impl AppConfig {
         .to_string_lossy()
         .to_string()
     });
-    let provider_mode = std::env::var("KNOWLEDGE_PROVIDER_MODE").ok();
-    let provider_base_url = std::env::var("KNOWLEDGE_PROVIDER_BASE_URL").ok();
-    let provider_api_key = std::env::var("KNOWLEDGE_PROVIDER_API_KEY").ok();
-    let provider_model = std::env::var("KNOWLEDGE_PROVIDER_MODEL").ok();
-    let provider_timeout_seconds = std::env::var("KNOWLEDGE_PROVIDER_TIMEOUT_SECONDS")
-      .ok()
-      .and_then(|value| value.parse::<i64>().ok());
     let admin_password = std::env::var("KNOWLEDGE_ADMIN_PASSWORD").ok();
+    let skill_runner_url = std::env::var("KNOWLEDGE_SKILL_RUNNER_URL")
+      .unwrap_or_else(|_| "http://127.0.0.1:4600".to_string());
+    let skill_worker_concurrency = env_usize("KNOWLEDGE_SKILL_WORKER_CONCURRENCY", 2);
+    let skill_jobs_per_user = env_usize("KNOWLEDGE_SKILL_JOBS_PER_USER", 2);
 
     Self {
       bind_addr,
       database_url,
       redis_url,
       project_root,
-      provider_mode,
-      provider_base_url,
-      provider_api_key,
-      provider_model,
-      provider_timeout_seconds,
       session_ttl_hours: 12,
       admin_password,
+      skill_runner_url,
+      skill_worker_concurrency,
+      skill_jobs_per_user,
     }
   }
+}
+
+fn env_usize(key: &str, default: usize) -> usize {
+  std::env::var(key)
+    .ok()
+    .and_then(|value| value.trim().parse::<usize>().ok())
+    .filter(|value| *value >= 1)
+    .unwrap_or(default)
 }

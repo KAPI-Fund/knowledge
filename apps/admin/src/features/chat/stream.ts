@@ -1,4 +1,10 @@
 import { getCsrfToken } from "../auth/csrf";
+import type {
+  AgentEvent,
+  AgentMessageOptions,
+  AgentReference,
+  AgentUserInputRequest,
+} from "./agent-types";
 
 export interface ChatStreamEvent {
   event: string;
@@ -29,14 +35,29 @@ export function parseSseBuffer(buffer: string): { events: ChatStreamEvent[]; res
   return { events, rest };
 }
 
+export interface ChatDonePayload {
+  messageId: string | null;
+  content: string;
+  contextSummary?: string | null;
+  agentMode?: string;
+  references?: AgentReference[];
+  userInputRequest?: AgentUserInputRequest;
+}
+
 export interface ChatStreamHandlers {
   onDelta: (text: string) => void;
-  onDone: (payload: { messageId: string; content: string; contextSummary: string | null }) => void;
+  onDone: (payload: ChatDonePayload) => void;
   onError: (message: string) => void;
+  onAgentEvent?: (event: AgentEvent) => void;
 }
 
 export async function streamChatMessage(
-  input: { projectId: string; conversationId: string; content: string },
+  input: {
+    projectId: string;
+    conversationId: string;
+    content: string;
+    agent?: AgentMessageOptions;
+  },
   handlers: ChatStreamHandlers,
 ) {
   const response = await fetch(
@@ -48,7 +69,7 @@ export async function streamChatMessage(
         "content-type": "application/json",
         "x-csrf-token": getCsrfToken(),
       },
-      body: JSON.stringify({ content: input.content }),
+      body: JSON.stringify({ content: input.content, agent: input.agent }),
     },
   );
 
@@ -90,14 +111,16 @@ function dispatchEvent(event: ChatStreamEvent, handlers: ChatStreamHandlers) {
     handlers.onDelta(payload.text);
     return;
   }
+  if (event.event === "agentEvent") {
+    const payload = JSON.parse(event.data) as AgentEvent;
+    if (payload.type === "messageDelta") {
+      handlers.onDelta(payload.text);
+    }
+    handlers.onAgentEvent?.(payload);
+    return;
+  }
   if (event.event === "done") {
-    handlers.onDone(
-      JSON.parse(event.data) as {
-        messageId: string;
-        content: string;
-        contextSummary: string | null;
-      },
-    );
+    handlers.onDone(JSON.parse(event.data) as ChatDonePayload);
     return;
   }
   if (event.event === "error") {

@@ -6,11 +6,22 @@ import { RouteStatePane } from "@/components/layout/route-state-pane";
 import { PageHeader } from "@/components/shared/page-header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Select } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { normalizeAppError } from "@/lib/app-error";
 
+import { FileHistoryPanel } from "./file-history-panel";
+import { FilePreview } from "./file-preview";
+import { hasServerTextContent } from "./file-types";
 import { useProjectFileContentQuery, useProjectFilesQuery, useSaveFileContentMutation } from "./queries";
 import { WikiPageEditor } from "./wiki-page-editor";
 
@@ -36,7 +47,8 @@ export function FilesPage() {
     recursive,
     maxFiles: maxFilesNumber,
   });
-  const content = useProjectFileContentQuery(projectId, selectedPath);
+  const textReadable = hasServerTextContent(selectedPath);
+  const content = useProjectFileContentQuery(projectId, textReadable ? selectedPath : "");
   const createPage = useSaveFileContentMutation(projectId);
   const [newPagePath, setNewPagePath] = useState("");
   const [createError, setCreateError] = useState("");
@@ -129,14 +141,20 @@ export function FilesPage() {
 
       <Card>
         <CardContent className="grid gap-4 p-6 md:grid-cols-[180px_minmax(0,1fr)_auto] md:items-end">
-          <label className="grid gap-2 text-sm font-medium">
-            Root
-            <Select aria-label="Root" onChange={(event) => handleRootChange(event.target.value)} value={root}>
-              <option value="all">all</option>
-              <option value="wiki">wiki</option>
-              <option value="sources">sources</option>
+          <div className="grid gap-2">
+            <Label htmlFor="files-root">Root</Label>
+            <Select onValueChange={handleRootChange} value={root}>
+              <SelectTrigger id="files-root" aria-label="Root" className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">all</SelectItem>
+                <SelectItem value="wiki">wiki</SelectItem>
+                <SelectItem value="sources">sources</SelectItem>
+                <SelectItem value="workspace">workspace</SelectItem>
+              </SelectContent>
             </Select>
-          </label>
+          </div>
           <label className="grid gap-2 text-sm font-medium">
             Max Files
             <Input
@@ -145,14 +163,14 @@ export function FilesPage() {
               value={maxFiles}
             />
           </label>
-          <label className="flex items-center gap-3 rounded-xl border border-border/70 px-4 py-2 text-sm font-medium">
-            <input
+          <div className="flex items-center gap-3 rounded-lg border px-4 py-2.5">
+            <Checkbox
+              id="files-recursive"
               checked={recursive}
-              onChange={(event) => setRecursive(event.target.checked)}
-              type="checkbox"
+              onCheckedChange={(checked) => setRecursive(checked === true)}
             />
-            Recursive
-          </label>
+            <Label htmlFor="files-recursive">Recursive</Label>
+          </div>
         </CardContent>
       </Card>
 
@@ -211,11 +229,20 @@ export function FilesPage() {
         </Card>
 
         <Card>
-          <CardHeader>
-            <CardTitle>Preview</CardTitle>
-            <CardDescription>
-              {selectedPath ? selectedPath : "Select a file from the tree to inspect its content."}
-            </CardDescription>
+          <CardHeader className="flex-row items-start justify-between gap-4 space-y-0">
+            <div className="grid gap-1.5">
+              <CardTitle>Preview</CardTitle>
+              <CardDescription>
+                {selectedPath ? selectedPath : "Select a file from the tree to inspect its content."}
+              </CardDescription>
+            </div>
+            {selectedPath ? (
+              <FileHistoryPanel
+                currentContent={content.data?.content ?? null}
+                path={selectedPath}
+                projectId={projectId}
+              />
+            ) : null}
           </CardHeader>
           <CardContent>
             {deleteNotice ? (
@@ -226,9 +253,9 @@ export function FilesPage() {
                 description="Choose a file from the tree to load its preview."
                 title="No file selected"
               />
-            ) : content.isLoading ? (
+            ) : textReadable && content.isLoading ? (
               <RouteStatePane description="Loading file preview." state="loading" title="Preview" />
-            ) : content.error ? (
+            ) : textReadable && content.error ? (
               <RouteStatePane description="Preview unavailable for the selected file." state="failed" title="Preview unavailable" />
             ) : (
               <div className="grid gap-4">
@@ -238,9 +265,11 @@ export function FilesPage() {
                   path={selectedPath}
                   projectId={projectId}
                 />
-                <ScrollArea className="max-h-[520px] rounded-xl border border-border/70 bg-muted/30 p-4">
-                  <pre className="whitespace-pre-wrap break-words font-mono text-sm">{content.data?.content}</pre>
-                </ScrollArea>
+                <FilePreview
+                  content={textReadable ? (content.data?.content ?? "") : null}
+                  path={selectedPath}
+                  projectId={projectId}
+                />
               </div>
             )}
           </CardContent>
@@ -338,9 +367,12 @@ function pathMatchesRoot(path: string, root: string): boolean {
   if (root === "sources") {
     return path.startsWith("raw/sources/");
   }
+  if (root === "workspace") {
+    return path.startsWith("agent-workspace/");
+  }
   return false;
 }
 
 function isSupportedRoot(root: string) {
-  return root === "all" || root === "wiki" || root === "sources";
+  return root === "all" || root === "wiki" || root === "sources" || root === "workspace";
 }

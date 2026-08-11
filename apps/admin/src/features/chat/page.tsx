@@ -1,11 +1,32 @@
-import { Pencil, Trash2 } from "lucide-react";
+import {
+  BookmarkPlus,
+  MessagesSquare,
+  Pencil,
+  Plus,
+  SendHorizontal,
+  Square,
+  Trash2,
+} from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useParams } from "react-router-dom";
+import { toast } from "sonner";
 
+import { EmptyState } from "@/components/layout/empty-state";
+import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { MarkdownMessage } from "@/components/shared/markdown-message";
 import { PageHeader } from "@/components/shared/page-header";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Tooltip,
@@ -14,13 +35,32 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 
+import { cancelActiveAgentRun } from "../shared/api";
+import { AgentActivity } from "./agent-activity";
+import {
+  AgentModeSelector,
+  AgentSkillSelector,
+  AgentWebToggle,
+  SKILL_AUTO,
+  SKILL_NONE,
+} from "./agent-controls";
+import { isShellApprovalRequest, parseAgentEvents, shellApprovalCommand } from "./agent-types";
+import type {
+  AgentEvent,
+  AgentMessageOptions,
+  AgentMode,
+  AgentUserInputRequest,
+} from "./agent-types";
+import { AgentUserInputForm } from "./agent-user-input-form";
 import {
   conversationKeys,
+  useAgentSkillsQuery,
   useConversationMessagesQuery,
   useConversationsQuery,
   useCreateConversationMutation,
   useDeleteConversationMutation,
   useRenameConversationMutation,
+  useSaveMessageToWikiMutation,
 } from "./queries";
 import { streamChatMessage } from "./stream";
 
@@ -38,6 +78,22 @@ export function ChatPage() {
   const [streamingText, setStreamingText] = useState<string | null>(null);
   const [pendingUserText, setPendingUserText] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [renameTarget, setRenameTarget] = useState<{ id: string; title: string } | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; title: string } | null>(null);
+
+  const [agentEnabled, setAgentEnabled] = useState(false);
+  const [agentMode, setAgentMode] = useState<AgentMode>("standard");
+  const [skillValue, setSkillValue] = useState<string>(SKILL_NONE);
+  const [webEnabled, setWebEnabled] = useState(false);
+  const [liveEvents, setLiveEvents] = useState<AgentEvent[]>([]);
+  const [inputRequest, setInputRequest] = useState<AgentUserInputRequest | null>(null);
+  const [agentRunActive, setAgentRunActive] = useState(false);
+  // Per-conversation shell.exec whitelist: commands the user has approved via
+  // the confirm form. Reset on conversation switch; sent on every agent request.
+  const [approvedShellCommands, setApprovedShellCommands] = useState<string[]>([]);
+  const streamConversationRef = useRef<string | null>(null);
+  const agentSkills = useAgentSkillsQuery(projectId);
 
   const isStreaming = streamingText !== null;
 
@@ -64,6 +120,9 @@ export function ChatPage() {
 
   useEffect(() => {
     stickToBottomRef.current = true;
+    setInputRequest(null);
+    setLiveEvents([]);
+    setApprovedShellCommands([]);
   }, [activeId]);
 
   useLayoutEffect(pinToBottom, [messages.data, streamingText, pendingUserText]);
@@ -81,6 +140,131 @@ export function ChatPage() {
     return () => observer.disconnect();
   }, []);
 
+  function buildAgentOptions(): AgentMessageOptions | undefined {
+    if (!agentEnabled) {
+      return undefined;
+    }
+    const options: AgentMessageOptions = { mode: agentMode };
+    if (skillValue === SKILL_AUTO) {
+      options.skillMode = "auto";
+    } else if (skillValue !== SKILL_NONE) {
+      options.skill = skillValue;
+      options.skillMode = "explicit";
+    }
+    if (webEnabled) {
+      options.web = true;
+    }
+    if (approvedShellCommands.length > 0) {
+      options.approvedShellCommands = approvedShellCommands;
+    }
+    return options;
+  }
+
+  async function runChatTurn(input: {
+    conversationId: string;
+    content: string;
+    agent?: AgentMessageOptions;
+    displayUserText: string | null;
+  }) {
+    const { conversationId, content, agent, displayUserText } = input;
+    setError(null);
+    setInputRequest(null);
+    setPendingUserText(displayUserText);
+    setStreamingText("");
+    setLiveEvents([]);
+    setAgentRunActive(Boolean(agent));
+    streamConversationRef.current = conversationId;
+    stickToBottomRef.current = true;
+
+    let collectedEvents: AgentEvent[] = [];
+
+    await streamChatMessage(
+      { projectId, conversationId, content, agent },
+      {
+        onDelta: (text) => {
+          setStreamingText((current) => (current ?? "") + text);
+        },
+        onAgentEvent: (event) => {
+          collectedEvents = [...collectedEvents, event];
+          setLiveEvents(collectedEvents);
+        },
+        onDone: (payload) => {
+          const now = new Date().toISOString();
+          if (payload.userInputRequest) {
+            // Paused run: nothing was persisted for the assistant. Keep the
+            // collected events on screen above the form until the resume POST.
+            setInputRequest(payload.userInputRequest);
+            setStreamingText(null);
+            setPendingUserText(null);
+            void queryClient.invalidateQueries({
+              queryKey: conversationKeys.messages(projectId, conversationId),
+            });
+            void queryClient.invalidateQueries({ queryKey: conversationKeys.list(projectId) });
+            return;
+          }
+          // Seed the finished turn into the cache in the same commit that clears
+          // the streaming bubble. Without this, clearing the local state before
+          // the background refetch lands leaves a frame with neither the
+          // streaming bubble nor the persisted message, which flashed at the
+          // instant markdown laid out. The assistant id matches the server's, so
+          // the later refetch reconciles silently without a remount.
+          if (payload.messageId) {
+            const seededUser =
+              displayUserText !== null
+                ? [
+                    {
+                      id: `local-user-${now}`,
+                      role: "user",
+                      content: displayUserText,
+                      contextSummary: null,
+                      createdAt: now,
+                    },
+                  ]
+                : [];
+            queryClient.setQueryData(
+              conversationKeys.messages(projectId, conversationId),
+              (old: typeof messages.data) => [
+                ...(old ?? []),
+                ...seededUser,
+                {
+                  id: payload.messageId,
+                  role: "assistant",
+                  content: payload.content,
+                  contextSummary: payload.contextSummary ?? null,
+                  createdAt: now,
+                  agentMode: payload.agentMode ?? null,
+                  agentEvents: collectedEvents.length > 0 ? collectedEvents : null,
+                },
+              ],
+            );
+          }
+          setStreamingText(null);
+          setPendingUserText(null);
+          setLiveEvents([]);
+          void queryClient.invalidateQueries({
+            queryKey: conversationKeys.messages(projectId, conversationId),
+          });
+          void queryClient.invalidateQueries({ queryKey: conversationKeys.list(projectId) });
+        },
+        onError: (message) => {
+          setStreamingText(null);
+          setPendingUserText(null);
+          setLiveEvents([]);
+          setError(message);
+          // The user turn may already be persisted server-side; refetch so it
+          // does not vanish from the transcript.
+          void queryClient.invalidateQueries({
+            queryKey: conversationKeys.messages(projectId, conversationId),
+          });
+          void queryClient.invalidateQueries({ queryKey: conversationKeys.list(projectId) });
+        },
+      },
+    );
+
+    streamConversationRef.current = null;
+    setAgentRunActive(false);
+  }
+
   async function handleSend() {
     const content = draft.trim();
     if (!content || isStreaming) {
@@ -95,82 +279,68 @@ export function ChatPage() {
     }
 
     setDraft("");
-    setError(null);
-    setPendingUserText(content);
-    setStreamingText("");
-    stickToBottomRef.current = true;
-
-    await streamChatMessage(
-      { projectId, conversationId, content },
-      {
-        onDelta: (text) => {
-          setStreamingText((current) => (current ?? "") + text);
-        },
-        onDone: (payload) => {
-          const now = new Date().toISOString();
-          // Seed the finished turn into the cache in the same commit that clears
-          // the streaming bubble. Without this, clearing the local state before
-          // the background refetch lands leaves a frame with neither the
-          // streaming bubble nor the persisted message, which flashed at the
-          // instant markdown laid out. The assistant id matches the server's, so
-          // the later refetch reconciles silently without a remount.
-          queryClient.setQueryData(
-            conversationKeys.messages(projectId, conversationId),
-            (old: typeof messages.data) => [
-              ...(old ?? []),
-              {
-                id: `local-user-${now}`,
-                role: "user",
-                content,
-                contextSummary: null,
-                createdAt: now,
-              },
-              {
-                id: payload.messageId,
-                role: "assistant",
-                content: payload.content,
-                contextSummary: payload.contextSummary,
-                createdAt: now,
-              },
-            ],
-          );
-          setStreamingText(null);
-          setPendingUserText(null);
-          void queryClient.invalidateQueries({
-            queryKey: conversationKeys.messages(projectId, conversationId),
-          });
-          void queryClient.invalidateQueries({ queryKey: conversationKeys.list(projectId) });
-        },
-        onError: (message) => {
-          setStreamingText(null);
-          setPendingUserText(null);
-          setError(message);
-          // The user turn may already be persisted server-side; refetch so it
-          // does not vanish from the transcript.
-          void queryClient.invalidateQueries({
-            queryKey: conversationKeys.messages(projectId, conversationId),
-          });
-          void queryClient.invalidateQueries({ queryKey: conversationKeys.list(projectId) });
-        },
-      },
-    );
+    await runChatTurn({
+      conversationId,
+      content,
+      agent: buildAgentOptions(),
+      displayUserText: content,
+    });
   }
 
-  function handleRename(conversationId: string, currentTitle: string) {
-    const title = window.prompt("Conversation title", currentTitle);
-    if (title?.trim()) {
-      renameMutation.mutate({ conversationId, title: title.trim() });
+  async function handleResume(formResult: Record<string, unknown>) {
+    if (!activeId || !inputRequest || isStreaming) {
+      return;
+    }
+    const base = buildAgentOptions() ?? { mode: agentMode };
+    // Shell approval: on approve, extend the session whitelist and send the
+    // updated list with the resume so the loop can run the command this turn.
+    const command = shellApprovalCommand(inputRequest);
+    if (isShellApprovalRequest(inputRequest) && formResult.approve === true && command !== null) {
+      const nextApproved = approvedShellCommands.includes(command)
+        ? approvedShellCommands
+        : [...approvedShellCommands, command];
+      setApprovedShellCommands(nextApproved);
+      base.approvedShellCommands = nextApproved;
+    }
+    await runChatTurn({
+      conversationId: activeId,
+      content: "",
+      agent: { ...base, resumeRequestId: inputRequest.requestId, formResult },
+      displayUserText: null,
+    });
+  }
+
+  async function handleCancel() {
+    const conversationId = streamConversationRef.current;
+    if (!conversationId) {
+      return;
+    }
+    try {
+      await cancelActiveAgentRun({ projectId, conversationId });
+    } catch (cancelError) {
+      toast.error(cancelError instanceof Error ? cancelError.message : "取消失败");
     }
   }
 
-  function handleDelete(conversationId: string) {
-    deleteMutation.mutate(conversationId, {
-      onSuccess: () => {
-        if (activeId === conversationId) {
-          setActiveId(null);
-        }
+  function openRename(conversationId: string, currentTitle: string) {
+    setRenameTarget({ id: conversationId, title: currentTitle });
+    setRenameDraft(currentTitle);
+  }
+
+  function submitRename() {
+    if (!renameTarget || !renameDraft.trim()) {
+      return;
+    }
+    renameMutation.mutate(
+      { conversationId: renameTarget.id, title: renameDraft.trim() },
+      {
+        onError: (mutationError) =>
+          toast.error(
+            mutationError instanceof Error ? mutationError.message : "Failed to rename conversation",
+          ),
       },
-    });
+    );
+    setRenameTarget(null);
   }
 
   return (
@@ -191,9 +361,15 @@ export function ChatPage() {
             }}
             variant="outline"
           >
+            <Plus />
             New conversation
           </Button>
           <TooltipProvider delayDuration={300}>
+            {(conversations.data ?? []).length === 0 ? (
+              <p className="px-2 py-4 text-center text-sm text-muted-foreground">
+                No conversations yet.
+              </p>
+            ) : null}
             <ul className="min-h-0 flex-1 space-y-0.5 overflow-y-auto">
               {(conversations.data ?? []).map((conversation) => (
                 <li className="group/conv relative" key={conversation.id}>
@@ -211,7 +387,7 @@ export function ChatPage() {
                         <Button
                           aria-label={`Rename ${conversation.title}`}
                           className="text-muted-foreground"
-                          onClick={() => handleRename(conversation.id, conversation.title)}
+                          onClick={() => openRename(conversation.id, conversation.title)}
                           size="icon-xs"
                           variant="ghost"
                         >
@@ -225,7 +401,7 @@ export function ChatPage() {
                         <Button
                           aria-label={`Delete ${conversation.title}`}
                           className="text-muted-foreground hover:text-destructive"
-                          onClick={() => handleDelete(conversation.id)}
+                          onClick={() => setDeleteTarget({ id: conversation.id, title: conversation.title })}
                           size="icon-xs"
                           variant="ghost"
                         >
@@ -249,8 +425,20 @@ export function ChatPage() {
             ref={scrollRef}
           >
             <div className="space-y-3 p-4" ref={contentRef}>
+            {(messages.data ?? []).length === 0 && pendingUserText === null && streamingText === null ? (
+              <EmptyState
+                description={
+                  activeId
+                    ? "Send a message to start this conversation."
+                    : "Pick a conversation or just start typing below."
+                }
+                icon={MessagesSquare}
+                title={activeId ? "No messages yet" : "Ask the wiki"}
+              />
+            ) : null}
             {(messages.data ?? []).map((message) => {
               const isUser = message.role === "user";
+              const agentEvents = isUser ? [] : parseAgentEvents(message.agentEvents);
               return (
                 <div
                   className={`max-w-prose rounded-md border px-3 py-2 text-sm ${
@@ -264,7 +452,17 @@ export function ChatPage() {
                   {isUser ? (
                     message.content
                   ) : (
-                    <MarkdownMessage content={message.content} id={message.id} />
+                    <>
+                      {agentEvents.length > 0 && <AgentActivity events={agentEvents} />}
+                      <MarkdownMessage content={message.content} id={message.id} />
+                      {activeId !== null && (
+                        <SaveToWikiButton
+                          conversationId={activeId}
+                          messageId={message.id}
+                          projectId={projectId}
+                        />
+                      )}
+                    </>
                   )}
                 </div>
               );
@@ -283,6 +481,7 @@ export function ChatPage() {
                 data-role="assistant"
                 data-streaming="true"
               >
+                {liveEvents.length > 0 && <AgentActivity events={liveEvents} live />}
                 {streamingText ? (
                   <MarkdownMessage content={streamingText} id="streaming" />
                 ) : (
@@ -294,29 +493,195 @@ export function ChatPage() {
                 )}
               </div>
             )}
+            {inputRequest !== null && streamingText === null && (
+              <div className="max-w-prose space-y-2" data-role="assistant">
+                {liveEvents.length > 0 && <AgentActivity events={liveEvents} />}
+                <AgentUserInputForm
+                  onSubmit={(values) => void handleResume(values)}
+                  request={inputRequest}
+                />
+              </div>
+            )}
             {error && <p className="text-sm text-destructive">{error}</p>}
             </div>
           </div>
-          <form
-            className="flex gap-2 border-t border-border p-3"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void handleSend();
-            }}
-          >
-            <Textarea
-              aria-label="Chat message"
-              className="min-h-10 flex-1 resize-y"
-              onChange={(event) => setDraft(event.target.value)}
-              placeholder="Ask the wiki..."
-              value={draft}
-            />
-            <Button disabled={isStreaming || !draft.trim()} type="submit">
-              Send
-            </Button>
-          </form>
+          <div className="border-t border-border p-3">
+            <div className="mb-2 flex flex-wrap items-center gap-3">
+              <div className="flex items-center gap-1.5">
+                <Switch
+                  checked={agentEnabled}
+                  disabled={isStreaming}
+                  id="agent-toggle"
+                  onCheckedChange={setAgentEnabled}
+                />
+                <Label
+                  className="cursor-pointer text-xs text-muted-foreground"
+                  htmlFor="agent-toggle"
+                >
+                  Agent
+                </Label>
+              </div>
+              {agentEnabled && (
+                <>
+                  <AgentModeSelector
+                    disabled={isStreaming}
+                    onChange={setAgentMode}
+                    value={agentMode}
+                  />
+                  <AgentSkillSelector
+                    disabled={isStreaming}
+                    onChange={setSkillValue}
+                    skills={agentSkills.data ?? []}
+                    value={skillValue}
+                  />
+                  <AgentWebToggle disabled={isStreaming} onChange={setWebEnabled} value={webEnabled} />
+                </>
+              )}
+              {isStreaming && agentRunActive && (
+                <Button
+                  className="ml-auto"
+                  onClick={() => void handleCancel()}
+                  size="sm"
+                  type="button"
+                  variant="outline"
+                >
+                  <Square />
+                  取消
+                </Button>
+              )}
+            </div>
+            <form
+              className="flex gap-2"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void handleSend();
+              }}
+            >
+              <Textarea
+                aria-label="Chat message"
+                className="min-h-10 flex-1 resize-y"
+                onChange={(event) => setDraft(event.target.value)}
+                placeholder="Ask the wiki..."
+                value={draft}
+              />
+              <Button disabled={isStreaming || !draft.trim()} type="submit">
+                <SendHorizontal />
+                Send
+              </Button>
+            </form>
+          </div>
         </section>
       </div>
+
+      <Dialog
+        onOpenChange={(open) => {
+          if (!open) setRenameTarget(null);
+        }}
+        open={Boolean(renameTarget)}
+      >
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Rename conversation</DialogTitle>
+          </DialogHeader>
+          <Input
+            aria-label="Conversation title"
+            onChange={(event) => setRenameDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") submitRename();
+            }}
+            value={renameDraft}
+          />
+          <DialogFooter>
+            <Button onClick={() => setRenameTarget(null)} type="button" variant="outline">
+              Cancel
+            </Button>
+            <Button
+              disabled={!renameDraft.trim() || renameMutation.isPending}
+              onClick={submitRename}
+              type="button"
+            >
+              Save
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <ConfirmDialog
+        confirmLabel="Delete conversation"
+        description={
+          deleteTarget ? `"${deleteTarget.title}" and its messages will be removed.` : ""
+        }
+        destructive
+        isPending={deleteMutation.isPending}
+        onConfirm={async () => {
+          if (!deleteTarget) return;
+          try {
+            await deleteMutation.mutateAsync(deleteTarget.id);
+            if (activeId === deleteTarget.id) {
+              setActiveId(null);
+            }
+            toast.success("Conversation deleted.");
+          } catch (mutationError) {
+            toast.error(
+              mutationError instanceof Error
+                ? mutationError.message
+                : "Failed to delete conversation",
+            );
+          }
+        }}
+        onOpenChange={(open) => {
+          if (!open) setDeleteTarget(null);
+        }}
+        open={Boolean(deleteTarget)}
+        title="Delete this conversation?"
+      />
     </div>
+  );
+}
+
+// Port of upstream SaveToWikiButton (chat-message.tsx L540-640); the three
+// frontend writes are replaced by one backend endpoint.
+function SaveToWikiButton({
+  projectId,
+  conversationId,
+  messageId,
+}: {
+  projectId: string;
+  conversationId: string;
+  messageId: string;
+}) {
+  const mutation = useSaveMessageToWikiMutation(projectId);
+  const [saved, setSaved] = useState(false);
+
+  return (
+    <Button
+      className="mt-1 h-6 gap-1 px-2 text-[11px] text-muted-foreground"
+      disabled={mutation.isPending}
+      onClick={() => {
+        mutation.mutate(
+          { conversationId, messageId },
+          {
+            onSuccess: (result) => {
+              setSaved(true);
+              setTimeout(() => setSaved(false), 2000);
+              toast.success(`Saved to ${result.path}`);
+            },
+            onError: (mutationError) => {
+              toast.error(
+                mutationError instanceof Error
+                  ? mutationError.message
+                  : "Failed to save to wiki",
+              );
+            },
+          },
+        );
+      }}
+      size="sm"
+      type="button"
+      variant="ghost"
+    >
+      <BookmarkPlus className="size-3" />
+      {saved ? "Saved!" : mutation.isPending ? "Saving…" : "Save to Wiki"}
+    </Button>
   );
 }

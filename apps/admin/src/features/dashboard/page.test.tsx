@@ -28,7 +28,17 @@ vi.mock("../projects/queries", () => ({
 vi.mock("../settings/queries", () => ({
   useSystemSettingsQuery: () => ({
     data: {
-      providerMode: "openai-compatible",
+      connections: [
+        {
+          id: "c1",
+          label: "OpenAI GPT",
+          baseUrl: "u",
+          model: "m",
+          timeoutSeconds: 30,
+          isActive: true,
+          apiKeyConfigured: true,
+        },
+      ],
       defaults: { language: "en", defaultQueryLimit: 5 },
     },
     isLoading: false,
@@ -49,11 +59,16 @@ describe("dashboard page", () => {
 
     expect(screen.getByRole("heading", { name: "Dashboard" })).toBeInTheDocument();
     expect(screen.getByText("2")).toBeInTheDocument();
-    expect(screen.getByText("openai-compatible")).toBeInTheDocument();
+    expect(screen.getByText("OpenAI GPT")).toBeInTheDocument();
+    expect(screen.getByText("en")).toBeInTheDocument();
+    expect(screen.getByText("5")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "demo-project" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "research-notes" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Projects" })).toBeInTheDocument();
-    expect(screen.getAllByText("en")).toHaveLength(2);
-    expect(screen.getAllByText("5")).toHaveLength(2);
+    expect(screen.getByRole("link", { name: /view all/i })).toHaveAttribute("href", "/projects");
+    expect(screen.getByRole("link", { name: /api tokens/i })).toHaveAttribute(
+      "href",
+      "/api-tokens",
+    );
+    expect(screen.getByText("Jun 9, 2026")).toBeInTheDocument();
   });
 });

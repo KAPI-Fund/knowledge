@@ -1,17 +1,23 @@
 import type { ColumnDef } from "@tanstack/react-table";
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
+import { toast } from "sonner";
 
 import { EmptyState } from "@/components/layout/empty-state";
 import { RouteStatePane } from "@/components/layout/route-state-pane";
-import { DataTable } from "@/components/shared/data-table";
+import { ConfirmDialog } from "@/components/shared/confirm-dialog";
+import { DataTable, type FacetedFilterConfig } from "@/components/shared/data-table";
 import { PageHeader } from "@/components/shared/page-header";
 import { StatusPill } from "@/components/shared/status-pill";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { normalizeAppError } from "@/lib/app-error";
 
 import { ProjectFileLink } from "../shared/file-links";
+import { useSystemSettingsQuery, useUpdateSystemSettingsMutation } from "../settings/queries";
 import {
   useCancelTaskMutation,
   useProjectTasksQuery,
@@ -21,12 +27,29 @@ import {
 
 type ProjectTask = NonNullable<ReturnType<typeof useProjectTasksQuery>["data"]>[number];
 
+const STATUS_FILTER: FacetedFilterConfig = {
+  columnId: "status",
+  title: "Status",
+  options: [
+    { label: "Queued", value: "queued" },
+    { label: "Running", value: "running" },
+    { label: "Retry waiting", value: "retry_waiting" },
+    { label: "Succeeded", value: "succeeded" },
+    { label: "Failed", value: "failed" },
+    { label: "Cancelled", value: "cancelled" },
+  ],
+};
+
 export function TasksPage() {
   const { projectId = "" } = useParams();
   const tasks = useProjectTasksQuery(projectId);
   const retryTask = useRetryTaskMutation();
   const cancelTask = useCancelTaskMutation();
+  const settings = useSystemSettingsQuery();
+  const updateSettings = useUpdateSystemSettingsMutation();
+  const ingestPaused = settings.data?.ingest?.paused ?? false;
   const [selectedTaskId, setSelectedTaskId] = useState("");
+  const [cancelTarget, setCancelTarget] = useState<ProjectTask | null>(null);
 
   const taskList = tasks.data ?? [];
 
@@ -45,6 +68,7 @@ export function TasksPage() {
         accessorKey: "status",
         header: "Status",
         cell: ({ row }) => <StatusPill value={row.original.status} />,
+        filterFn: (row, id, value: string[]) => value.includes(row.getValue(id)),
       },
       {
         accessorKey: "title",
@@ -100,18 +124,21 @@ export function TasksPage() {
               Inspect
             </Button>
             <Button
-              onClick={() => retryTask.mutateAsync({ projectId, taskId: row.original.id })}
+              onClick={async () => {
+                try {
+                  await retryTask.mutateAsync({ projectId, taskId: row.original.id });
+                  toast.success("Task queued for retry.");
+                } catch (error) {
+                  toast.error(normalizeAppError(error).message);
+                }
+              }}
               size="sm"
               variant="secondary"
             >
               Retry
             </Button>
             {!["completed", "succeeded", "failed", "cancelled"].includes(row.original.status) ? (
-              <Button
-                onClick={() => cancelTask.mutateAsync({ projectId, taskId: row.original.id })}
-                size="sm"
-                variant="outline"
-              >
+              <Button onClick={() => setCancelTarget(row.original)} size="sm" variant="outline">
                 Cancel
               </Button>
             ) : null}
@@ -123,13 +150,38 @@ export function TasksPage() {
   );
 
   return (
-    <div className="grid gap-4">
+    <div className="flex h-full min-h-0 flex-col gap-4">
       <PageHeader
+        actions={
+          <div
+            className="flex items-center gap-2"
+            title="Pauses source import/ingest/delete tasks across all projects. Running tasks finish; other task types keep flowing."
+          >
+            {ingestPaused ? <Badge variant="secondary">Ingest paused</Badge> : null}
+            <Label className="text-sm text-muted-foreground" htmlFor="pause-ingest-queue">
+              Pause ingest
+            </Label>
+            <Switch
+              aria-label="Pause ingest queue"
+              checked={ingestPaused}
+              disabled={settings.isLoading || updateSettings.isPending}
+              id="pause-ingest-queue"
+              onCheckedChange={async (paused) => {
+                try {
+                  await updateSettings.mutateAsync({ ingest: { paused } });
+                  toast.success(paused ? "Ingest queue paused." : "Ingest queue resumed.");
+                } catch (error) {
+                  toast.error(normalizeAppError(error).message);
+                }
+              }}
+            />
+          </div>
+        }
         description="Inspect queued work, retry failed jobs, and examine task payloads."
         title="Tasks"
       />
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1.4fr)_380px]">
-        <div className="grid gap-3">
+      <div className="grid min-h-0 flex-1 gap-6 xl:grid-cols-[minmax(0,1.4fr)_380px]">
+        <div className="flex min-h-0 flex-col gap-3">
           {tasks.error ? (
             <RouteStatePane
               description={normalizeAppError(tasks.error).message}
@@ -141,19 +193,21 @@ export function TasksPage() {
               columns={columns}
               data={taskList}
               emptyMessage="No tasks have been queued for this project yet."
+              facetedFilters={[STATUS_FILTER]}
               isLoading={tasks.isLoading}
+              fillHeight
             />
           )}
         </div>
 
-        <Card>
+        <Card className="flex min-h-0 flex-col">
           <CardHeader>
             <CardTitle>Task Detail</CardTitle>
             <CardDescription>
               Selected task payload, status, and execution metadata.
             </CardDescription>
           </CardHeader>
-          <CardContent className="grid gap-4">
+          <CardContent className="grid min-h-0 flex-1 gap-4 overflow-auto">
             {!selectedTaskId ? (
               <EmptyState
                 description="Select a task from the table to inspect its payload and result."
@@ -222,6 +276,29 @@ export function TasksPage() {
           </CardContent>
         </Card>
       </div>
+
+      <ConfirmDialog
+        confirmLabel="Cancel task"
+        description={
+          cancelTarget ? `"${cancelTarget.title}" will stop as soon as possible.` : ""
+        }
+        destructive
+        isPending={cancelTask.isPending}
+        onConfirm={async () => {
+          if (!cancelTarget) return;
+          try {
+            await cancelTask.mutateAsync({ projectId, taskId: cancelTarget.id });
+            toast.success("Task cancelled.");
+          } catch (error) {
+            toast.error(normalizeAppError(error).message);
+          }
+        }}
+        onOpenChange={(open) => {
+          if (!open) setCancelTarget(null);
+        }}
+        open={Boolean(cancelTarget)}
+        title="Cancel this task?"
+      />
     </div>
   );
 }

@@ -7,16 +7,19 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { uuid } from "@/lib/uuid";
 
-import { extractUrl, searchWeb } from "./api";
+import { retrySkillJob } from "../shared/api";
+import { extractUrl } from "./api";
 import { CanvasBoard } from "./canvas-board";
 import { CanvasToolbar } from "./canvas-toolbar";
 import { ChatPanel, type SkillNodePayload } from "./chat-panel";
 import { HistorySidebar } from "./history-sidebar";
 import { pendingSaveStore } from "./pending-save-store";
 import { useCanvas, useCanvasCacheSave, useSaveCanvas } from "./queries";
+import { recoverOrphanRunningNodes } from "./recover-running-nodes";
 import { runCanvasNode } from "./stream";
 import type { CanvasDocument, CanvasNode } from "./types";
 import { useAutosave, type SaveStatus } from "./use-autosave";
+import { useSkillJobPoll, type RunningSkillJob } from "./use-skill-job-poll";
 
 function emptyDoc(): CanvasDocument {
   return { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } };
@@ -145,11 +148,12 @@ export function CanvasPage() {
         // must not later overwrite it (P1). Any entry at or below the current
         // seq predates this reopen and is superseded.
         pendingSaveStore.resolve(loaded.id, pendingSaveStore.peekSeq());
-        setDoc(loaded.document);
+        const document = recoverOrphanRunningNodes(loaded.document);
+        setDoc(document);
         setTitle(loaded.title);
         setSelectedNodeIds([]);
         setSidebarCollapsed(false);
-        reset(loaded.document);
+        reset(document);
       }
       return;
     }
@@ -194,9 +198,45 @@ export function CanvasPage() {
     return flush((value) => cacheSave(canvasId, { title, document: value }));
   }, [canvasId, title, flush, cacheSave]);
 
+  // Retry a failed skill render: the server clones the failed job's input into
+  // a fresh queued job (new id -- the poller dedupes terminal jobs by id), and
+  // the node rebinds to the new id so the existing poll loop picks it up.
+  const retrySkillNode = useCallback(
+    (nodeId: string, jobId: string) => {
+      // Unbind the failed job while the retry is in flight: a node that is
+      // "running" but still bound to the old jobId would be polled instantly,
+      // and the old job's terminal error would flip the node right back.
+      patchNodeData(nodeId, {
+        status: "running",
+        jobId: null,
+        error: null,
+        progressStage: null,
+        progressMessage: null,
+      });
+      retrySkillJob(jobId)
+        .then(({ jobId: nextJobId }) => patchNodeData(nodeId, { jobId: nextJobId }))
+        .catch((error: unknown) =>
+          patchNodeData(nodeId, {
+            status: "error",
+            jobId,
+            error: error instanceof Error ? error.message : "重试失败",
+          }),
+        );
+    },
+    [patchNodeData],
+  );
+
   const runNode = useCallback(
     (nodeId: string) => {
       if (!canvasId) {
+        return;
+      }
+      // An html skill node's "run" is a job retry, not an SSE node run.
+      const target = doc?.nodes.find((n) => n.id === nodeId);
+      if (target?.type === "html") {
+        if (typeof target.data.jobId === "string") {
+          retrySkillNode(nodeId, target.data.jobId);
+        }
         return;
       }
       patchNodeData(nodeId, { status: "running", error: null });
@@ -217,6 +257,14 @@ export function CanvasPage() {
                 nodes: prev.nodes.map((n) => {
                   if (n.id !== nodeId) {
                     return n;
+                  }
+                  // Search results replace the node's markdown and are not
+                  // versioned (unlike analyze/image, which accumulate versions).
+                  if (n.type === "search") {
+                    return {
+                      ...n,
+                      data: { ...n.data, status: "idle", error: null, markdown: payload.markdown },
+                    };
                   }
                   const versions = Array.isArray(n.data.versions)
                     ? (n.data.versions as unknown[])
@@ -247,10 +295,17 @@ export function CanvasPage() {
             });
           },
           onError: (message) => patchNodeData(nodeId, { status: "error", error: message }),
-        });
+        }).catch((error: unknown) =>
+          // A transport failure (network drop, aborted fetch) rejects instead of
+          // reaching onError; without this the node would stay "running" forever.
+          patchNodeData(nodeId, {
+            status: "error",
+            error: error instanceof Error ? error.message : "运行失败",
+          }),
+        );
       });
     },
-    [canvasId, flushCurrent, patchNodeData],
+    [canvasId, doc, flushCurrent, patchNodeData, retrySkillNode],
   );
 
   const fetchUrlNode = useCallback(
@@ -278,36 +333,6 @@ export function CanvasPage() {
           patchNodeData(nodeId, {
             status: "error",
             error: error instanceof Error ? error.message : "fetch failed",
-          });
-        });
-    },
-    [doc, patchNodeData],
-  );
-
-  const runSearchNode = useCallback(
-    (nodeId: string) => {
-      const node = doc?.nodes.find((n) => n.id === nodeId);
-      const query = typeof node?.data.query === "string" ? node.data.query : "";
-      if (!query) {
-        return;
-      }
-      patchNodeData(nodeId, { status: "loading", error: null });
-      void searchWeb(query)
-        .then((result) => {
-          if (result.status === "ok") {
-            patchNodeData(nodeId, {
-              status: "idle",
-              error: null,
-              markdown: result.markdown,
-            });
-          } else {
-            patchNodeData(nodeId, { status: "error", error: result.error ?? "search failed" });
-          }
-        })
-        .catch((error: unknown) => {
-          patchNodeData(nodeId, {
-            status: "error",
-            error: error instanceof Error ? error.message : "search failed",
           });
         });
     },
@@ -347,6 +372,11 @@ export function CanvasPage() {
       const position = latest
         ? { x: latest.x + latest.w + CHAIN_GAP, y: latest.y }
         : (suggestedPosition(payload) ?? placementOrigin(prev));
+      // sourceNodeIds is a transient wiring hint from /analyze; it drives the
+      // edges below but must not be persisted onto the node (the runtime never
+      // reads it and it would drift as the graph changes).
+      const persistedData = { ...(source.data ?? {}) };
+      delete persistedData.sourceNodeIds;
       const node: CanvasNode = {
         id,
         type: source.type,
@@ -356,7 +386,7 @@ export function CanvasPage() {
         h: size.h,
         // Stable creation number, assigned once and never renumbered (gaps are
         // left after deletions). Read back for display via data.index.
-        data: { ...(source.data ?? {}), index: nextNodeIndex(prev.nodes) },
+        data: { ...persistedData, index: nextNodeIndex(prev.nodes) },
       };
       const existingIds = new Set(prev.nodes.map((n) => n.id));
       const sourceIds = Array.isArray(source.data?.sourceNodeIds)
@@ -364,13 +394,11 @@ export function CanvasPage() {
             (s): s is string => typeof s === "string" && existingIds.has(s),
           )
         : [];
-      // Auto-connect the new node to the latest node, merged with any explicit
-      // source references and de-duplicated so the chain predecessor doubling as
-      // a source still yields a single edge.
-      const linkSources = new Set(sourceIds);
-      if (latest) {
-        linkSources.add(latest.id);
-      }
+      // Explicit source references (the nodes the skill actually ran against)
+      // win outright; chaining to the latest node is only a fallback for nodes
+      // created without any source context.
+      const linkSources =
+        sourceIds.length > 0 ? new Set(sourceIds) : new Set(latest ? [latest.id] : []);
       const newEdges = [...linkSources].map((src) => ({
         id: uuid(),
         source: src,
@@ -379,6 +407,31 @@ export function CanvasPage() {
       return { ...prev, nodes: [...prev.nodes, node], edges: [...prev.edges, ...newEdges] };
     });
   }, []);
+
+  // A skill node lands as an html placeholder carrying its jobId. Poll each
+  // running job and backfill the node when it finishes; autosave persists the
+  // patch on the same path as every other edit.
+  const runningSkillJobs: RunningSkillJob[] = (doc?.nodes ?? [])
+    .filter(
+      (n) => n.type === "html" && n.data?.status === "running" && typeof n.data?.jobId === "string",
+    )
+    .map((n) => ({ nodeId: n.id, jobId: n.data.jobId as string }));
+
+  useSkillJobPoll(runningSkillJobs, {
+    onDone: (nodeId, result) =>
+      patchNodeData(nodeId, {
+        status: "done",
+        assetId: result.assetId,
+        url: result.url,
+        title: result.title,
+      }),
+    onError: (nodeId, message) => patchNodeData(nodeId, { status: "error", error: message }),
+    onProgress: (nodeId, progress) =>
+      patchNodeData(nodeId, {
+        progressStage: progress.stage,
+        progressMessage: progress.message,
+      }),
+  });
 
   return (
     <div className="flex h-full min-h-0">
@@ -396,7 +449,7 @@ export function CanvasPage() {
           <CanvasHeader title={title} status={status} hasDoc={!!doc} onRename={renameCanvas} onRetry={() => doc && void onSave(doc)} failedSaveTitle={failedSave?.title} onRetryFailed={retryFailedSave} actions={doc ? <CanvasToolbar onAdd={addSkillNode} /> : null} />
           {doc ? (
             <div className="min-h-0 flex-1">
-              <CanvasBoard key={canvasId} document={doc} onChange={setDoc} onRunNode={runNode} onFetchUrl={fetchUrlNode} onSearchNode={runSearchNode} onSelectionChange={setSelectedNodeIds} />
+              <CanvasBoard key={canvasId} document={doc} onChange={setDoc} onRunNode={runNode} onFetchUrl={fetchUrlNode} onSelectionChange={setSelectedNodeIds} />
             </div>
           ) : (
             <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
@@ -414,7 +467,7 @@ const statusLabels: Record<SaveStatus, { text: string; className: string }> = {
   idle: { text: "", className: "text-muted-foreground" },
   pending: { text: "Unsaved...", className: "text-muted-foreground" },
   saving: { text: "Saving...", className: "text-muted-foreground" },
-  saved: { text: "Saved", className: "text-emerald-600" },
+  saved: { text: "Saved", className: "text-emerald-600 dark:text-emerald-400" },
   error: { text: "Save failed - Retry", className: "text-destructive" },
 };
 
@@ -555,13 +608,24 @@ function nextNodeIndex(nodes: CanvasNode[]): number {
   return Math.max(maxStored, nodes.length) + 1;
 }
 
+// Per-type starting sizes tuned to each node's typical content. Users can resize
+// freely afterwards (persisted), so these are just sensible defaults, not caps.
 const NODE_SIZES: Record<CanvasNode["type"], { w: number; h: number }> = {
-  note: { w: 280, h: 180 },
-  url: { w: 340, h: 280 },
-  search: { w: 340, h: 280 },
-  kb: { w: 240, h: 120 },
-  ai_analyze: { w: 360, h: 320 },
-  ai_image: { w: 320, h: 400 },
+  // A single freeform markdown textarea: a comfortable, slightly-tall writing area.
+  note: { w: 300, h: 220 },
+  // URL input + fetched article markdown; content-heavy, so give the body reading room.
+  url: { w: 360, h: 340 },
+  // Query input + web-search results markdown; same content-heavy shape as url.
+  search: { w: 360, h: 340 },
+  // Read-only reference showing just a project name on one line; keep it compact.
+  kb: { w: 260, h: 120 },
+  // Prompt + a long streamed markdown answer; the answer dominates, so run tall.
+  ai_analyze: { w: 380, h: 360 },
+  // Prompt on top + a (default square 1024x1024) generated image filling the rest.
+  ai_image: { w: 340, h: 420 },
+  // Sandboxed iframe rendering a generated single-file HTML deck; sized to give the
+  // slide preview a usable viewport.
+  html: { w: 420, h: 340 },
 };
 
 function defaultSize(type: CanvasNode["type"]): { w: number; h: number } {

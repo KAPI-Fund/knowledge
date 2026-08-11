@@ -12,7 +12,7 @@ use tempfile::tempdir;
 use tower::util::ServiceExt;
 
 #[tokio::test]
-async fn system_settings_round_trip_provider_config() {
+async fn system_settings_round_trip_structured_config() {
     let _env = TestEnvironment::start("system-settings").await.unwrap();
     let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
     let state = bootstrap_state(&config).await.unwrap();
@@ -28,14 +28,15 @@ async fn system_settings_round_trip_provider_config() {
                 .header("x-csrf-token", &csrf)
                 .body(Body::from(
                     json!({
-                      "providerMode": "deterministic",
-                      "language": "en",
-                      "defaultQueryLimit": 3,
-                      "providerBaseUrl": "http://127.0.0.1:18080/v1",
-                      "providerApiKey": "test-key",
-                      "providerModel": "mock-model",
-                      "providerEmbeddingModel": "mock-embedding",
-                      "providerTimeoutSeconds": 45
+                      "defaults": { "language": "en", "defaultQueryLimit": 3 },
+                      "embedding": {
+                        "enabled": true,
+                        "baseUrl": "http://127.0.0.1:18080/v1",
+                        "apiKey": "test-key",
+                        "model": "mock-embedding",
+                        "timeoutSeconds": 45
+                      },
+                      "search": { "provider": "tavily" }
                     })
                     .to_string(),
                 ))
@@ -60,39 +61,42 @@ async fn system_settings_round_trip_provider_config() {
     assert_eq!(get_response.status(), StatusCode::OK);
     let payload = read_json(get_response.into_body()).await;
     assert_eq!(
-        payload.get("providerMode").and_then(Value::as_str),
-        Some("deterministic")
+        payload.pointer("/defaults/language").and_then(Value::as_str),
+        Some("en")
     );
-    assert_eq!(payload.get("language").and_then(Value::as_str), Some("en"));
     assert_eq!(
-        payload.get("defaultQueryLimit").and_then(Value::as_u64),
+        payload
+            .pointer("/defaults/defaultQueryLimit")
+            .and_then(Value::as_u64),
         Some(3)
     );
     assert_eq!(
-        payload.get("providerBaseUrl").and_then(Value::as_str),
-        Some("http://127.0.0.1:18080/v1"),
-    );
-    assert_eq!(
-        payload
-            .get("providerApiKeyConfigured")
-            .and_then(Value::as_bool),
+        payload.pointer("/embedding/enabled").and_then(Value::as_bool),
         Some(true)
     );
     assert_eq!(
-        payload.get("providerModel").and_then(Value::as_str),
-        Some("mock-model")
+        payload.pointer("/embedding/baseUrl").and_then(Value::as_str),
+        Some("http://127.0.0.1:18080/v1"),
     );
     assert_eq!(
-        payload
-            .get("providerEmbeddingModel")
-            .and_then(Value::as_str),
+        payload.pointer("/embedding/model").and_then(Value::as_str),
         Some("mock-embedding"),
     );
     assert_eq!(
         payload
-            .get("providerTimeoutSeconds")
+            .pointer("/embedding/timeoutSeconds")
             .and_then(Value::as_i64),
         Some(45)
+    );
+    assert_eq!(
+        payload
+            .pointer("/embedding/apiKeyConfigured")
+            .and_then(Value::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        payload.pointer("/search/provider").and_then(Value::as_str),
+        Some("tavily")
     );
 }
 
@@ -233,6 +237,133 @@ async fn ingest_creates_review_items_and_review_endpoint_can_update_status() {
             .and_then(Value::as_str),
         Some("resolved"),
     );
+}
+
+#[tokio::test]
+async fn reviews_resolve_endpoint_batches_and_dismisses() {
+    let temp = tempdir().unwrap();
+    let _env = TestEnvironment::start("review-batch-resolve").await.unwrap();
+    let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
+    let state = bootstrap_state(&config).await.unwrap();
+    let (cookie, csrf) = login_and_csrf(state.clone()).await;
+    let project_root = temp.path().join("review-batch-project");
+    let project_id = create_project(state.clone(), &cookie, &csrf, project_root.clone()).await;
+
+    std::fs::write(
+        project_root.join(".knowledge/reviews/items.json"),
+        json!({
+          "reviews": [
+            {
+              "id": "legacy-missing",
+              "status": "open",
+              "type": "missing-page",
+              "title": "Missing page: Attention",
+              "description": "Create Attention",
+              "options": []
+            },
+            {
+              "id": "legacy-duplicate",
+              "status": "open",
+              "type": "duplicate",
+              "title": "Duplicate page: Delta",
+              "description": "Merge Delta",
+              "options": []
+            }
+          ]
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let resolve_response = build_app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/projects/{project_id}/reviews:resolve"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .header("x-csrf-token", &csrf)
+                .body(Body::from(
+                    json!({ "ids": ["legacy-missing", "missing-id"] }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resolve_response.status(), StatusCode::OK);
+    let resolve_payload = read_json(resolve_response.into_body()).await;
+    assert_eq!(
+        resolve_payload
+            .get("resolved")
+            .and_then(Value::as_array)
+            .map(Vec::len),
+        Some(1)
+    );
+    assert_eq!(
+        resolve_payload
+            .get("notFound")
+            .and_then(Value::as_array)
+            .and_then(|items| items.first())
+            .and_then(Value::as_str),
+        Some("missing-id")
+    );
+
+    let dismiss_response = build_app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/projects/{project_id}/reviews:resolve"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .header("x-csrf-token", &csrf)
+                .body(Body::from(
+                    json!({ "ids": ["legacy-duplicate"], "action": "dismiss" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(dismiss_response.status(), StatusCode::OK);
+
+    let unresolved_response = build_app(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/projects/{project_id}/reviews"))
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let unresolved_payload = read_json(unresolved_response.into_body()).await;
+    assert_eq!(
+        unresolved_payload
+            .get("reviews")
+            .and_then(Value::as_array)
+            .map(Vec::len),
+        Some(0)
+    );
+
+    let all_response = build_app(state)
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/projects/{project_id}/reviews?status=all"))
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let all_payload = read_json(all_response.into_body()).await;
+    let statuses = all_payload
+        .get("reviews")
+        .and_then(Value::as_array)
+        .unwrap()
+        .iter()
+        .filter_map(|review| review.get("status").and_then(Value::as_str))
+        .collect::<Vec<_>>();
+    assert_eq!(statuses, vec!["resolved", "dismissed"]);
 }
 
 #[tokio::test]
@@ -779,22 +910,7 @@ async fn configure_provider(
     base_url: &str,
     model: &str,
 ) {
-    sqlx::query(
-        "UPDATE system_settings
-     SET provider_mode = $1,
-         provider_base_url = $2,
-         provider_api_key = $3,
-         provider_model = $4,
-         provider_timeout_seconds = $5",
-    )
-    .bind("openai-compatible")
-    .bind(base_url)
-    .bind("test-key")
-    .bind(model)
-    .bind(30_i64)
-    .execute(&state.pool)
-    .await
-    .unwrap();
+    support::seed_provider_connection(&state.pool, base_url, "test-key", model, 30).await;
 }
 
 async fn login_and_csrf(state: knowledge_server::app::state::AppState) -> (String, String) {

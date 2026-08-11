@@ -1,0 +1,1 @@
+ALTER TABLE system_settings ADD COLUMN ingest_paused BOOLEAN NOT NULL DEFAULT FALSE;

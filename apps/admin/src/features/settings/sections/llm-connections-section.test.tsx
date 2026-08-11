@@ -83,10 +83,38 @@ describe("LlmConnectionsSection", () => {
     const user = userEvent.setup();
     deleteConnection.mockResolvedValue({});
     settingsData.mockReturnValue(twoConnections());
-    vi.spyOn(window, "confirm").mockReturnValue(true);
     render(<LlmConnectionsSection />);
     const row = screen.getByText("Local vLLM").closest("li") as HTMLElement;
-    await user.click(within(row).getByRole("button", { name: /delete/i }));
+    await user.click(within(row).getByRole("button", { name: /^delete$/i }));
+    await user.click(await screen.findByRole("button", { name: "Delete connection" }));
     expect(deleteConnection).toHaveBeenCalledWith("c2");
+  });
+
+  it("clears a saved key via the clear-key switch", async () => {
+    const user = userEvent.setup();
+    updateConnection.mockResolvedValue({});
+    settingsData.mockReturnValue(twoConnections());
+    render(<LlmConnectionsSection />);
+    const row = screen.getByText("OpenAI").closest("li") as HTMLElement;
+    await user.click(within(row).getByRole("button", { name: /edit/i }));
+    await user.click(within(row).getByRole("switch", { name: /clear saved key/i }));
+    // Requesting a clear disables the key field so a stale value can't be sent.
+    expect(within(row).getByLabelText(/api key/i)).toBeDisabled();
+    await user.click(within(row).getByRole("button", { name: /^save$/i }));
+    const payload = updateConnection.mock.calls[0][0];
+    expect(payload).toMatchObject({ id: "c1", clearApiKey: true });
+    expect(payload).not.toHaveProperty("apiKey");
+  });
+
+  it("hides the clear-key switch for a connection with no saved key", async () => {
+    const user = userEvent.setup();
+    settingsData.mockReturnValue(twoConnections());
+    render(<LlmConnectionsSection />);
+    // Local vLLM has apiKeyConfigured: false.
+    const row = screen.getByText("Local vLLM").closest("li") as HTMLElement;
+    await user.click(within(row).getByRole("button", { name: /edit/i }));
+    expect(
+      within(row).queryByRole("switch", { name: /clear saved key/i }),
+    ).not.toBeInTheDocument();
   });
 });

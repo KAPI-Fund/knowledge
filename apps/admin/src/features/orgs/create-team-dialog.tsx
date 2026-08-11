@@ -1,15 +1,26 @@
-import { useState } from "react";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { useForm } from "react-hook-form";
+import { toast } from "sonner";
+import { z } from "zod";
+
+import { FormDialog } from "@/components/shared/form-dialog";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Button } from "@/components/ui/button";
+  FormControl,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+
 import { useCreateTeamMutation } from "./workspace-mutations";
+
+const createTeamSchema = z.object({
+  name: z.string().trim().min(1, "Name is required."),
+  slug: z.string().trim().min(1, "Slug is required."),
+});
+
+type CreateTeamValues = z.infer<typeof createTeamSchema>;
 
 export function CreateTeamDialog({
   orgId,
@@ -20,66 +31,60 @@ export function CreateTeamDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
-  const [name, setName] = useState("");
-  const [slug, setSlug] = useState("");
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const mutation = useCreateTeamMutation(orgId);
+  const form = useForm<CreateTeamValues>({
+    resolver: zodResolver(createTeamSchema),
+    defaultValues: { name: "", slug: "" },
+  });
 
-  const submit = async () => {
-    setErrorMessage(null);
+  async function onSubmit(values: CreateTeamValues) {
     try {
-      await mutation.mutateAsync({ name: name.trim(), slug: slug.trim() });
+      await mutation.mutateAsync({ name: values.name, slug: values.slug });
       onOpenChange(false);
-      setName("");
-      setSlug("");
+      toast.success(`Team "${values.name}" created.`);
+      form.reset({ name: "", slug: "" });
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "Failed to create team");
+      toast.error(error instanceof Error ? error.message : "Failed to create team");
     }
-  };
+  }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>New team</DialogTitle>
-          <DialogDescription>
-            Create a team within this organization.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="grid gap-3">
-          <label className="grid gap-1.5 text-sm font-medium">
-            Name
-            <Input
-              placeholder="Engineering"
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-            />
-          </label>
-          <label className="grid gap-1.5 text-sm font-medium">
-            Slug
-            <Input
-              placeholder="engineering"
-              value={slug}
-              onChange={(event) => setSlug(event.target.value)}
-            />
-          </label>
-          {errorMessage ? (
-            <p className="text-sm text-destructive">{errorMessage}</p>
-          ) : null}
-        </div>
-        <DialogFooter>
-          <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-            Cancel
-          </Button>
-          <Button
-            type="button"
-            onClick={submit}
-            disabled={!name.trim() || !slug.trim() || mutation.isPending}
-          >
-            Create
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+    <FormDialog
+      description="Create a team within this organization."
+      form={form}
+      isPending={mutation.isPending}
+      onOpenChange={onOpenChange}
+      onSubmit={onSubmit}
+      open={open}
+      submitLabel="Create"
+      title="New team"
+    >
+      <FormField
+        control={form.control}
+        name="name"
+        render={({ field }) => (
+          <FormItem>
+            <FormLabel>Name</FormLabel>
+            <FormControl>
+              <Input placeholder="Engineering" {...field} />
+            </FormControl>
+            <FormMessage />
+          </FormItem>
+        )}
+      />
+      <FormField
+        control={form.control}
+        name="slug"
+        render={({ field }) => (
+          <FormItem>
+            <FormLabel>Slug</FormLabel>
+            <FormControl>
+              <Input placeholder="engineering" {...field} />
+            </FormControl>
+            <FormMessage />
+          </FormItem>
+        )}
+      />
+    </FormDialog>
   );
 }

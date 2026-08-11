@@ -1,12 +1,18 @@
+import { ScanSearch } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
+import { toast } from "sonner";
 
 import { RouteStatePane } from "@/components/layout/route-state-pane";
 import { PageHeader } from "@/components/shared/page-header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { normalizeAppError } from "@/lib/app-error";
+import { formatDateTime } from "@/lib/format";
 
 import {
   useProjectSourceWatchQuery,
@@ -28,7 +34,7 @@ export function SourceWatchPage() {
   const [excludeGlobs, setExcludeGlobs] = useState("");
   const [maxFileSizeMb, setMaxFileSizeMb] = useState("100");
   const [intervalMinutes, setIntervalMinutes] = useState("5");
-  const [statusMessage, setStatusMessage] = useState("");
+  const [lastScanSummary, setLastScanSummary] = useState("");
   const hydratedFrom = useRef<string>("");
 
   useEffect(() => {
@@ -54,26 +60,34 @@ export function SourceWatchPage() {
   }, [settings.data]);
 
   async function handleSave() {
-    await updateSettings.mutateAsync({
-      projectId,
-      enabled,
-      autoIngest,
-      path: path.trim(),
-      includeExtensions: parseCsv(includeExtensions),
-      excludeExtensions: parseCsv(excludeExtensions),
-      excludeDirs: parseCsv(excludeDirs),
-      excludeGlobs: parseCsv(excludeGlobs),
-      maxFileSizeMb: Number(maxFileSizeMb) || 100,
-      intervalMinutes: Number(intervalMinutes) || 5,
-    });
-    setStatusMessage("Saved source watch settings.");
+    try {
+      await updateSettings.mutateAsync({
+        projectId,
+        enabled,
+        autoIngest,
+        path: path.trim(),
+        includeExtensions: parseCsv(includeExtensions),
+        excludeExtensions: parseCsv(excludeExtensions),
+        excludeDirs: parseCsv(excludeDirs),
+        excludeGlobs: parseCsv(excludeGlobs),
+        maxFileSizeMb: Number(maxFileSizeMb) || 100,
+        intervalMinutes: Number(intervalMinutes) || 5,
+      });
+      toast.success("Saved source watch settings.");
+    } catch (error) {
+      toast.error(normalizeAppError(error).message);
+    }
   }
 
   async function handleScanNow() {
-    const result = await scanSourceWatch.mutateAsync(projectId);
-    setStatusMessage(
-      `Scanned ${result.watchedCount} file(s), copied ${result.copiedCount}, queued ${result.queuedIngestCount} ingest task(s).`,
-    );
+    try {
+      const result = await scanSourceWatch.mutateAsync(projectId);
+      const summary = `Scanned ${result.watchedCount} file(s), copied ${result.copiedCount}, queued ${result.queuedIngestCount} ingest task(s).`;
+      setLastScanSummary(summary);
+      toast.success(summary);
+    } catch (error) {
+      toast.error(normalizeAppError(error).message);
+    }
   }
 
   if (settings.isLoading) {
@@ -95,6 +109,7 @@ export function SourceWatchPage() {
               onClick={handleScanNow}
               variant="outline"
             >
+              <ScanSearch />
               Scan Now
             </Button>
             <Button disabled={updateSettings.isPending} onClick={handleSave}>
@@ -112,23 +127,23 @@ export function SourceWatchPage() {
           <CardDescription>Mirror upstream source folders and optionally queue ingest work.</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4 sm:grid-cols-2">
-          <label className="flex items-center gap-3 rounded-xl border border-border/70 px-4 py-3 text-sm font-medium">
-            <input
+          <div className="flex items-center justify-between gap-3 rounded-lg border px-4 py-3">
+            <Label htmlFor="source-watch-enabled">Enable source watch</Label>
+            <Switch
               checked={enabled}
-              onChange={(event) => setEnabled(event.target.checked)}
-              type="checkbox"
+              id="source-watch-enabled"
+              onCheckedChange={setEnabled}
             />
-            Enable source watch
-          </label>
+          </div>
 
-          <label className="flex items-center gap-3 rounded-xl border border-border/70 px-4 py-3 text-sm font-medium">
-            <input
+          <div className="flex items-center gap-3 rounded-lg border px-4 py-3">
+            <Checkbox
               checked={autoIngest}
-              onChange={(event) => setAutoIngest(event.target.checked)}
-              type="checkbox"
+              id="source-watch-auto-ingest"
+              onCheckedChange={(checked) => setAutoIngest(checked === true)}
             />
-            Automatically enqueue ingest tasks
-          </label>
+            <Label htmlFor="source-watch-auto-ingest">Automatically enqueue ingest tasks</Label>
+          </div>
 
           <label className="grid gap-2 text-sm font-medium sm:col-span-2">
             Watch Path
@@ -181,11 +196,13 @@ export function SourceWatchPage() {
         <CardContent className="grid gap-3 text-sm">
           <div className="grid gap-1">
             <p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Last Scan</p>
-            <p>{settings.data?.lastScanAt ?? "No scans recorded yet."}</p>
+            <p>
+              {settings.data?.lastScanAt
+                ? formatDateTime(settings.data.lastScanAt)
+                : "No scans recorded yet."}
+            </p>
           </div>
-          {statusMessage ? (
-            <p aria-live="polite">{statusMessage}</p>
-          ) : null}
+          {lastScanSummary ? <p aria-live="polite">{lastScanSummary}</p> : null}
         </CardContent>
       </Card>
     </div>

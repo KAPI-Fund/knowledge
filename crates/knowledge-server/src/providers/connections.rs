@@ -65,10 +65,40 @@ pub fn resolve_active(rows: &[ProviderConnection]) -> Option<&ProviderConnection
 
 const SELECT_COLUMNS: &str = "id, label, base_url, api_key, model, timeout_seconds, is_active, sort_order, created_at, updated_at";
 
+/// Transaction-scoped advisory lock key that serializes every mutation touching
+/// the `is_active` invariant — create, activate, and delete. Without a single
+/// shared lock these can interleave into a 0- or 2-active state (e.g. a delete
+/// that read the row as inactive racing an activate that just made it active).
+/// The value is arbitrary but must stay stable so all callers contend on the same
+/// lock. It releases automatically on commit/rollback. (ASCII for "llm_conn".)
+const ACTIVE_STATE_LOCK: i64 = 0x6c6c6d5f636f6e6e;
+
 fn now() -> Result<String, ApiError> {
     OffsetDateTime::now_utc()
         .format(&Rfc3339)
         .map_err(|_| ApiError::internal("failed to format timestamp"))
+}
+
+/// Reject blank label/base_url/model before writing. A connection with an empty
+/// base_url or model can never resolve into a usable provider, so it must fail as
+/// a 400 rather than being stored as a broken active connection.
+fn validate_connection_fields(label: &str, base_url: &str, model: &str) -> Result<(), ApiError> {
+    if label.trim().is_empty() {
+        return Err(ApiError::bad_request("label is required"));
+    }
+    if base_url.trim().is_empty() {
+        return Err(ApiError::bad_request("base_url is required"));
+    }
+    if model.trim().is_empty() {
+        return Err(ApiError::bad_request("model is required"));
+    }
+    Ok(())
+}
+
+/// Trim surrounding whitespace off the stored identity fields so a padded base_url
+/// or model can't silently break request URLs / model routing at call time.
+fn normalize_connection_fields(label: &str, base_url: &str, model: &str) -> (String, String, String) {
+    (label.trim().to_string(), base_url.trim().to_string(), model.trim().to_string())
 }
 
 /// Fields accepted when creating a connection.
@@ -115,18 +145,33 @@ pub async fn create_connection(
     pool: &PgPool,
     input: &NewConnection,
 ) -> Result<ProviderConnection, ApiError> {
+    let (label, base_url, model) =
+        normalize_connection_fields(&input.label, &input.base_url, &input.model);
+    validate_connection_fields(&label, &base_url, &model)?;
     let id = Uuid::new_v4().to_string();
     let ts = now()?;
+
+    // Serialize against activate/delete via the shared active-state lock so two
+    // concurrent creates can't both observe an empty table and each insert an
+    // is_active=true row (which would break the "exactly one active connection"
+    // invariant).
+    let mut tx = pool.begin().await.map_err(ApiError::from)?;
+    sqlx::query("SELECT pg_advisory_xact_lock($1)")
+        .bind(ACTIVE_STATE_LOCK)
+        .execute(&mut *tx)
+        .await
+        .map_err(ApiError::from)?;
+
     // First connection becomes active; new ones append after the current max.
     let existing: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM provider_connections")
-        .fetch_one(pool)
+        .fetch_one(&mut *tx)
         .await
         .map_err(ApiError::from)?;
     let is_active = existing == 0;
     let next_sort: i32 = sqlx::query_scalar(
         "SELECT COALESCE(MAX(sort_order) + 1, 0) FROM provider_connections",
     )
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await
     .map_err(ApiError::from)?;
 
@@ -136,17 +181,19 @@ pub async fn create_connection(
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$9)"
     ))
     .bind(&id)
-    .bind(&input.label)
-    .bind(&input.base_url)
+    .bind(&label)
+    .bind(&base_url)
     .bind(input.api_key.as_deref())
-    .bind(&input.model)
+    .bind(&model)
     .bind(input.timeout_seconds)
     .bind(is_active)
     .bind(next_sort)
     .bind(&ts)
-    .execute(pool)
+    .execute(&mut *tx)
     .await
     .map_err(ApiError::from)?;
+
+    tx.commit().await.map_err(ApiError::from)?;
 
     get_connection(pool, &id)
         .await?
@@ -168,6 +215,9 @@ pub async fn update_connection(
     id: &str,
     input: &UpdateConnection,
 ) -> Result<ProviderConnection, ApiError> {
+    let (label, base_url, model) =
+        normalize_connection_fields(&input.label, &input.base_url, &input.model);
+    validate_connection_fields(&label, &base_url, &model)?;
     let ts = now()?;
     let affected = sqlx::query(
         "UPDATE provider_connections
@@ -179,11 +229,11 @@ pub async fn update_connection(
              updated_at = $7
          WHERE id = $8",
     )
-    .bind(&input.label)
-    .bind(&input.base_url)
+    .bind(&label)
+    .bind(&base_url)
     .bind(input.api_key.as_deref())
     .bind(input.clear_api_key)
-    .bind(&input.model)
+    .bind(&model)
     .bind(input.timeout_seconds)
     .bind(&ts)
     .bind(id)
@@ -203,54 +253,68 @@ pub async fn update_connection(
 /// Activate one connection, clearing is_active on all others in a single UPDATE
 /// so exactly one row stays active. The EXISTS guard makes a missing id a no-op
 /// (rows_affected == 0 -> not_found) instead of clearing every row's is_active,
-/// which would leave the list with zero active connections.
+/// which would leave the list with zero active connections. Runs under the shared
+/// active-state lock so it can't interleave with a concurrent delete/create.
 pub async fn activate_connection(pool: &PgPool, id: &str) -> Result<(), ApiError> {
+    let mut tx = pool.begin().await.map_err(ApiError::from)?;
+    sqlx::query("SELECT pg_advisory_xact_lock($1)")
+        .bind(ACTIVE_STATE_LOCK)
+        .execute(&mut *tx)
+        .await
+        .map_err(ApiError::from)?;
+
     let affected = sqlx::query(
         "UPDATE provider_connections SET is_active = (id = $1)
          WHERE EXISTS (SELECT 1 FROM provider_connections WHERE id = $1)",
     )
     .bind(id)
-    .execute(pool)
+    .execute(&mut *tx)
     .await
     .map_err(ApiError::from)?
     .rows_affected();
     if affected == 0 {
         return Err(ApiError::not_found("connection not found"));
     }
+
+    tx.commit().await.map_err(ApiError::from)?;
     Ok(())
 }
 
-/// Delete a connection. If it was the active one, auto-activate the next by
-/// sort_order so the list is never left without an active connection.
+/// Delete a connection, then unconditionally re-promote the lowest-sort_order
+/// survivor whenever no active row remains. Reading "was this active?" before the
+/// delete would race a concurrent activate; instead we always heal the invariant
+/// after the delete. When the deleted connection was the last one, the table is
+/// left empty (an unconfigured state, same as a fresh install) — there is nothing
+/// to promote. Runs under the shared active-state lock so it can't interleave with
+/// a concurrent activate/create.
 pub async fn delete_connection(pool: &PgPool, id: &str) -> Result<(), ApiError> {
     let mut tx = pool.begin().await.map_err(ApiError::from)?;
+    sqlx::query("SELECT pg_advisory_xact_lock($1)")
+        .bind(ACTIVE_STATE_LOCK)
+        .execute(&mut *tx)
+        .await
+        .map_err(ApiError::from)?;
 
-    let was_active: Option<bool> =
-        sqlx::query_scalar("SELECT is_active FROM provider_connections WHERE id = $1")
-            .bind(id)
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(ApiError::from)?;
-    let Some(was_active) = was_active else {
-        return Err(ApiError::not_found("connection not found"));
-    };
-
-    sqlx::query("DELETE FROM provider_connections WHERE id = $1")
+    let affected = sqlx::query("DELETE FROM provider_connections WHERE id = $1")
         .bind(id)
         .execute(&mut *tx)
         .await
-        .map_err(ApiError::from)?;
-
-    if was_active {
-        // Promote the lowest-sort_order survivor, if any remain.
-        sqlx::query(
-            "UPDATE provider_connections SET is_active = true
-             WHERE id = (SELECT id FROM provider_connections ORDER BY sort_order, created_at LIMIT 1)",
-        )
-        .execute(&mut *tx)
-        .await
-        .map_err(ApiError::from)?;
+        .map_err(ApiError::from)?
+        .rows_affected();
+    if affected == 0 {
+        return Err(ApiError::not_found("connection not found"));
     }
+
+    // Heal the invariant: if nothing is active (either we deleted the active row,
+    // or a prior race left the table with zero active), promote the first survivor.
+    sqlx::query(
+        "UPDATE provider_connections SET is_active = true
+         WHERE id = (SELECT id FROM provider_connections ORDER BY sort_order, created_at LIMIT 1)
+           AND NOT EXISTS (SELECT 1 FROM provider_connections WHERE is_active)",
+    )
+    .execute(&mut *tx)
+    .await
+    .map_err(ApiError::from)?;
 
     tx.commit().await.map_err(ApiError::from)?;
     Ok(())
@@ -293,5 +357,22 @@ mod tests {
         let active = ActiveConnection::from(&c);
         assert_eq!(active.timeout_seconds, 30);
         assert_eq!(active.api_key, "");
+    }
+
+    #[test]
+    fn validate_connection_fields_rejects_blank_required_fields() {
+        assert!(validate_connection_fields("", "https://x", "m").is_err());
+        assert!(validate_connection_fields("L", "  ", "m").is_err());
+        assert!(validate_connection_fields("L", "https://x", "").is_err());
+        assert!(validate_connection_fields("L", "https://x", "m").is_ok());
+    }
+
+    #[test]
+    fn normalize_connection_fields_trims_surrounding_whitespace() {
+        let (label, base_url, model) =
+            normalize_connection_fields("  My LLM  ", " https://api.x/v1 ", "  gpt-4o  ");
+        assert_eq!(label, "My LLM");
+        assert_eq!(base_url, "https://api.x/v1");
+        assert_eq!(model, "gpt-4o");
     }
 }

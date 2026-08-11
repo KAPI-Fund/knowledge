@@ -18,7 +18,7 @@ use crate::canvas::store;
 use crate::http::error::ApiError;
 use crate::providers::{
     load_active_connection, load_image_config, ProviderChatMessage, ProviderChatStreamRequest,
-    ProviderImageRequest,
+    ProviderImageRequest, ProviderTextRequest,
 };
 use crate::query::load_query_settings;
 
@@ -31,8 +31,9 @@ pub fn router() -> Router<AppState> {
         )
         .route("/api/canvases/{id}/nodes/{node_id}/run", post(run_node_handler))
         .route("/api/canvases/{id}/chat", post(chat_handler))
+        .route("/api/canvas-skill-jobs/{id}", get(get_skill_job_handler))
+        .route("/api/canvas-skill-jobs/{id}/retry", post(retry_skill_job_handler))
         .route("/api/canvas/extract-url", post(extract_url_handler))
-        .route("/api/canvas/search", post(search_handler))
 }
 
 // ---------------------------------------------------------------------------
@@ -135,6 +136,17 @@ async fn create_handler(
     }))
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillJobStatus {
+    pub status: String,
+    pub result: Option<serde_json::Value>,
+    pub error: Option<serde_json::Value>,
+    pub progress: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub queue_position: Option<i64>,
+}
+
 async fn get_handler(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -154,6 +166,83 @@ async fn get_handler(
     }))
 }
 
+async fn get_skill_job_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<SkillJobStatus>, ApiError> {
+    let principal = resolve_principal(&state, &headers).await?;
+    let job = crate::canvas::skill_jobs::get_job(&state.pool, &id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("unknown job"))?;
+    // Only the creator may poll; never leak existence to others.
+    if job.created_by != principal.user_id {
+        return Err(ApiError::not_found("unknown job"));
+    }
+    let queue_position = if job.status == "queued" {
+        crate::canvas::skill_jobs::queue_position(&state.pool, &id).await?
+    } else {
+        None
+    };
+    Ok(Json(SkillJobStatus {
+        status: job.status,
+        result: job.result,
+        error: job.error,
+        progress: job.progress,
+        queue_position,
+    }))
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillJobRetryResponse {
+    pub job_id: String,
+}
+
+/// Requeue a failed skill render as a fresh job (same node, same input). A new
+/// job id is issued instead of resetting the old row: the old id stays a stable
+/// record of the failure, and the front-end poller dedupes terminal jobs by id,
+/// so reusing it would never be polled again.
+async fn retry_skill_job_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<SkillJobRetryResponse>, ApiError> {
+    let principal = resolve_principal(&state, &headers).await?;
+    require_csrf(&principal, &headers)?;
+    let job = crate::canvas::skill_jobs::get_job(&state.pool, &id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("unknown job"))?;
+    // Only the creator may retry; never leak existence to others.
+    if job.created_by != principal.user_id {
+        return Err(ApiError::not_found("unknown job"));
+    }
+    if job.status != "error" {
+        return Err(ApiError::bad_request("only a failed job can be retried"));
+    }
+    let active =
+        crate::canvas::skill_jobs::count_active_jobs_for_user(&state.pool, &principal.user_id)
+            .await?;
+    if active >= state.skill_jobs_per_user as i64 {
+        return Err(ApiError::too_many_requests(format!(
+            "同时进行的生成任务已达上限({}),请等现有任务完成后再重试",
+            state.skill_jobs_per_user
+        )));
+    }
+    let job_id = crate::canvas::skill_jobs::create_job(
+        &state.pool,
+        crate::canvas::skill_jobs::NewSkillJob {
+            canvas_id: job.canvas_id,
+            node_id: job.node_id,
+            skill_id: job.skill_id,
+            input: job.input,
+            created_by: job.created_by,
+        },
+    )
+    .await?;
+    Ok(Json(SkillJobRetryResponse { job_id }))
+}
+
 async fn save_handler(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -162,12 +251,14 @@ async fn save_handler(
 ) -> Result<Json<CanvasResponse>, ApiError> {
     let principal = resolve_principal(&state, &headers).await?;
     require_csrf(&principal, &headers)?;
+    let pruned = body.document.prune_invalid_edges();
+    let document_text = serde_json::to_string(&pruned).unwrap_or_else(|_| "{}".to_string());
     let rec = store::update_canvas(
         &state.pool,
         &id,
         &principal.user_id,
         &body.title,
-        &body.document_text(),
+        &document_text,
     )
     .await?
     .ok_or_else(|| ApiError::not_found("canvas not found"))?;
@@ -211,6 +302,10 @@ pub fn build_image_done_payload(version_id: &str, url: &str, created_at: &str) -
     json!({ "versionId": version_id, "url": url, "createdAt": created_at })
 }
 
+pub fn build_search_done_payload(markdown: &str) -> serde_json::Value {
+    json!({ "markdown": markdown })
+}
+
 pub fn build_skill_node_done_payload(node: serde_json::Value, x: f64, y: f64) -> serde_json::Value {
     json!({ "node": node, "x": x, "y": y })
 }
@@ -224,31 +319,21 @@ fn now_rfc3339() -> String {
     OffsetDateTime::now_utc().format(&Rfc3339).unwrap_or_default()
 }
 
-/// A canvas-chat message is either a slash-command skill or a plain prompt.
-#[derive(Debug, PartialEq, Eq)]
-enum ChatCommand {
-    Search(String),
-    Image(String),
-    Analyze(String),
-    Plain(String),
-}
-
-impl ChatCommand {
-    fn parse(message: &str) -> ChatCommand {
-        let trimmed = message.trim();
-        if let Some(rest) = trimmed.strip_prefix("/search") {
-            ChatCommand::Search(rest.trim().to_string())
-        } else if let Some(rest) = trimmed.strip_prefix("/image") {
-            ChatCommand::Image(rest.trim().to_string())
-        } else if let Some(rest) = trimmed.strip_prefix("/analyze") {
-            ChatCommand::Analyze(rest.trim().to_string())
-        } else {
-            ChatCommand::Plain(trimmed.to_string())
-        }
+/// Split a chat message into (command, argument) when it starts with `/`.
+/// `/ppt swiss style` -> (Some("ppt"), "swiss style"); `hello` -> (None, "hello").
+fn parse_slash_command(message: &str) -> (Option<&str>, &str) {
+    let trimmed = message.trim_start();
+    let Some(rest) = trimmed.strip_prefix('/') else {
+        return (None, message.trim());
+    };
+    match rest.split_once(char::is_whitespace) {
+        Some((cmd, arg)) => (Some(cmd), arg.trim()),
+        None => (Some(rest.trim()), ""),
     }
 }
 
 fn sse_error(message: &str) -> Event {
+    tracing::error!(target: "canvas_node_run", message, "canvas node run failed");
     Event::default().event("error").data(json!({ "message": message }).to_string())
 }
 
@@ -279,8 +364,17 @@ async fn run_node_handler(
             return Err(ApiError::bad_request("image node has no prompt"));
         }
         load_image_config(&state).await?; // validate image config before streaming
+
+        let blocks =
+            assemble_reference_blocks(&state, &principal, &doc, &node_id, &node_prompt).await?;
+        let final_prompt = if blocks.is_empty() {
+            node_prompt.clone()
+        } else {
+            format!("{node_prompt}\n\n参考:\n{}", blocks.join("\n\n"))
+        };
+
         let user_id = principal.user_id.clone();
-        let prompt = node_prompt.clone();
+        let prompt = final_prompt;
         let stream_state = state.clone();
         let event_stream: std::pin::Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>> =
             Box::pin(async_stream::stream! {
@@ -307,39 +401,52 @@ async fn run_node_handler(
         return Ok(Sse::new(event_stream).keep_alive(KeepAlive::default()));
     }
 
-    // Note/URL/prior-analysis references.
-    let mut blocks = crate::canvas::service::collect_reference_blocks(&doc, &node_id);
+    if node.r#type == "search" {
+        let blocks =
+            assemble_reference_blocks(&state, &principal, &doc, &node_id, &node_prompt).await?;
+        let guidance = node.data.get("query").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
 
-    // KB nodes -> RAG, with a per-project permission check; excluded if no access.
-    for project_id in crate::canvas::service::referenced_kb_project_ids(&doc, &node_id) {
-        let role = crate::tenancy::access::project_access_role(
-            &state.pool,
-            &project_id,
-            &principal.user_id,
-        )
-        .await
-        .map_err(ApiError::from)?;
-        match role {
-            Some(_role) => {
-                let root =
-                    crate::projects::service::project_root_for_id(&state, &project_id).await?;
-                let assembled = crate::chat::context::assemble_chat_context(
-                    &state,
-                    &project_id,
-                    &root,
-                    &node_prompt,
-                    8,
-                )
-                .await?;
-                for b in assembled.context_blocks {
-                    blocks.push(format!("Knowledge base ({project_id}):\n{b}"));
+        let query = if blocks.is_empty() {
+            if guidance.is_empty() {
+                return Err(ApiError::bad_request("search node has no query"));
+            }
+            guidance
+        } else {
+            let (system_prompt, user_prompt) =
+                crate::canvas::service::build_search_query_prompt(&guidance, &blocks);
+            let provider = load_active_connection(&state).await?.provider();
+            let response = provider
+                .complete_text(ProviderTextRequest { system_prompt, user_prompt, max_tokens: None })
+                .await
+                // A provider/transport failure is server-side, not a client error.
+                .map_err(|e| ApiError::internal(e.message().to_string()))?;
+            let synthesized = response.text.lines().next().unwrap_or("").trim().to_string();
+            if synthesized.is_empty() {
+                return Err(ApiError::bad_request("could not synthesize a search query"));
+            }
+            synthesized
+        };
+
+        let stream_state = state.clone();
+        let event_stream: std::pin::Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>> =
+            Box::pin(async_stream::stream! {
+                match run_web_search_markdown(&stream_state, &query).await {
+                    Ok(markdown) => {
+                        yield Ok(
+                            Event::default().event("done").data(
+                                build_search_done_payload(&markdown).to_string(),
+                            ),
+                        );
+                    }
+                    Err(message) => yield Ok(sse_error(&message)),
                 }
-            }
-            None => {
-                blocks.push(format!("[Knowledge base {project_id}: no access, excluded]"));
-            }
-        }
+            });
+        return Ok(Sse::new(event_stream).keep_alive(KeepAlive::default()));
     }
+
+    // Ordered Note/URL/prior-analysis/search/image references + KB via RAG.
+    let blocks =
+        assemble_reference_blocks(&state, &principal, &doc, &node_id, &node_prompt).await?;
 
     let prompt = crate::canvas::service::build_analyze_prompt(&node_prompt, &blocks);
 
@@ -461,56 +568,17 @@ async fn chat_handler(
         }
     }
 
-    let command = ChatCommand::parse(&message);
+    let (command_opt, argument) = parse_slash_command(&message);
+    let argument = argument.to_string();
+    let descriptor = command_opt.and_then(|c| state.skill_registry.by_command(c).cloned());
     let user_id = principal.user_id.clone();
+    let canvas_id = id.clone();
     let stream_state = state.clone();
 
     let event_stream = async_stream::stream! {
-        match command {
-            ChatCommand::Search(query) => {
-                if query.is_empty() {
-                    yield Ok(sse_error("search query must not be empty"));
-                    return;
-                }
-                match run_search_skill(&stream_state, &query).await {
-                    Ok(node) => {
-                        yield Ok(
-                            Event::default().event(skill_node_event_name()).data(
-                                build_skill_node_done_payload(node, x, y).to_string(),
-                            ),
-                        );
-                        yield Ok(Event::default().event("done").data("{}".to_string()));
-                    }
-                    Err(message) => yield Ok(sse_error(&message)),
-                }
-            }
-            ChatCommand::Image(prompt) => {
-                if prompt.is_empty() {
-                    yield Ok(sse_error("image prompt must not be empty"));
-                    return;
-                }
-                match run_image_skill(&stream_state, &user_id, &prompt).await {
-                    Ok(node) => {
-                        yield Ok(
-                            Event::default().event(skill_node_event_name()).data(
-                                build_skill_node_done_payload(node, x, y).to_string(),
-                            ),
-                        );
-                        yield Ok(Event::default().event("done").data("{}".to_string()));
-                    }
-                    Err(message) => yield Ok(sse_error(&message)),
-                }
-            }
-            ChatCommand::Analyze(prompt) => {
-                let node = build_analyze_node(&prompt, &selected_ids);
-                yield Ok(
-                    Event::default()
-                        .event(skill_node_event_name())
-                        .data(build_skill_node_done_payload(node, x, y).to_string()),
-                );
-                yield Ok(Event::default().event("done").data("{}".to_string()));
-            }
-            ChatCommand::Plain(text) => {
+        match descriptor {
+            // No recognized slash command → plain chat over selected-node context.
+            None => {
                 let settings = match load_query_settings(&stream_state).await {
                     Ok(settings) => settings,
                     Err(error) => {
@@ -535,7 +603,7 @@ async fn chat_handler(
                     }
                 );
                 let messages =
-                    vec![ProviderChatMessage { role: "user".to_string(), content: text }];
+                    vec![ProviderChatMessage { role: "user".to_string(), content: message }];
 
                 let mut full_text = String::new();
                 match provider
@@ -572,23 +640,79 @@ async fn chat_handler(
                         .data(json!({ "content": full_text }).to_string()),
                 );
             }
+            Some(descriptor) => {
+                // Any skill that requires a selection is blocked when none exists.
+                if descriptor.requires_selection() && selected_ids.is_empty() {
+                    yield Ok(sse_error("content empty"));
+                    return;
+                }
+                // Only LlmSkill descriptors reach dispatch (e.g. `/ppt`): create an
+                // async skill job and emit a running node the worker fills in later.
+                let per_user_limit = stream_state.skill_jobs_per_user as i64;
+                match crate::canvas::skill_jobs::count_active_jobs_for_user(
+                    &stream_state.pool,
+                    &user_id,
+                )
+                .await
+                {
+                    Ok(active) if active >= per_user_limit => {
+                        yield Ok(sse_error(&format!(
+                            "同时进行的生成任务已达上限({per_user_limit}),请等现有任务完成"
+                        )));
+                        return;
+                    }
+                    Ok(_) => {}
+                    Err(error) => {
+                        yield Ok(sse_error(&error.to_string()));
+                        return;
+                    }
+                }
+                let selection_text = plain_context.join("\n\n");
+                let node_id = uuid::Uuid::new_v4().to_string();
+                let input = json!({
+                    "selection": selection_text,
+                    "argument": argument,
+                });
+                let new_job = crate::canvas::skill_jobs::NewSkillJob {
+                    canvas_id,
+                    node_id,
+                    skill_id: descriptor.id.clone(),
+                    input,
+                    created_by: user_id.clone(),
+                };
+                let job_id = match crate::canvas::skill_jobs::create_job(
+                    &stream_state.pool,
+                    new_job,
+                )
+                .await
+                {
+                    Ok(job_id) => job_id,
+                    Err(error) => {
+                        yield Ok(sse_error(&error.to_string()));
+                        return;
+                    }
+                };
+                // sourceNodeIds tells the frontend which nodes the skill ran
+                // against so the generated node connects to them instead of the
+                // chain predecessor; it is stripped before the node persists.
+                let node = json!({
+                    "type": "html",
+                    "data": { "status": "running", "jobId": job_id, "sourceNodeIds": selected_ids }
+                });
+                yield Ok(
+                    Event::default().event(skill_node_event_name()).data(
+                        build_skill_node_done_payload(node, x, y).to_string(),
+                    ),
+                );
+                yield Ok(Event::default().event("done").data("{}".to_string()));
+            }
         }
     };
 
     Ok(Sse::new(event_stream).keep_alive(KeepAlive::default()))
 }
 
-/// `/search` skill: run web search and return a `note` node carrying the
-/// results as markdown (no URL of its own).
-async fn run_search_skill(state: &AppState, query: &str) -> Result<serde_json::Value, String> {
-    let markdown = run_web_search_markdown(state, query).await?;
-    Ok(json!({
-        "type": "note",
-        "data": { "title": format!("Search: {query}"), "markdown": markdown }
-    }))
-}
-
-/// `/image` skill: generate an image, persist it as an asset, and return an
+/// Generate an image, persist it as an asset, and return an
 /// `ai_image` node referencing the asset by id + url.
 async fn run_image_skill(
     state: &AppState,
@@ -635,22 +759,6 @@ fn build_image_node(
     })
 }
 
-/// `/analyze` skill: build an idle `ai_analyze` node referencing the selected
-/// nodes; the client wires the reference edges.
-fn build_analyze_node(prompt: &str, selected_ids: &[String]) -> serde_json::Value {
-    json!({
-        "type": "ai_analyze",
-        "data": {
-            "prompt": prompt,
-            "versions": [],
-            "activeVersionId": null,
-            "status": "idle",
-            "error": null,
-            "sourceNodeIds": selected_ids
-        }
-    })
-}
-
 // ---------------------------------------------------------------------------
 // URL extraction: fetch a page and return readable markdown
 // ---------------------------------------------------------------------------
@@ -660,40 +768,8 @@ struct ExtractUrlRequest {
     url: String,
 }
 
-// ---------------------------------------------------------------------------
-// Web search: run a query and return results as markdown (in-place node fill)
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Deserialize)]
-struct SearchRequest {
-    query: String,
-}
-
-async fn search_handler(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(body): Json<SearchRequest>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let principal = resolve_principal(&state, &headers).await?;
-    require_csrf(&principal, &headers)?;
-
-    let query = body.query.trim();
-    if query.is_empty() {
-        return Err(ApiError::bad_request("search query must not be empty"));
-    }
-
-    match run_web_search_markdown(&state, query).await {
-        Ok(markdown) => Ok(Json(json!({
-            "status": "ok", "query": query, "markdown": markdown, "error": null
-        }))),
-        Err(error) => Ok(Json(json!({
-            "status": "error", "query": query, "markdown": "", "error": error
-        }))),
-    }
-}
-
-/// Run web search for `query` and format the hits as markdown. Shared by the
-/// REST search endpoint and the `/search` chat skill.
+/// Run web search for `query` and format the hits as markdown. Used by the
+/// search node SSE run path.
 async fn run_web_search_markdown(state: &AppState, query: &str) -> Result<String, String> {
     let config = crate::web_search::config::load_web_search_config(state)
         .await
@@ -713,6 +789,56 @@ async fn run_web_search_markdown(state: &AppState, query: &str) -> Result<String
     Ok(crate::canvas::service::search_results_to_markdown(query, &entries))
 }
 
+/// Assemble reference blocks for `node_id` in spatial (y, then x) order. Text
+/// nodes format synchronously; KB nodes trigger RAG inline with a per-project
+/// permission check so every source obeys the same ordering.
+async fn assemble_reference_blocks(
+    state: &AppState,
+    principal: &Principal,
+    doc: &CanvasDocument,
+    node_id: &str,
+    node_prompt: &str,
+) -> Result<Vec<String>, ApiError> {
+    let mut blocks = Vec::new();
+    for src in doc.ordered_incoming_sources(node_id) {
+        if src.r#type == "kb" {
+            let Some(project_id) = src.data.get("projectId").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            let role = crate::tenancy::access::project_access_role(
+                &state.pool,
+                project_id,
+                &principal.user_id,
+            )
+            .await
+            .map_err(ApiError::from)?;
+            match role {
+                Some(_role) => {
+                    let root =
+                        crate::projects::service::project_root_for_id(state, project_id).await?;
+                    let assembled = crate::chat::context::assemble_chat_context(
+                        state,
+                        project_id,
+                        &root,
+                        node_prompt,
+                        8,
+                    )
+                    .await?;
+                    for b in assembled.context_blocks {
+                        blocks.push(format!("Knowledge base ({project_id}):\n{b}"));
+                    }
+                }
+                None => {
+                    blocks.push(format!("[Knowledge base {project_id}: no access, excluded]"));
+                }
+            }
+        } else if let Some(block) = crate::canvas::service::format_text_reference_block(src) {
+            blocks.push(block);
+        }
+    }
+    Ok(blocks)
+}
+
 async fn extract_url_handler(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -721,15 +847,19 @@ async fn extract_url_handler(
     let principal = resolve_principal(&state, &headers).await?;
     require_csrf(&principal, &headers)?;
 
-    let client = crate::canvas::service::build_extractor_client()
-        .map_err(|error| ApiError::internal(format!("http client init failed: {error}")))?;
+    let Some(config) = crate::web_fetch::config::load_fetch_config(&state).await? else {
+        return Ok(Json(json!({
+            "status": "error", "title": "", "markdown": "",
+            "error": "web page fetch is not configured; set a fetch provider in Settings"
+        })));
+    };
 
-    match crate::canvas::service::fetch_url(&client, &body.url).await {
+    match crate::web_fetch::firecrawl::scrape(&config, &body.url).await {
         Ok(page) => Ok(Json(json!({
             "status": "ok", "title": page.title, "markdown": page.markdown, "error": null
         }))),
         Err(error) => Ok(Json(json!({
-            "status": "error", "title": "", "markdown": "", "error": error
+            "status": "error", "title": "", "markdown": "", "error": error.to_string()
         }))),
     }
 }
@@ -785,29 +915,10 @@ mod tests {
     }
 
     #[test]
-    fn chat_command_parse_recognizes_slash_skills() {
-        assert_eq!(ChatCommand::parse("/search cats"), ChatCommand::Search("cats".to_string()));
-        assert_eq!(ChatCommand::parse("/image a fox"), ChatCommand::Image("a fox".to_string()));
-        assert_eq!(ChatCommand::parse("/analyze"), ChatCommand::Analyze(String::new()));
-        assert_eq!(
-            ChatCommand::parse("just chatting"),
-            ChatCommand::Plain("just chatting".to_string())
-        );
-    }
-
-    #[test]
-    fn build_analyze_node_references_selected_ids() {
-        let node = build_analyze_node("summarize", &["a".to_string(), "b".to_string()]);
-        assert_eq!(node["type"], "ai_analyze");
-        assert_eq!(node["data"]["prompt"], "summarize");
-        assert_eq!(node["data"]["sourceNodeIds"][0], "a");
-        assert_eq!(node["data"]["status"], "idle");
-    }
-
-    #[test]
-    fn search_request_deserializes_query() {
-        let req: SearchRequest = serde_json::from_str(r#"{"query":"cats"}"#).unwrap();
-        assert_eq!(req.query, "cats");
+    fn parse_slash_command_splits_command_and_arg() {
+        assert_eq!(parse_slash_command("/ppt swiss"), (Some("ppt"), "swiss"));
+        assert_eq!(parse_slash_command("/ppt"), (Some("ppt"), ""));
+        assert_eq!(parse_slash_command("no command"), (None, "no command"));
     }
 
     #[test]
@@ -855,5 +966,11 @@ mod tests {
         assert_eq!(versions[0]["id"], "v-1");
         assert_eq!(versions[0]["url"], "/api/assets/asset-1");
         assert_eq!(versions[0]["createdAt"], "2026-07-01T00:00:00Z");
+    }
+
+    #[test]
+    fn search_done_payload_carries_markdown() {
+        let payload = build_search_done_payload("Search results for \"cats\":\n- a");
+        assert_eq!(payload["markdown"], "Search results for \"cats\":\n- a");
     }
 }

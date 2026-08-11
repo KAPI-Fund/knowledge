@@ -44,15 +44,27 @@ services:
       KNOWLEDGE_DATABASE_URL: postgres://postgres:postgres@postgres:5432/knowledge?sslmode=disable
       KNOWLEDGE_REDIS_URL: redis://redis:6379/
       KNOWLEDGE_PROJECT_ROOT: /data/projects
-      KNOWLEDGE_PROVIDER_MODE: openai-compatible
-      KNOWLEDGE_PROVIDER_BASE_URL: ${KNOWLEDGE_PROVIDER_BASE_URL:-https://backend.intelalloc.com}
-      KNOWLEDGE_PROVIDER_API_KEY: ${KNOWLEDGE_PROVIDER_API_KEY:-}
-      KNOWLEDGE_PROVIDER_MODEL: ${KNOWLEDGE_PROVIDER_MODEL:-gpt-5.4}
-      KNOWLEDGE_PROVIDER_TIMEOUT_SECONDS: ${KNOWLEDGE_PROVIDER_TIMEOUT_SECONDS:-180}
+      KNOWLEDGE_SKILLS_DIR: /app/skills
+      # Server-wide agent SKILL.md directory; project .knowledge/skills/
+      # entries with the same id override these.
+      KNOWLEDGE_GLOBAL_SKILLS_DIR: /data/agent-skills
+      # Bootstraps the first admin user on a fresh database. Change before any
+      # non-local deployment.
+      KNOWLEDGE_ADMIN_PASSWORD: admin
+      # skill-runner sidecar(跑在带 KVM 的 Linux 主机上,执行 CubeSandbox+codex)。
+      # 本地无 KVM 时 /ppt 会失败,属预期;配置真实地址后生效。
+      KNOWLEDGE_SKILL_RUNNER_URL: ${KNOWLEDGE_SKILL_RUNNER_URL:-http://host.docker.internal:4600}
+      # 渲染并发闸门:同时打到 skill-runner 的 CubeSandbox 微 VM 数,调大前先
+      # 确认 KVM 主机容量。KNOWLEDGE_SKILL_JOBS_PER_USER 是单用户在途任务上限。
+      KNOWLEDGE_SKILL_WORKER_CONCURRENCY: ${KNOWLEDGE_SKILL_WORKER_CONCURRENCY:-2}
+      KNOWLEDGE_SKILL_JOBS_PER_USER: ${KNOWLEDGE_SKILL_JOBS_PER_USER:-2}
     ports:
       - "4001:4001"
     volumes:
       - knowledge-projects:/data/projects
+      # Repo-versioned global agent skills; edits on the host take effect on
+      # the next agent turn without a rebuild.
+      - ./crates/knowledge-server/agent-skills:/data/agent-skills
 
   admin:
     build:

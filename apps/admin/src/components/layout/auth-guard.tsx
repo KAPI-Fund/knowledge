@@ -10,7 +10,7 @@ export function AuthGuard() {
 
   if (session.isLoading) {
     return (
-      <main className="page">
+      <main className="grid min-h-svh place-items-center px-6 py-10">
         <Card className="w-full max-w-md">
           <CardContent className="space-y-3 p-6">
             <Skeleton className="h-5 w-24" />

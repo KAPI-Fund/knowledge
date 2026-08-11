@@ -79,6 +79,7 @@ describe("api tokens page", () => {
     expect(screen.getByText("abcd1234…")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Revoke" }));
+    await user.click(await screen.findByRole("button", { name: "Revoke token" }));
 
     expect(mockRevokeToken).toHaveBeenCalledWith({ tokenId: "token-1" });
   });
@@ -119,7 +120,8 @@ describe("api tokens page", () => {
     renderPage();
 
     await user.type(screen.getByLabelText("Token Name"), "scoped");
-    await user.selectOptions(screen.getByLabelText("Token Scope"), "project-1");
+    await user.click(screen.getByRole("combobox", { name: "Token Scope" }));
+    await user.click(await screen.findByRole("option", { name: "Demo Project" }));
     await user.click(screen.getByRole("button", { name: "Mint Token" }));
 
     expect(mockCreateToken).toHaveBeenCalledWith({

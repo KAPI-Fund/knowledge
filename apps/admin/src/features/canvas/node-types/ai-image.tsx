@@ -1,7 +1,14 @@
-import { ImageIcon, Loader2, Play } from "lucide-react";
+import { Download, ImageIcon, Loader2, Play } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
+import { CompositionTextarea } from "@/components/ui/composition-input";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 
 import { ModelTag } from "./model-tag";
 import { NodeError } from "./node-error";
@@ -80,9 +87,9 @@ export function AiImageNode({
       }
     >
       <ModelTag model={model} />
-      <Textarea
+      <CompositionTextarea
         value={data.prompt ?? ""}
-        onChange={(event) => onPromptChange?.(event.target.value)}
+        onValueChange={onPromptChange ?? (() => {})}
         readOnly={!onPromptChange}
         placeholder="Describe the image to generate..."
         className="nodrag h-14 resize-none text-xs"
@@ -92,11 +99,7 @@ export function AiImageNode({
       ) : null}
       <div className="flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-md bg-muted/30">
         {active ? (
-          <img
-            src={active.url}
-            alt={data.prompt ?? "Generated image"}
-            className="max-h-full max-w-full rounded-md object-contain"
-          />
+          <ImageViewer url={active.url} versionId={active.id} prompt={data.prompt} />
         ) : (
           <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
             Empty · click run
@@ -104,5 +107,40 @@ export function AiImageNode({
         )}
       </div>
     </NodeShell>
+  );
+}
+
+// The in-node preview opens a lightbox with the image at full size plus a
+// download link. `nodrag` keeps React Flow from starting a node drag on click.
+function ImageViewer({ url, versionId, prompt }: { url: string; versionId: string; prompt?: string }) {
+  const alt = prompt ?? "Generated image";
+  return (
+    <Dialog>
+      <DialogTrigger asChild>
+        <button
+          type="button"
+          aria-label="View full image"
+          className="nodrag flex max-h-full max-w-full cursor-zoom-in items-center justify-center"
+        >
+          <img src={url} alt={alt} className="max-h-full max-w-full rounded-md object-contain" />
+        </button>
+      </DialogTrigger>
+      <DialogContent
+        aria-describedby={undefined}
+        className="w-auto max-w-[92vw] gap-3 p-4"
+      >
+        <DialogTitle className="sr-only">Image preview</DialogTitle>
+        <img src={url} alt={alt} className="max-h-[80vh] max-w-full rounded-md object-contain" />
+        <DialogFooter className="sm:items-center sm:justify-between">
+          <span className="min-w-0 truncate text-xs text-muted-foreground">{prompt}</span>
+          <Button asChild size="sm" variant="outline">
+            <a href={url} download={`ai-image-${versionId}.png`}>
+              <Download className="size-3.5" />
+              Download
+            </a>
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

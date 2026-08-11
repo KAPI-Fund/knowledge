@@ -29,7 +29,6 @@ rand_core = { version = "0.6.4", features = ["getrandom"] }
 redis = { version = "0.32.7", features = ["tokio-comp"] }
 regex = "1.11"
 reqwest = { version = "0.12.24", default-features = false, features = ["json", "rustls-tls", "stream"] }
-scraper = "0.20"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 sha2 = "0.10.9"
@@ -39,6 +38,7 @@ tokio = { version = "1.48.0", features = ["macros", "rt-multi-thread", "signal",
 tokio-stream = "0.1"
 tower = "0.5.2"
 tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
 thiserror = "2.0.17"
 time = { version = "0.3.44", features = ["formatting", "parsing", "serde"] }
 unicode-normalization = "0.1.25"

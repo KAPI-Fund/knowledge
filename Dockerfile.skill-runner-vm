@@ -1,0 +1,35 @@
+# CubeSandbox 模板镜像:在官方 sandbox-code 基础上烤入 codex CLI + 技能文件 + 引导 PROMPT。
+# 由 scripts/skill-runner/build-template.sh 构建并 cubemastercli tpl create-from-image。
+# 基础镜像是 CubeSandbox 官方 sandbox-code(含 envd 代理,监听 49999/49983);
+# tag 以实际可拉版本为准。
+FROM cube-sandbox-cn.tencentcloudcr.com/cube-sandbox/sandbox-code:latest
+
+# 1) 安装 codex CLI。base 镜像没有 node/npm,直接装官方发布的静态 musl 二进制。
+ARG CODEX_VERSION=rust-v0.143.0
+RUN set -eux; \
+    curl -fsSL -o /tmp/codex.tar.gz \
+      "https://github.com/openai/codex/releases/download/${CODEX_VERSION}/codex-x86_64-unknown-linux-musl.tar.gz"; \
+    tar -xzf /tmp/codex.tar.gz -C /usr/local/bin; \
+    mv /usr/local/bin/codex-x86_64-unknown-linux-musl /usr/local/bin/codex; \
+    chmod +x /usr/local/bin/codex; \
+    rm -f /tmp/codex.tar.gz; \
+    codex --version
+
+# 2) 烤入技能文件(单一真相源:仓库 skills/)。
+COPY crates/knowledge-server/skills/guizang-ppt /skills/guizang-ppt
+
+# 3) 引导 prompt 与工作目录骨架。
+COPY services/skill-runner/vm/PROMPT.md /work/PROMPT.md
+RUN mkdir -p /work/input /work/out /root/.codex
+
+# 4) 版本戳(构建脚本用 --build-arg 传入技能目录 git 短哈希)。
+ARG SKILLS_VERSION=unknown
+RUN echo "$SKILLS_VERSION" > /skills/VERSION
+
+# 5) 只运行 envd(E2B 数据面代理),监听 CubeSandbox Go SDK 硬编码的 49999。
+#    base 镜像默认 CMD 起 jupyter code-interpreter 占用 49999、envd 在 49983;
+#    但 SDK 的 Commands()/Files() 全部打到 49999,会命中 code-interpreter 得 404。
+#    我们不需要 code-interpreter——codex 通过 envd 的 process API 跑,文件走 envd 的
+#    /files API——所以直接让 envd 占 49999。
+ENV ENVD_PORT=49999
+CMD ["/usr/bin/envd", "-port", "49999"]

@@ -2,7 +2,7 @@ import { Download, Globe, Loader2 } from "lucide-react";
 
 import { MarkdownMessage } from "@/components/shared/markdown-message";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { CompositionInput } from "@/components/ui/composition-input";
 
 import { NodeError } from "./node-error";
 import { NodeShell } from "./node-shell";
@@ -56,9 +56,9 @@ export function UrlNode({ data, nodeId, index, selected, onUrlChange, onFetch }:
         </Button>
       }
     >
-      <Input
+      <CompositionInput
         value={data.url ?? ""}
-        onChange={(event) => onUrlChange(event.target.value)}
+        onValueChange={onUrlChange}
         placeholder="https://..."
         className="nodrag h-8 font-mono text-xs"
       />

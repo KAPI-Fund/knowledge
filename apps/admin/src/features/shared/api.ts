@@ -166,6 +166,25 @@ const deleteWikiPagesSchema = z.object({
   rewrittenFiles: z.number(),
 });
 
+const fileHistoryEntrySchema = z.object({
+  id: z.string(),
+  path: z.string(),
+  author: z.string(),
+  tool: z.string(),
+  createdAt: z.string(),
+});
+
+const fileHistoryListSchema = z.object({
+  entries: z.array(fileHistoryEntrySchema),
+});
+
+const fileHistoryDetailSchema = fileHistoryEntrySchema.extend({
+  content: z.string(),
+});
+
+export type FileHistoryEntry = z.infer<typeof fileHistoryEntrySchema>;
+export type FileHistoryDetail = z.infer<typeof fileHistoryDetailSchema>;
+
 const auditSchema = z.object({
   items: z.array(
     z.object({
@@ -209,29 +228,27 @@ const searchProviderConfigsSchema = z.object({
     .object({ apiKeyConfigured: z.boolean().optional(), url: z.string().optional() })
     .partial()
     .optional(),
+  brave: z
+    .object({ apiKeyConfigured: z.boolean().optional(), baseUrl: z.string().optional() })
+    .partial()
+    .optional(),
+  firecrawl: z
+    .object({ apiKeyConfigured: z.boolean().optional(), baseUrl: z.string().optional() })
+    .partial()
+    .optional(),
+});
+
+const fetchProviderConfigsSchema = z.object({
+  firecrawl: z
+    .object({ apiKeyConfigured: z.boolean().optional(), baseUrl: z.string().optional() })
+    .partial()
+    .optional(),
 });
 
 const settingsSchema = z.object({
-  // Retained legacy flat fields (backward compat during migration). Now optional
-  // because the redesigned GET nests language/defaultQueryLimit under `defaults`.
-  providerMode: z.string(),
-  language: z.string().optional(),
-  defaultQueryLimit: z.number().optional(),
-  providerBaseUrl: z.string().nullable().optional(),
-  providerApiKeyConfigured: z.boolean().optional(),
-  providerModel: z.string().nullable().optional(),
-  providerEmbeddingModel: z.string().nullable().optional(),
-  providerTimeoutSeconds: z.number().nullable().optional(),
-  searchProvider: z.string().nullable().optional(),
-  searchApiKeyConfigured: z.boolean().optional(),
-  serpapiEngine: z.string().nullable().optional(),
-  searxngUrl: z.string().nullable().optional(),
-  searxngCategories: z.array(z.string()).nullable().optional(),
-  ollamaSearchUrl: z.string().nullable().optional(),
-  tavilyBaseUrl: z.string().nullable().optional(),
-  serpapiBaseUrl: z.string().nullable().optional(),
-  // New structured capability blocks.
   connections: z.array(connectionSchema).optional(),
+  ingest: z.object({ paused: z.boolean() }).optional(),
+  mcp: z.object({ enabled: z.boolean() }).optional(),
   embedding: z
     .object({
       enabled: z.boolean(),
@@ -254,6 +271,12 @@ const settingsSchema = z.object({
     .object({
       provider: z.string().nullable().optional(),
       providers: searchProviderConfigsSchema,
+    })
+    .optional(),
+  fetch: z
+    .object({
+      provider: z.string().nullable().optional(),
+      providers: fetchProviderConfigsSchema,
     })
     .optional(),
   defaults: z
@@ -284,6 +307,7 @@ const searchResultsSchema = z.object({
   mode: z.string(),
   tokenHits: z.number(),
   vectorHits: z.number(),
+  graphHits: z.number(),
   results: z.array(
     z.object({
       path: z.string(),
@@ -291,6 +315,7 @@ const searchResultsSchema = z.object({
       snippet: z.string(),
       score: z.number(),
       titleMatch: z.boolean().optional(),
+      graphRelatedTo: z.array(z.string()).optional(),
       images: z
         .array(
           z.object({
@@ -377,9 +402,30 @@ const conversationMessagesSchema = z.object({
       role: z.string(),
       content: z.string(),
       contextSummary: z.string().nullable().optional(),
+      agentMode: z.string().nullable().optional(),
+      agentEvents: z.unknown().nullable().optional(),
       createdAt: z.string(),
     }),
   ),
+});
+
+const agentSkillsSchema = z.object({
+  skills: z.array(
+    z.object({
+      id: z.string(),
+      name: z.string(),
+      description: z.string(),
+      source: z.enum(["project", "global"]),
+    }),
+  ),
+});
+
+const agentSkillDetailSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  description: z.string(),
+  instructions: z.string(),
+  source: z.enum(["project", "global"]),
 });
 
 export async function login(input: { username: string; password: string }) {
@@ -401,6 +447,17 @@ export async function register(input: { username: string; password: string }) {
       body: JSON.stringify(input),
     },
     loginSchema,
+  );
+}
+
+export async function logout() {
+  return apiFetch(
+    "/api/auth/logout",
+    {
+      method: "POST",
+      headers: { "x-csrf-token": getCsrfToken() },
+    },
+    z.unknown(),
   );
 }
 
@@ -544,6 +601,39 @@ export async function saveProjectFileContent(input: {
   );
 }
 
+export function rawFileUrl(projectId: string, path: string) {
+  return `/api/projects/${projectId}/files/raw?path=${encodeURIComponent(path)}`;
+}
+
+export async function listFileHistory(input: { projectId: string; path: string }) {
+  const searchParams = new URLSearchParams({ path: input.path });
+  const response = await apiFetch(
+    `/api/projects/${input.projectId}/files/history?${searchParams.toString()}`,
+    { method: "GET" },
+    fileHistoryListSchema,
+  );
+  return response.entries;
+}
+
+export async function getFileHistoryEntry(input: { projectId: string; entryId: string }) {
+  return apiFetch(
+    `/api/projects/${input.projectId}/files/history/${input.entryId}`,
+    { method: "GET" },
+    fileHistoryDetailSchema,
+  );
+}
+
+export async function restoreFileHistoryEntry(input: { projectId: string; entryId: string }) {
+  return apiFetch(
+    `/api/projects/${input.projectId}/files/history/${input.entryId}/restore`,
+    {
+      method: "POST",
+      headers: csrfHeader(),
+    },
+    z.object({ path: z.string(), content: z.string() }),
+  );
+}
+
 export async function listConversations(projectId: string) {
   const response = await apiFetch(
     `/api/projects/${projectId}/conversations`,
@@ -602,6 +692,53 @@ export async function listConversationMessages(input: {
     conversationMessagesSchema,
   );
   return response.messages;
+}
+
+export async function saveMessageToWiki(input: {
+  projectId: string;
+  conversationId: string;
+  messageId: string;
+}) {
+  return apiFetch(
+    `/api/projects/${input.projectId}/conversations/${input.conversationId}/messages/${input.messageId}/save-to-wiki`,
+    {
+      method: "POST",
+      headers: csrfHeader(),
+    },
+    z.object({ path: z.string(), title: z.string() }),
+  );
+}
+
+export async function listAgentSkills(projectId: string) {
+  const response = await apiFetch(
+    `/api/projects/${projectId}/agent/skills`,
+    { method: "GET" },
+    agentSkillsSchema,
+  );
+  return response.skills;
+}
+
+export async function getAgentSkill(input: { projectId: string; skillId: string }) {
+  return apiFetch(
+    `/api/projects/${input.projectId}/agent/skills/${encodeURIComponent(input.skillId)}`,
+    { method: "GET" },
+    agentSkillDetailSchema,
+  );
+}
+
+export async function cancelActiveAgentRun(input: { projectId: string; conversationId: string }) {
+  const response = await fetch(
+    `/api/projects/${input.projectId}/conversations/${input.conversationId}/messages/active`,
+    {
+      method: "DELETE",
+      credentials: "include",
+      headers: csrfHeader(),
+    },
+  );
+  if (!response.ok && response.status !== 404) {
+    throw new Error(`failed to cancel agent run (status ${response.status})`);
+  }
+  return response.ok;
 }
 
 export async function deleteProjectWikiPages(input: { projectId: string; paths: string[] }) {
@@ -908,6 +1045,77 @@ export async function createLintTask(input: {
   );
 }
 
+const lintItemSchema = z.object({
+  id: z.string(),
+  issueType: z.string(),
+  severity: z.string(),
+  page: z.string(),
+  detail: z.string(),
+  affectedPages: z.array(z.string()).optional(),
+  brokenTarget: z.string().optional(),
+  suggestedTarget: z.string().optional(),
+  suggestedSource: z.string().optional(),
+  mode: z.string(),
+  createdAt: z.string(),
+});
+
+export type LintItem = z.infer<typeof lintItemSchema>;
+
+export async function listLintItems(projectId: string) {
+  const response = await apiFetch(
+    `/api/projects/${projectId}/lint-items`,
+    { method: "GET" },
+    z.object({ items: z.array(lintItemSchema) }),
+  );
+  return response.items;
+}
+
+export async function fixLintItem(input: { projectId: string; itemId: string }) {
+  return apiFetch(
+    `/api/projects/${input.projectId}/lint-items/${input.itemId}/fix`,
+    { method: "POST", headers: csrfHeader() },
+    z.object({
+      action: z.string(),
+      changedPaths: z.array(z.string()).optional(),
+    }),
+  );
+}
+
+export async function deleteLintOrphan(input: { projectId: string; itemId: string }) {
+  return apiFetch(
+    `/api/projects/${input.projectId}/lint-items/${input.itemId}/delete-orphan`,
+    { method: "POST", headers: csrfHeader() },
+    z.object({
+      deletedPaths: z.array(z.string()),
+      rewrittenFiles: z.number(),
+    }),
+  );
+}
+
+export async function dismissLintItems(input: { projectId: string; ids: string[] }) {
+  return apiFetch(
+    `/api/projects/${input.projectId}/lint-items:dismiss`,
+    {
+      method: "POST",
+      headers: csrfHeader(),
+      body: JSON.stringify({ ids: input.ids }),
+    },
+    z.object({ dismissedIds: z.array(z.string()) }),
+  );
+}
+
+export async function sendLintItemsToReview(input: { projectId: string; ids: string[] }) {
+  return apiFetch(
+    `/api/projects/${input.projectId}/lint-items:send-to-review`,
+    {
+      method: "POST",
+      headers: csrfHeader(),
+      body: JSON.stringify({ ids: input.ids }),
+    },
+    z.object({ reviewIds: z.array(z.string()) }),
+  );
+}
+
 export async function retryProjectTask(input: { projectId: string; taskId: string }) {
   return apiFetch(
     `/api/projects/${input.projectId}/tasks/${input.taskId}/retry`,
@@ -953,6 +1161,29 @@ export async function updateProjectReview(input: {
     z.object({
       taskId: z.string(),
       status: z.string(),
+    }),
+  );
+}
+
+export async function resolveProjectReviews(input: {
+  projectId: string;
+  ids: string[];
+  action?: "resolve" | "dismiss";
+}) {
+  return apiFetch(
+    `/api/projects/${input.projectId}/reviews:resolve`,
+    {
+      method: "POST",
+      headers: csrfHeader(),
+      body: JSON.stringify({
+        ids: input.ids,
+        ...(input.action ? { action: input.action } : {}),
+      }),
+    },
+    z.object({
+      resolved: z.array(z.string()),
+      notFound: z.array(z.string()),
+      count: z.number(),
     }),
   );
 }
@@ -1114,24 +1345,6 @@ export async function revokeApiToken(input: { tokenId: string }) {
 }
 
 export async function updateSystemSettings(input: {
-  providerMode: string;
-  language: string;
-  defaultQueryLimit: number;
-  providerBaseUrl?: string;
-  providerApiKey?: string;
-  providerModel?: string;
-  providerEmbeddingModel?: string;
-  providerTimeoutSeconds?: number;
-  searchProvider?: string;
-  searchApiKey?: string;
-  serpapiEngine?: string;
-  searxngUrl?: string;
-  searxngCategories?: string[];
-  ollamaSearchUrl?: string;
-  tavilyBaseUrl?: string;
-  serpapiBaseUrl?: string;
-  clearProviderApiKey?: boolean;
-  clearSearchApiKey?: boolean;
   image?: {
     baseUrl?: string;
     model?: string;
@@ -1152,40 +1365,22 @@ export async function updateSystemSettings(input: {
     provider?: string;
     providers?: Record<string, Record<string, unknown>>;
   };
+  fetch?: {
+    provider?: string;
+    providers?: Record<string, Record<string, unknown>>;
+  };
   defaults?: {
     language?: string;
     defaultQueryLimit?: number;
   };
+  ingest?: {
+    paused?: boolean;
+  };
+  mcp?: {
+    enabled?: boolean;
+  };
 }) {
   const payload = {
-    providerMode: input.providerMode,
-    language: input.language,
-    defaultQueryLimit: input.defaultQueryLimit,
-    providerBaseUrl: input.providerBaseUrl,
-    providerModel: input.providerModel,
-    providerEmbeddingModel: input.providerEmbeddingModel,
-    providerTimeoutSeconds: input.providerTimeoutSeconds,
-    searchProvider: input.searchProvider,
-    serpapiEngine: input.serpapiEngine,
-    searxngUrl: input.searxngUrl,
-    searxngCategories: input.searxngCategories,
-    ollamaSearchUrl: input.ollamaSearchUrl,
-    tavilyBaseUrl: input.tavilyBaseUrl,
-    serpapiBaseUrl: input.serpapiBaseUrl,
-    ...(input.providerApiKey?.trim()
-      ? {
-          providerApiKey: input.providerApiKey.trim(),
-        }
-      : {}),
-    ...(input.searchApiKey?.trim()
-      ? {
-          searchApiKey: input.searchApiKey.trim(),
-        }
-      : {}),
-    ...(input.clearProviderApiKey && !input.providerApiKey?.trim()
-      ? { clearProviderApiKey: true }
-      : {}),
-    ...(input.clearSearchApiKey && !input.searchApiKey?.trim() ? { clearSearchApiKey: true } : {}),
     ...(input.image
       ? {
           image: {
@@ -1233,7 +1428,28 @@ export async function updateSystemSettings(input: {
           },
         }
       : {}),
+    ...(input.fetch
+      ? {
+          fetch: {
+            provider: input.fetch.provider,
+            ...(input.fetch.providers
+              ? {
+                  providers: Object.fromEntries(
+                    Object.entries(input.fetch.providers).map(([name, fields]) => [
+                      name,
+                      Object.fromEntries(
+                        Object.entries(fields).filter(([, v]) => v !== ""),
+                      ),
+                    ]),
+                  ),
+                }
+              : {}),
+          },
+        }
+      : {}),
     ...(input.defaults ? { defaults: input.defaults } : {}),
+    ...(input.ingest ? { ingest: input.ingest } : {}),
+    ...(input.mcp ? { mcp: input.mcp } : {}),
   };
 
   return apiFetch(
@@ -1256,5 +1472,50 @@ export async function runWebSearch(input: { query: string; maxResults?: number }
       body: JSON.stringify({ query: input.query, maxResults: input.maxResults }),
     },
     webSearchResponseSchema,
+  );
+}
+
+const skillMetadataSchema = z.object({
+  command: z.string(),
+  name: z.string(),
+  description: z.string(),
+  requiresSelection: z.boolean(),
+  argumentHint: z.string().nullable().optional(),
+  outputNodeType: z.string(),
+});
+
+export type SkillMetadata = z.infer<typeof skillMetadataSchema>;
+
+export async function fetchSkills() {
+  return apiFetch("/api/skills", { method: "GET" }, z.array(skillMetadataSchema));
+}
+
+const skillJobStatusSchema = z.object({
+  status: z.enum(["queued", "running", "done", "error"]),
+  result: z
+    .object({ assetId: z.string(), url: z.string(), title: z.string().optional() })
+    .nullish(),
+  error: z.object({ message: z.string() }).nullish(),
+  progress: z
+    .object({ stage: z.string(), message: z.string(), elapsedS: z.number().nullish() })
+    .partial()
+    .nullish(),
+  queuePosition: z.number().nullish(),
+});
+
+export type SkillJobStatus = z.infer<typeof skillJobStatusSchema>;
+export type SkillJobProgress = NonNullable<SkillJobStatus["progress"]>;
+
+export async function fetchSkillJob(id: string) {
+  return apiFetch(`/api/canvas-skill-jobs/${id}`, { method: "GET" }, skillJobStatusSchema);
+}
+
+// A retry issues a brand-new job id (the poller dedupes terminal jobs by id,
+// so the old id would never be polled again); callers must rebind the node.
+export async function retrySkillJob(id: string) {
+  return apiFetch(
+    `/api/canvas-skill-jobs/${id}/retry`,
+    { method: "POST", headers: csrfHeader() },
+    z.object({ jobId: z.string() }),
   );
 }

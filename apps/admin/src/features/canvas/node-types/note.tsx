@@ -1,6 +1,6 @@
 import { StickyNote } from "lucide-react";
 
-import { Textarea } from "@/components/ui/textarea";
+import { CompositionTextarea } from "@/components/ui/composition-input";
 
 import { NodeShell } from "./node-shell";
 
@@ -24,10 +24,11 @@ export function NoteNode({ data, nodeId, index, selected, onChange }: NoteNodePr
       nodeId={nodeId}
       index={index}
       selected={selected}
+      targetHandle={false}
     >
-      <Textarea
+      <CompositionTextarea
         value={data.markdown ?? ""}
-        onChange={(event) => onChange(event.target.value)}
+        onValueChange={onChange}
         placeholder="Write a note in markdown..."
         className="nodrag h-full resize-none border-none bg-transparent p-0 text-sm shadow-none focus-visible:ring-0"
       />

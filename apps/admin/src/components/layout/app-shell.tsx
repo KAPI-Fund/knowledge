@@ -1,10 +1,11 @@
 import { Outlet, useLocation } from "react-router-dom";
 
-import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
+import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { PendingSaveBanner } from "@/features/canvas/pending-save-banner";
 import { cn } from "@/lib/utils";
 
 import { AppSidebar } from "./app-sidebar";
+import { SiteHeader } from "./site-header";
 
 export function AppShell() {
   const { pathname } = useLocation();
@@ -15,9 +16,7 @@ export function AppShell() {
     <SidebarProvider className="h-svh">
       <AppSidebar />
       <SidebarInset>
-        <div className="flex h-12 items-center gap-2 border-b border-border px-4 lg:hidden">
-          <SidebarTrigger />
-        </div>
+        <SiteHeader />
         <PendingSaveBanner />
         <main
           className={cn(

@@ -29,12 +29,10 @@ async fn web_search_against_mock_searxng_returns_results() {
                 .header("x-csrf-token", &csrf)
                 .body(Body::from(
                     json!({
-                      "providerMode": "openai-compatible",
-                      "language": "en",
-                      "defaultQueryLimit": 25,
-                      "searchProvider": "searxng",
-                      "searxngUrl": searxng_base,
-                      "searxngCategories": ["general"]
+                      "search": {
+                        "provider": "searxng",
+                        "providers": { "searxng": { "url": searxng_base, "categories": ["general"] } }
+                      }
                     })
                     .to_string(),
                 ))
@@ -177,6 +175,85 @@ async fn spawn_mock_ollama_validating() -> (tokio::task::JoinHandle<()>, String)
     (handle, format!("http://127.0.0.1:{port}"))
 }
 
+async fn spawn_mock_brave_validating() -> (tokio::task::JoinHandle<()>, String) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let handle = tokio::spawn(async move {
+        if let Ok((mut socket, _)) = listener.accept().await {
+            let mut buf = vec![0u8; 8192];
+            let n = socket.read(&mut buf).await.unwrap_or(0);
+            let raw = String::from_utf8_lossy(&buf[..n]);
+            let request_line = raw.lines().next().unwrap_or("");
+            assert!(
+                request_line.starts_with("GET /res/v1/web/search?"),
+                "brave: expected GET /res/v1/web/search?..., got: {request_line}"
+            );
+            assert!(request_line.contains("q=brave+query"), "brave: query value not locked: {request_line}");
+            assert!(request_line.contains("count=3"), "brave: count must be 3: {request_line}");
+            assert!(
+                raw.to_lowercase().contains("x-subscription-token: test-key"),
+                "brave: subscription token value not locked: {raw}"
+            );
+            let body = json!({
+              "web": {
+                "results": [
+                  { "title": "Brv", "url": "https://example.com/brv", "description": "from brave" }
+                ]
+              }
+            })
+            .to_string();
+            let payload = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = socket.write_all(payload.as_bytes()).await;
+            let _ = socket.shutdown().await;
+        }
+    });
+    (handle, format!("http://127.0.0.1:{port}"))
+}
+
+async fn spawn_mock_firecrawl_search_validating() -> (tokio::task::JoinHandle<()>, String) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let handle = tokio::spawn(async move {
+        if let Ok((mut socket, _)) = listener.accept().await {
+            let mut buf = vec![0u8; 8192];
+            let n = socket.read(&mut buf).await.unwrap_or(0);
+            let raw = String::from_utf8_lossy(&buf[..n]);
+            let request_line = raw.lines().next().unwrap_or("");
+            assert!(
+                request_line.starts_with("POST /v2/search "),
+                "firecrawl: expected POST /v2/search, got: {request_line}"
+            );
+            assert!(raw.contains("\"query\":\"firecrawl query\""), "firecrawl: query value not locked: {raw}");
+            assert!(raw.contains("\"limit\":3"), "firecrawl: limit must be 3: {raw}");
+            assert!(
+                !raw.to_lowercase().contains("authorization:"),
+                "firecrawl: key-free search must not send Authorization: {raw}"
+            );
+            let body = json!({
+              "success": true,
+              "data": {
+                "web": [
+                  { "metadata": { "title": "FC", "sourceURL": "https://example.com/fc", "description": "from firecrawl" } }
+                ]
+              }
+            })
+            .to_string();
+            let payload = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = socket.write_all(payload.as_bytes()).await;
+            let _ = socket.shutdown().await;
+        }
+    });
+    (handle, format!("http://127.0.0.1:{port}"))
+}
+
 async fn spawn_mock_searxng() -> (tokio::task::JoinHandle<()>, String) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -254,10 +331,12 @@ async fn patch_settings_response_reflects_db_state() {
                 .header("x-csrf-token", &csrf)
                 .body(Body::from(
                     json!({
-                      "providerMode": "openai-compatible",
-                      "language": "en",
-                      "defaultQueryLimit": 25,
-                      "providerApiKey": "first-secret"
+                      "embedding": {
+                        "enabled": true,
+                        "baseUrl": "https://emb.local/v1",
+                        "model": "text-embedding-3-small",
+                        "apiKey": "first-secret"
+                      }
                     })
                     .to_string(),
                 ))
@@ -267,7 +346,7 @@ async fn patch_settings_response_reflects_db_state() {
         .unwrap();
     assert_eq!(initial.status(), StatusCode::OK);
     let body = read_json(initial.into_body()).await;
-    assert_eq!(body["providerApiKeyConfigured"], json!(true));
+    assert_eq!(body["embedding"]["apiKeyConfigured"], json!(true));
 
     let preserve = build_app(state)
         .oneshot(
@@ -279,9 +358,7 @@ async fn patch_settings_response_reflects_db_state() {
                 .header("x-csrf-token", &csrf)
                 .body(Body::from(
                     json!({
-                      "providerMode": "openai-compatible",
-                      "language": "en",
-                      "defaultQueryLimit": 25
+                      "embedding": { "model": "text-embedding-3-large" }
                     })
                     .to_string(),
                 ))
@@ -292,9 +369,9 @@ async fn patch_settings_response_reflects_db_state() {
     assert_eq!(preserve.status(), StatusCode::OK);
     let body = read_json(preserve.into_body()).await;
     assert_eq!(
-        body["providerApiKeyConfigured"],
+        body["embedding"]["apiKeyConfigured"],
         json!(true),
-        "providerApiKeyConfigured must reflect DB state, not request payload"
+        "apiKeyConfigured must reflect DB state, not request payload"
     );
 }
 
@@ -316,12 +393,10 @@ async fn web_search_via_bearer_token() {
                 .header("x-csrf-token", &csrf)
                 .body(Body::from(
                     json!({
-                      "providerMode": "openai-compatible",
-                      "language": "en",
-                      "defaultQueryLimit": 25,
-                      "searchProvider": "searxng",
-                      "searxngUrl": searxng_base,
-                      "searxngCategories": ["general"]
+                      "search": {
+                        "provider": "searxng",
+                        "providers": { "searxng": { "url": searxng_base, "categories": ["general"] } }
+                      }
                     })
                     .to_string(),
                 ))
@@ -444,14 +519,7 @@ async fn settings_patch_rejects_bearer_token() {
                 .header(header::CONTENT_TYPE, "application/json")
                 .header("authorization", format!("Bearer {token}"))
                 .body(Body::from(
-                    json!({
-                      "providerMode": "openai-compatible",
-                      "language": "en",
-                      "defaultQueryLimit": 25,
-                      "searchProvider": "tavily",
-                      "searchApiKey": "stolen-key"
-                    })
-                    .to_string(),
+                    json!({ "search": { "provider": "tavily" } }).to_string(),
                 ))
                 .unwrap(),
         )
@@ -482,12 +550,10 @@ async fn web_search_tavily_uses_persisted_base_url() {
                 .header("x-csrf-token", &csrf)
                 .body(Body::from(
                     json!({
-                      "providerMode": "openai-compatible",
-                      "language": "en",
-                      "defaultQueryLimit": 25,
-                      "searchProvider": "tavily",
-                      "searchApiKey": "test-key",
-                      "tavilyBaseUrl": base
+                      "search": {
+                        "provider": "tavily",
+                        "providers": { "tavily": { "apiKey": "test-key", "baseUrl": base } }
+                      }
                     })
                     .to_string(),
                 ))
@@ -540,13 +606,10 @@ async fn web_search_serpapi_uses_persisted_base_url() {
                 .header("x-csrf-token", &csrf)
                 .body(Body::from(
                     json!({
-                      "providerMode": "openai-compatible",
-                      "language": "en",
-                      "defaultQueryLimit": 25,
-                      "searchProvider": "serpapi",
-                      "searchApiKey": "test-key",
-                      "serpapiEngine": "google",
-                      "serpapiBaseUrl": base
+                      "search": {
+                        "provider": "serpapi",
+                        "providers": { "serpapi": { "apiKey": "test-key", "engine": "google", "baseUrl": base } }
+                      }
                     })
                     .to_string(),
                 ))
@@ -599,12 +662,10 @@ async fn web_search_ollama_uses_persisted_url() {
                 .header("x-csrf-token", &csrf)
                 .body(Body::from(
                     json!({
-                      "providerMode": "openai-compatible",
-                      "language": "en",
-                      "defaultQueryLimit": 25,
-                      "searchProvider": "ollama",
-                      "searchApiKey": "test-key",
-                      "ollamaSearchUrl": base
+                      "search": {
+                        "provider": "ollama",
+                        "providers": { "ollama": { "apiKey": "test-key", "url": base } }
+                      }
                     })
                     .to_string(),
                 ))
@@ -640,6 +701,118 @@ async fn web_search_ollama_uses_persisted_url() {
 }
 
 #[tokio::test]
+async fn web_search_brave_uses_persisted_base_url() {
+    let _env = TestEnvironment::start("web-search-brave").await.unwrap();
+    let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
+    let state = bootstrap_state(&config).await.unwrap();
+    let (cookie, csrf) = login_and_csrf(state.clone()).await;
+    let (handle, base) = spawn_mock_brave_validating().await;
+
+    let patch = build_app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/system/settings")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .header("x-csrf-token", &csrf)
+                .body(Body::from(
+                    json!({
+                      "search": {
+                        "provider": "brave",
+                        "providers": { "brave": { "apiKey": "test-key", "baseUrl": base } }
+                      }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(patch.status(), StatusCode::OK);
+
+    let response = build_app(state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/web-search")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .header("x-csrf-token", &csrf)
+                .body(Body::from(
+                    json!({ "query": "brave query", "maxResults": 3 }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload = read_json(response.into_body()).await;
+    let results = payload.get("results").and_then(Value::as_array).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0]["title"].as_str(), Some("Brv"));
+    assert_eq!(results[0]["url"].as_str(), Some("https://example.com/brv"));
+
+    handle.abort();
+}
+
+#[tokio::test]
+async fn web_search_firecrawl_uses_persisted_base_url_without_key() {
+    let _env = TestEnvironment::start("web-search-firecrawl").await.unwrap();
+    let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
+    let state = bootstrap_state(&config).await.unwrap();
+    let (cookie, csrf) = login_and_csrf(state.clone()).await;
+    let (handle, base) = spawn_mock_firecrawl_search_validating().await;
+
+    let patch = build_app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/system/settings")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .header("x-csrf-token", &csrf)
+                .body(Body::from(
+                    json!({
+                      "search": {
+                        "provider": "firecrawl",
+                        "providers": { "firecrawl": { "baseUrl": base } }
+                      }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(patch.status(), StatusCode::OK);
+
+    let response = build_app(state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/web-search")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .header("x-csrf-token", &csrf)
+                .body(Body::from(
+                    json!({ "query": "firecrawl query", "maxResults": 3 }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload = read_json(response.into_body()).await;
+    let results = payload.get("results").and_then(Value::as_array).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0]["title"].as_str(), Some("FC"));
+    assert_eq!(results[0]["url"].as_str(), Some("https://example.com/fc"));
+
+    handle.abort();
+}
+
+#[tokio::test]
 async fn patch_settings_search_api_key_configured_reflects_db_state() {
     let _env = TestEnvironment::start("settings-search-api-key-truth").await.unwrap();
     let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
@@ -656,11 +829,10 @@ async fn patch_settings_search_api_key_configured_reflects_db_state() {
                 .header("x-csrf-token", &csrf)
                 .body(Body::from(
                     json!({
-                      "providerMode": "openai-compatible",
-                      "language": "en",
-                      "defaultQueryLimit": 25,
-                      "searchProvider": "tavily",
-                      "searchApiKey": "first-search-secret"
+                      "search": {
+                        "provider": "tavily",
+                        "providers": { "tavily": { "apiKey": "first-search-secret" } }
+                      }
                     })
                     .to_string(),
                 ))
@@ -670,7 +842,7 @@ async fn patch_settings_search_api_key_configured_reflects_db_state() {
         .unwrap();
     assert_eq!(initial.status(), StatusCode::OK);
     let body = read_json(initial.into_body()).await;
-    assert_eq!(body["searchApiKeyConfigured"], json!(true));
+    assert_eq!(body["search"]["providers"]["tavily"]["apiKeyConfigured"], json!(true));
 
     let preserve = build_app(state)
         .oneshot(
@@ -681,13 +853,7 @@ async fn patch_settings_search_api_key_configured_reflects_db_state() {
                 .header(header::COOKIE, &cookie)
                 .header("x-csrf-token", &csrf)
                 .body(Body::from(
-                    json!({
-                      "providerMode": "openai-compatible",
-                      "language": "en",
-                      "defaultQueryLimit": 25,
-                      "searchProvider": "tavily"
-                    })
-                    .to_string(),
+                    json!({ "search": { "provider": "tavily" } }).to_string(),
                 ))
                 .unwrap(),
         )
@@ -696,9 +862,9 @@ async fn patch_settings_search_api_key_configured_reflects_db_state() {
     assert_eq!(preserve.status(), StatusCode::OK);
     let body = read_json(preserve.into_body()).await;
     assert_eq!(
-        body["searchApiKeyConfigured"],
+        body["search"]["providers"]["tavily"]["apiKeyConfigured"],
         json!(true),
-        "searchApiKeyConfigured must reflect DB state, not request payload"
+        "apiKeyConfigured must reflect DB state, not request payload"
     );
 }
 
@@ -719,10 +885,12 @@ async fn patch_settings_can_clear_provider_api_key() {
                 .header("x-csrf-token", &csrf)
                 .body(Body::from(
                     json!({
-                      "providerMode": "openai-compatible",
-                      "language": "en",
-                      "defaultQueryLimit": 25,
-                      "providerApiKey": "my-secret"
+                      "embedding": {
+                        "enabled": true,
+                        "baseUrl": "https://emb.local/v1",
+                        "model": "text-embedding-3-small",
+                        "apiKey": "my-secret"
+                      }
                     })
                     .to_string(),
                 ))
@@ -731,7 +899,10 @@ async fn patch_settings_can_clear_provider_api_key() {
         .await
         .unwrap();
     assert_eq!(set_key.status(), StatusCode::OK);
-    assert_eq!(read_json(set_key.into_body()).await["providerApiKeyConfigured"], json!(true));
+    assert_eq!(
+        read_json(set_key.into_body()).await["embedding"]["apiKeyConfigured"],
+        json!(true)
+    );
 
     let clear_key = build_app(state)
         .oneshot(
@@ -743,10 +914,9 @@ async fn patch_settings_can_clear_provider_api_key() {
                 .header("x-csrf-token", &csrf)
                 .body(Body::from(
                     json!({
-                      "providerMode": "openai-compatible",
-                      "language": "en",
-                      "defaultQueryLimit": 25,
-                      "clearProviderApiKey": true
+                      "embedding": {
+                        "clearApiKey": true
+                      }
                     })
                     .to_string(),
                 ))
@@ -756,9 +926,9 @@ async fn patch_settings_can_clear_provider_api_key() {
         .unwrap();
     assert_eq!(clear_key.status(), StatusCode::OK);
     assert_eq!(
-        read_json(clear_key.into_body()).await["providerApiKeyConfigured"],
+        read_json(clear_key.into_body()).await["embedding"]["apiKeyConfigured"],
         json!(false),
-        "clearProviderApiKey:true must set providerApiKeyConfigured to false"
+        "embedding.clearApiKey:true must set embedding.apiKeyConfigured to false"
     );
 }
 
@@ -779,10 +949,12 @@ async fn patch_settings_replacement_key_wins_over_clear() {
                 .header("x-csrf-token", &csrf)
                 .body(Body::from(
                     json!({
-                      "providerMode": "openai-compatible",
-                      "language": "en",
-                      "defaultQueryLimit": 25,
-                      "providerApiKey": "old-secret"
+                      "embedding": {
+                        "enabled": true,
+                        "baseUrl": "https://emb.local/v1",
+                        "model": "text-embedding-3-small",
+                        "apiKey": "old-secret"
+                      }
                     })
                     .to_string(),
                 ))
@@ -802,11 +974,10 @@ async fn patch_settings_replacement_key_wins_over_clear() {
                 .header("x-csrf-token", &csrf)
                 .body(Body::from(
                     json!({
-                      "providerMode": "openai-compatible",
-                      "language": "en",
-                      "defaultQueryLimit": 25,
-                      "providerApiKey": "new-secret",
-                      "clearProviderApiKey": true
+                      "embedding": {
+                        "apiKey": "new-secret",
+                        "clearApiKey": true
+                      }
                     })
                     .to_string(),
                 ))
@@ -816,13 +987,13 @@ async fn patch_settings_replacement_key_wins_over_clear() {
         .unwrap();
     assert_eq!(replace.status(), StatusCode::OK);
     assert_eq!(
-        read_json(replace.into_body()).await["providerApiKeyConfigured"],
+        read_json(replace.into_body()).await["embedding"]["apiKeyConfigured"],
         json!(true),
-        "a supplied replacement key must take precedence over clearProviderApiKey"
+        "a supplied replacement key must take precedence over clearApiKey"
     );
 
     let stored: Option<String> =
-        sqlx::query_scalar("SELECT provider_api_key FROM system_settings WHERE id = 1")
+        sqlx::query_scalar("SELECT embedding_api_key FROM system_settings WHERE id = 1")
             .fetch_one(&state.pool)
             .await
             .unwrap();
@@ -846,11 +1017,10 @@ async fn patch_settings_can_clear_search_api_key() {
                 .header("x-csrf-token", &csrf)
                 .body(Body::from(
                     json!({
-                      "providerMode": "openai-compatible",
-                      "language": "en",
-                      "defaultQueryLimit": 25,
-                      "searchProvider": "tavily",
-                      "searchApiKey": "my-search-secret"
+                      "search": {
+                        "provider": "tavily",
+                        "providers": { "tavily": { "apiKey": "my-search-secret" } }
+                      }
                     })
                     .to_string(),
                 ))
@@ -859,7 +1029,10 @@ async fn patch_settings_can_clear_search_api_key() {
         .await
         .unwrap();
     assert_eq!(set_key.status(), StatusCode::OK);
-    assert_eq!(read_json(set_key.into_body()).await["searchApiKeyConfigured"], json!(true));
+    assert_eq!(
+        read_json(set_key.into_body()).await["search"]["providers"]["tavily"]["apiKeyConfigured"],
+        json!(true)
+    );
 
     let clear_key = build_app(state)
         .oneshot(
@@ -871,11 +1044,10 @@ async fn patch_settings_can_clear_search_api_key() {
                 .header("x-csrf-token", &csrf)
                 .body(Body::from(
                     json!({
-                      "providerMode": "openai-compatible",
-                      "language": "en",
-                      "defaultQueryLimit": 25,
-                      "searchProvider": "tavily",
-                      "clearSearchApiKey": true
+                      "search": {
+                        "provider": "tavily",
+                        "providers": { "tavily": { "apiKey": null } }
+                      }
                     })
                     .to_string(),
                 ))
@@ -885,8 +1057,145 @@ async fn patch_settings_can_clear_search_api_key() {
         .unwrap();
     assert_eq!(clear_key.status(), StatusCode::OK);
     assert_eq!(
-        read_json(clear_key.into_body()).await["searchApiKeyConfigured"],
+        read_json(clear_key.into_body()).await["search"]["providers"]["tavily"]["apiKeyConfigured"],
         json!(false),
-        "clearSearchApiKey:true must set searchApiKeyConfigured to false"
+        "explicit null apiKey must set search.providers.tavily.apiKeyConfigured to false"
     );
+}
+
+#[tokio::test]
+async fn patch_settings_rejects_incompatible_image_model_and_size() {
+    let _env = TestEnvironment::start("settings-image-size-validation").await.unwrap();
+    let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
+    let state = bootstrap_state(&config).await.unwrap();
+    let (cookie, csrf) = login_and_csrf(state.clone()).await;
+
+    // dall-e-3 does not support 512x512 -> the PATCH must be rejected as a 400,
+    // not silently persisted to fail later at canvas runtime.
+    let bad = build_app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/system/settings")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .header("x-csrf-token", &csrf)
+                .body(Body::from(
+                    json!({
+                      "image": {
+                        "baseUrl": "https://img.local/v1",
+                        "model": "dall-e-3",
+                        "size": "512x512"
+                      }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(bad.status(), StatusCode::BAD_REQUEST);
+
+    // A compatible pair for the same family is accepted and persisted.
+    let good = build_app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/system/settings")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .header("x-csrf-token", &csrf)
+                .body(Body::from(
+                    json!({
+                      "image": {
+                        "baseUrl": "https://img.local/v1",
+                        "model": "dall-e-3",
+                        "size": "1792x1024"
+                      }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(good.status(), StatusCode::OK);
+    let body = read_json(good.into_body()).await;
+    assert_eq!(body["image"]["model"], json!("dall-e-3"));
+    assert_eq!(body["image"]["size"], json!("1792x1024"));
+
+    // Editing ONLY the model to a family incompatible with the now-stored size
+    // must also be rejected (the effective size is kept via COALESCE): dall-e-2
+    // does not support 1792x1024.
+    let bad_effective = build_app(state)
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/system/settings")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .header("x-csrf-token", &csrf)
+                .body(Body::from(
+                    json!({ "image": { "model": "dall-e-2" } }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        bad_effective.status(),
+        StatusCode::BAD_REQUEST,
+        "changing model alone must validate against the stored (effective) size"
+    );
+}
+
+#[tokio::test]
+async fn patch_settings_rejects_out_of_range_default_query_limit() {
+    let _env = TestEnvironment::start("settings-query-limit-validation").await.unwrap();
+    let config = AppConfig::for_tests(_env.database_url.clone(), _env.redis_url.clone());
+    let state = bootstrap_state(&config).await.unwrap();
+    let (cookie, csrf) = login_and_csrf(state.clone()).await;
+
+    for bad_limit in [0, -1, 101] {
+        let response = build_app(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri("/api/system/settings")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(header::COOKIE, &cookie)
+                    .header("x-csrf-token", &csrf)
+                    .body(Body::from(
+                        json!({ "defaults": { "language": "en", "defaultQueryLimit": bad_limit } })
+                            .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::BAD_REQUEST,
+            "defaultQueryLimit={bad_limit} must be rejected"
+        );
+    }
+
+    // A valid limit is accepted and reflected back.
+    let ok = build_app(state)
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/system/settings")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .header("x-csrf-token", &csrf)
+                .body(Body::from(
+                    json!({ "defaults": { "language": "en", "defaultQueryLimit": 25 } }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(ok.status(), StatusCode::OK);
+    assert_eq!(read_json(ok.into_body()).await["defaults"]["defaultQueryLimit"], json!(25));
 }

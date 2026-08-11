@@ -1,15 +1,25 @@
-import { useState } from "react";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { useForm } from "react-hook-form";
+import { toast } from "sonner";
+import { z } from "zod";
+
+import { FormDialog } from "@/components/shared/form-dialog";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Button } from "@/components/ui/button";
+  FormControl,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+
 import { useCreateSpaceProjectMutation } from "./workspace-mutations";
+
+const createProjectSchema = z.object({
+  name: z.string().trim().min(1, "Name is required."),
+});
+
+type CreateProjectValues = z.infer<typeof createProjectSchema>;
 
 export function CreatePublicProjectDialog({
   targetSpaceId,
@@ -24,56 +34,47 @@ export function CreatePublicProjectDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
-  const [name, setName] = useState("");
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const mutation = useCreateSpaceProjectMutation(listSpaceId);
+  const form = useForm<CreateProjectValues>({
+    resolver: zodResolver(createProjectSchema),
+    defaultValues: { name: "" },
+  });
 
-  const submit = async () => {
-    setErrorMessage(null);
+  async function onSubmit(values: CreateProjectValues) {
     try {
-      await mutation.mutateAsync({ name: name.trim(), spaceId: targetSpaceId });
+      await mutation.mutateAsync({ name: values.name, spaceId: targetSpaceId });
       onOpenChange(false);
-      setName("");
+      toast.success(`Project "${values.name}" created.`);
+      form.reset({ name: "" });
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "Failed to create project");
+      toast.error(error instanceof Error ? error.message : "Failed to create project");
     }
-  };
+  }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>{title}</DialogTitle>
-          <DialogDescription>
-            Give the project a name to get started.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="grid gap-3">
-          <label className="grid gap-1.5 text-sm font-medium">
-            Name
-            <Input
-              placeholder="My Project"
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-            />
-          </label>
-          {errorMessage ? (
-            <p className="text-sm text-destructive">{errorMessage}</p>
-          ) : null}
-        </div>
-        <DialogFooter>
-          <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-            Cancel
-          </Button>
-          <Button
-            type="button"
-            onClick={submit}
-            disabled={!name.trim() || mutation.isPending}
-          >
-            Create
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+    <FormDialog
+      description="Give the project a name to get started."
+      form={form}
+      isPending={mutation.isPending}
+      onOpenChange={onOpenChange}
+      onSubmit={onSubmit}
+      open={open}
+      submitLabel="Create"
+      title={title}
+    >
+      <FormField
+        control={form.control}
+        name="name"
+        render={({ field }) => (
+          <FormItem>
+            <FormLabel>Name</FormLabel>
+            <FormControl>
+              <Input placeholder="My Project" {...field} />
+            </FormControl>
+            <FormMessage />
+          </FormItem>
+        )}
+      />
+    </FormDialog>
   );
 }

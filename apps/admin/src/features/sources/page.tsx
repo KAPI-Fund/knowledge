@@ -1,11 +1,13 @@
 import type { ColumnDef } from "@tanstack/react-table";
+import { RefreshCw } from "lucide-react";
 import { useMemo, useRef, useState, type RefObject } from "react";
 import { useParams } from "react-router-dom";
+import { toast } from "sonner";
 
 import { EmptyState } from "@/components/layout/empty-state";
 import { RouteStatePane } from "@/components/layout/route-state-pane";
+import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { DataTable } from "@/components/shared/data-table";
-import { FilterToolbar } from "@/components/shared/filter-toolbar";
 import { PageHeader } from "@/components/shared/page-header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -41,8 +43,7 @@ export function SourcesPage() {
   const [content, setContent] = useState("");
   const [selectedFiles, setSelectedFiles] = useState<UploadFile[]>([]);
   const [selectedFolderFiles, setSelectedFolderFiles] = useState<UploadFile[]>([]);
-  const [statusMessage, setStatusMessage] = useState("");
-  const [filter, setFilter] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState<SourceRow | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const folderInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -72,34 +73,30 @@ export function SourcesPage() {
         cell: ({ row }) => (
           <div className="flex flex-wrap justify-end gap-2">
             <Button
-              onClick={() =>
-                ingestSource.mutateAsync({
-                  projectId,
-                  relativePath: row.original.relativePath,
-                })
-              }
+              onClick={async () => {
+                try {
+                  await ingestSource.mutateAsync({
+                    projectId,
+                    relativePath: row.original.relativePath,
+                  });
+                  toast.success(`Ingest queued for ${row.original.relativePath}.`);
+                } catch (error) {
+                  toast.error(normalizeAppError(error).message);
+                }
+              }}
               size="sm"
               variant="secondary"
             >
               Ingest
             </Button>
-            <Button
-              onClick={() =>
-                deleteSource.mutateAsync({
-                  projectId,
-                  relativePath: row.original.relativePath.replace(/^raw\/sources\//, ""),
-                })
-              }
-              size="sm"
-              variant="outline"
-            >
+            <Button onClick={() => setDeleteTarget(row.original)} size="sm" variant="outline">
               Delete
             </Button>
           </div>
         ),
       },
     ],
-    [projectId, ingestSource, deleteSource],
+    [projectId, ingestSource],
   );
 
   function registerFolderInput(node: HTMLInputElement | null) {
@@ -124,9 +121,9 @@ export function SourcesPage() {
       });
       setFileName("");
       setContent("");
-      setStatusMessage(`Imported ${trimmedFileName}.`);
+      toast.success(`Imported ${trimmedFileName}.`);
     } catch (error) {
-      setStatusMessage(describeImportError(error, trimmedFileName));
+      toast.error(describeImportError(error, trimmedFileName));
     }
   }
 
@@ -167,10 +164,10 @@ export function SourcesPage() {
       if (inputRef.current) {
         inputRef.current.value = "";
       }
-      setStatusMessage(`Imported ${importedCount} source ${sourceLabel}.`);
+      toast.success(`Imported ${importedCount} source ${sourceLabel}.`);
     } catch (error) {
       const failedFile = files.find((file) => Boolean(sourcePathFromFile(file)));
-      setStatusMessage(describeImportError(error, failedFile ? sourcePathFromFile(failedFile) : sourceLabel));
+      toast.error(describeImportError(error, failedFile ? sourcePathFromFile(failedFile) : sourceLabel));
     }
   }
 
@@ -184,10 +181,6 @@ export function SourcesPage() {
   }
 
   const allSources = sources.data ?? [];
-  const needle = filter.trim().toLowerCase();
-  const filteredSources = needle
-    ? allSources.filter((source) => source.relativePath.toLowerCase().includes(needle))
-    : allSources;
 
   return (
     <div className="grid gap-6">
@@ -195,8 +188,16 @@ export function SourcesPage() {
         actions={
           <Button
             disabled={rescanSources.isPending}
-            onClick={() => rescanSources.mutateAsync({ projectId })}
+            onClick={async () => {
+              try {
+                await rescanSources.mutateAsync({ projectId });
+                toast.success("Source rescan queued.");
+              } catch (error) {
+                toast.error(normalizeAppError(error).message);
+              }
+            }}
           >
+            <RefreshCw />
             Rescan Sources
           </Button>
         }
@@ -231,7 +232,10 @@ export function SourcesPage() {
                 />
               </label>
               <div className="flex justify-end">
-                <Button disabled={importSource.isPending} onClick={handleImportSource}>
+                <Button
+                  disabled={importSource.isPending || !fileName.trim()}
+                  onClick={handleImportSource}
+                >
                   Import Source
                 </Button>
               </div>
@@ -307,33 +311,58 @@ export function SourcesPage() {
               </div>
             </TabsContent>
           </Tabs>
-
-          {statusMessage ? (
-            <p aria-live="polite" className="mt-4 text-sm text-muted-foreground">
-              {statusMessage}
-            </p>
-          ) : null}
         </CardContent>
       </Card>
 
-      <div className="grid gap-3">
-        <h2 className="text-sm font-medium text-muted-foreground">Project Sources</h2>
-        {allSources.length ? (
-          <>
-            <FilterToolbar
-              onSearchChange={setFilter}
+      <Card>
+        <CardHeader>
+          <CardTitle>Project Sources</CardTitle>
+          <CardDescription>Raw files currently tracked under raw/sources.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {allSources.length ? (
+            <DataTable
+              columns={columns}
+              data={allSources}
+              searchKey="relativePath"
               searchPlaceholder="Filter by path"
-              searchValue={filter}
             />
-            <DataTable columns={columns} data={filteredSources} />
-          </>
-        ) : (
-          <EmptyState
-            description="Import text, files, or a folder to populate this project."
-            title="No sources imported"
-          />
-        )}
-      </div>
+          ) : (
+            <EmptyState
+              description="Import text, files, or a folder to populate this project."
+              title="No sources imported"
+            />
+          )}
+        </CardContent>
+      </Card>
+
+      <ConfirmDialog
+        confirmLabel="Delete source"
+        description={
+          deleteTarget
+            ? `${deleteTarget.relativePath} will be removed from this project.`
+            : ""
+        }
+        destructive
+        isPending={deleteSource.isPending}
+        onConfirm={async () => {
+          if (!deleteTarget) return;
+          try {
+            await deleteSource.mutateAsync({
+              projectId,
+              relativePath: deleteTarget.relativePath.replace(/^raw\/sources\//, ""),
+            });
+            toast.success(`Deleted ${deleteTarget.relativePath}.`);
+          } catch (error) {
+            toast.error(normalizeAppError(error).message);
+          }
+        }}
+        onOpenChange={(open) => {
+          if (!open) setDeleteTarget(null);
+        }}
+        open={Boolean(deleteTarget)}
+        title="Delete this source?"
+      />
     </div>
   );
 }

@@ -241,24 +241,24 @@ async fn configure_provider(
     provider: &ProviderConfig,
     embedding_model: Option<&str>,
 ) -> Result<()> {
-    sqlx::query(
-        "UPDATE system_settings
-     SET provider_mode = $1,
-         provider_base_url = $2,
-         provider_api_key = $3,
-         provider_model = $4,
-         provider_embedding_model = $5,
-         provider_timeout_seconds = $6",
+    support::seed_provider_connection(
+        &state.pool,
+        &provider.base_url,
+        &provider.api_key,
+        &provider.model,
+        provider.timeout_seconds as i64,
     )
-    .bind("openai-compatible")
-    .bind(&provider.base_url)
-    .bind(&provider.api_key)
-    .bind(&provider.model)
-    .bind(embedding_model.map(str::to_string))
-    .bind(provider.timeout_seconds as i64)
-    .execute(&state.pool)
-    .await
-    .map_err(anyhow::Error::from)?;
+    .await;
+    if let Some(model) = embedding_model {
+        support::seed_embedding(
+            &state.pool,
+            &provider.base_url,
+            &provider.api_key,
+            model,
+            provider.timeout_seconds as i64,
+        )
+        .await;
+    }
 
     Ok(())
 }

@@ -73,10 +73,6 @@ vi.mock("../features/users/page", () => ({
   UsersPage: () => <h1>Users</h1>,
 }));
 
-vi.mock("../features/settings/page", () => ({
-  SettingsPage: () => <h1>Settings</h1>,
-}));
-
 vi.mock("../features/canvas/page", () => ({
   CanvasPage: () => <h1>Canvas Page</h1>,
 }));
@@ -155,8 +151,8 @@ describe("AppRoutes", () => {
       </QueryClientProvider>,
     );
 
-    expect(await screen.findByRole("link", { name: /files/i })).toBeInTheDocument();
-    expect(screen.getByText("demo-project")).toBeInTheDocument();
+    expect((await screen.findAllByRole("link", { name: /files/i })).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("demo-project").length).toBeGreaterThan(0);
     expect(screen.getByRole("heading", { name: "Files Page" })).toBeInTheDocument();
 
     await user.click(screen.getByRole("link", { name: "Reviews" }));

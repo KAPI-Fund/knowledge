@@ -1,26 +1,41 @@
 use std::convert::Infallible;
+use std::sync::Arc;
 
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum::response::sse::{Event, KeepAlive, Sse};
-use axum::routing::{get, patch};
+use axum::routing::{get, patch, post};
 use axum::{Json, Router};
-use futures_util::{Stream, StreamExt};
+use futures_util::StreamExt;
+use futures_util::stream::BoxStream;
 use serde::Deserialize;
 use serde_json::{Value, json};
+use uuid::Uuid;
 
+use crate::agent::context::AgentConversationMessage;
+use crate::agent::events::AgentEvent;
+use crate::agent::permissions::PermissionPolicy;
+use crate::agent::runtime::{AgentEventSink, AgentLoopRequest, run_agent_loop};
+use crate::agent::skills::{list_available_skills, load_skills};
+use crate::agent::types::{AgentMessageOptions, AgentSkillMode};
 use crate::app::state::AppState;
 use crate::chat::context::assemble_chat_context;
 use crate::chat::store::{
-    ConversationRecord, MessageRecord, append_message, create_conversation, delete_conversation,
-    find_conversation, list_conversations, list_messages, rename_conversation,
+    ConversationRecord, MessageRecord, append_agent_message, append_message, create_conversation,
+    delete_conversation, find_conversation, find_message_by_id, list_conversations, list_messages,
+    rename_conversation,
 };
 use crate::http::error::ApiError;
-use crate::projects::routes::{authorized_principal, validate_csrf};
+use crate::projects::audit::{CreateAuditLog, append_audit_log};
+use crate::projects::file_history::record_disk_version;
+use crate::projects::routes::{authorized_principal, authorized_principal_with_role, validate_csrf};
 use crate::projects::service::project_root_for_id;
 use crate::providers::{load_active_connection, ProviderChatMessage, ProviderChatStreamRequest};
 use crate::query::load_query_settings;
+use crate::tenancy::access::project_access_role;
+
+type ChatEventStream = BoxStream<'static, Result<Event, Infallible>>;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -35,6 +50,10 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/projects/{project_id}/conversations/{conversation_id}/messages",
             get(list_messages_handler).post(send_message_handler),
+        )
+        .route(
+            "/api/projects/{project_id}/conversations/{conversation_id}/messages/{message_id}/save-to-wiki",
+            post(save_message_to_wiki_handler),
         )
 }
 
@@ -54,6 +73,9 @@ struct RenameConversationRequest {
 #[derive(Debug, Deserialize)]
 struct SendMessageRequest {
     content: String,
+    // `None` keeps the plain RAG chat path; `Some` routes through the agent loop.
+    #[serde(default)]
+    agent: Option<AgentMessageOptions>,
 }
 
 async fn list_conversations_handler(
@@ -143,16 +165,29 @@ async fn send_message_handler(
     Path((project_id, conversation_id)): Path<(String, String)>,
     headers: HeaderMap,
     Json(payload): Json<SendMessageRequest>,
-) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
+) -> Result<axum::response::Response, ApiError> {
     let session = authorized_principal(&state, &headers, Some(&project_id)).await?;
     validate_csrf(&headers, &session)?;
     let content = payload.content.trim().to_string();
-    if content.is_empty() {
-        return Err(ApiError::bad_request("message content must not be empty"));
-    }
     find_conversation(&state.pool, &project_id, &conversation_id, &session.user_id)
         .await?
         .ok_or_else(|| ApiError::not_found("conversation not found"))?;
+
+    if let Some(options) = payload.agent {
+        return send_agent_message(
+            state,
+            project_id,
+            conversation_id,
+            session.user_id.clone(),
+            content,
+            options,
+        )
+        .await;
+    }
+
+    if content.is_empty() {
+        return Err(ApiError::bad_request("message content must not be empty"));
+    }
 
     let settings = load_query_settings(&state).await?;
     let connection = load_active_connection(&state).await?;
@@ -263,7 +298,331 @@ async fn send_message_handler(
         }
     };
 
-    Ok(Sse::new(event_stream).keep_alive(KeepAlive::default()))
+    let event_stream: ChatEventStream = event_stream.boxed();
+    Ok(Sse::new(event_stream).keep_alive(KeepAlive::default()).into_response())
+}
+
+/// Agent chat turn. The loop runs in a spawned task; redacted events are
+/// forwarded as `agentEvent` SSE frames while the request stream stays open.
+/// A `user.ask` pause ends the run without persisting an assistant message —
+/// the frontend resumes by re-POSTing with `resumeRequestId` + `formResult`.
+async fn send_agent_message(
+    state: AppState,
+    project_id: String,
+    conversation_id: String,
+    user_id: String,
+    content: String,
+    options: AgentMessageOptions,
+) -> Result<axum::response::Response, ApiError> {
+    let role = project_access_role(&state.pool, &project_id, &user_id)
+        .await
+        .map_err(ApiError::from)?
+        .ok_or_else(|| ApiError::forbidden("no access to this project"))?;
+    let permission_policy = PermissionPolicy::for_role(role);
+    let connection = load_active_connection(&state).await?;
+    let provider = connection.provider();
+    let root = project_root_for_id(&state, &project_id).await?;
+
+    let mut query = content;
+    if let Some(form_result) = &options.form_result {
+        let request_id = options.resume_request_id.clone().unwrap_or_default();
+        let rendered = serde_json::to_string_pretty(form_result)
+            .map_err(|_| ApiError::bad_request("invalid formResult payload"))?;
+        if !query.is_empty() {
+            query.push_str("\n\n");
+        }
+        query.push_str(&format!(
+            "<user_form_response request-id=\"{request_id}\">\n{rendered}\n</user_form_response>"
+        ));
+    }
+    if query.trim().is_empty() {
+        return Err(ApiError::bad_request("message content must not be empty"));
+    }
+
+    let history = list_messages(&state.pool, &conversation_id)
+        .await?
+        .iter()
+        .rev()
+        .take(MAX_HISTORY_MESSAGES)
+        .rev()
+        .map(|message| AgentConversationMessage {
+            role: message.role.clone(),
+            content: message.content.clone(),
+        })
+        .collect::<Vec<_>>();
+    append_message(&state.pool, &conversation_id, "user", &query, None).await?;
+
+    let skills = {
+        let project_path = root.as_path().to_path_buf();
+        let global_dir = state.global_skills_dir.clone();
+        let skill_mode = options.skill_mode;
+        let requested = options.skill.iter().cloned().collect::<Vec<_>>();
+        tokio::task::spawn_blocking(move || match skill_mode {
+            AgentSkillMode::Explicit => load_skills(&project_path, global_dir.as_deref(), &requested),
+            AgentSkillMode::Auto => {
+                let ids = list_available_skills(&project_path, global_dir.as_deref())
+                    .into_iter()
+                    .map(|skill| skill.id)
+                    .collect::<Vec<_>>();
+                load_skills(&project_path, global_dir.as_deref(), &ids)
+            }
+        })
+        .await
+        .map_err(|_| ApiError::internal("failed to load agent skills"))?
+    };
+    if options.skill_mode == AgentSkillMode::Explicit && options.skill.is_some() && skills.is_empty()
+    {
+        return Err(ApiError::bad_request("requested agent skill was not found"));
+    }
+
+    let loop_request = AgentLoopRequest {
+        query,
+        session_id: conversation_id.clone(),
+        mode: options.mode,
+        skill_mode: options.skill_mode,
+        web_enabled: options.web,
+        history,
+        skills,
+        context_files: Vec::new(),
+        approved_shell_commands: options.approved_shell_commands.clone(),
+    };
+
+    let run_id = Uuid::new_v4().to_string();
+    let cancellation = state
+        .agent_cancellations
+        .start(&project_id, &conversation_id, &run_id);
+
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<AgentEvent>();
+    let event_sink: AgentEventSink = Arc::new(move |mut event: AgentEvent| {
+        event.redact_for_external_api();
+        let _ = event_tx.send(event);
+    });
+
+    let agent_mode = options.mode.label().to_string();
+    let loop_state = state.clone();
+    let loop_project_id = project_id.clone();
+    let loop_handle = tokio::spawn(async move {
+        run_agent_loop(
+            &loop_state,
+            &loop_project_id,
+            &root,
+            &provider,
+            &permission_policy,
+            &loop_request,
+            Some(event_sink),
+            Some(&cancellation),
+        )
+        .await
+    });
+
+    let stream_state = state.clone();
+    let event_stream = async_stream::stream! {
+        while let Some(event) = event_rx.recv().await {
+            let Ok(payload) = serde_json::to_string(&event) else {
+                continue;
+            };
+            yield Ok(Event::default().event("agentEvent").data(payload));
+        }
+
+        let outcome = match loop_handle.await {
+            Ok(Ok(outcome)) => outcome,
+            Ok(Err(message)) => {
+                yield Ok(
+                    Event::default()
+                        .event("error")
+                        .data(json!({ "message": message }).to_string()),
+                );
+                return;
+            }
+            Err(_) => {
+                yield Ok(
+                    Event::default()
+                        .event("error")
+                        .data(json!({ "message": "agent run failed unexpectedly" }).to_string()),
+                );
+                return;
+            }
+        };
+
+        if let Some(request) = outcome.user_input_request {
+            // Paused for user input: nothing is persisted, the frontend
+            // resumes with a fresh POST carrying the form result.
+            yield Ok(
+                Event::default().event("done").data(
+                    json!({
+                        "messageId": Value::Null,
+                        "content": outcome.message,
+                        "agentMode": agent_mode,
+                        "userInputRequest": request
+                    })
+                    .to_string(),
+                ),
+            );
+            return;
+        }
+
+        let mut events = outcome.events;
+        for event in &mut events {
+            event.redact_for_external_api();
+        }
+        let events_value =
+            serde_json::to_value(&events).unwrap_or_else(|_| Value::Array(Vec::new()));
+        match append_agent_message(
+            &stream_state.pool,
+            &conversation_id,
+            "assistant",
+            &outcome.message,
+            None,
+            Some(&agent_mode),
+            Some(&events_value),
+        )
+        .await
+        {
+            Ok(message) => {
+                yield Ok(
+                    Event::default().event("done").data(
+                        json!({
+                            "messageId": message.id,
+                            "content": outcome.message,
+                            "agentMode": agent_mode,
+                            "references": outcome.references
+                        })
+                        .to_string(),
+                    ),
+                );
+            }
+            Err(_) => {
+                yield Ok(
+                    Event::default()
+                        .event("error")
+                        .data(json!({ "message": "failed to persist assistant message" }).to_string()),
+                );
+            }
+        }
+    };
+
+    let event_stream: ChatEventStream = event_stream.boxed();
+    Ok(Sse::new(event_stream).keep_alive(KeepAlive::default()).into_response())
+}
+
+/// Backend port of upstream SaveToWikiButton (chat-message.tsx L540-624).
+/// Upstream issues three frontend writes; here one endpoint cleans the
+/// message, writes the query page, updates index.md/log.md, records file
+/// history, and kicks a best-effort embedding refresh.
+async fn save_message_to_wiki_handler(
+    State(state): State<AppState>,
+    Path((project_id, conversation_id, message_id)): Path<(String, String, String)>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, ApiError> {
+    let session = authorized_principal_with_role(
+        &state,
+        &headers,
+        &project_id,
+        crate::tenancy::access::AccessRole::Editor,
+    )
+    .await?;
+    validate_csrf(&headers, &session)?;
+
+    let message = find_message_by_id(
+        &state.pool,
+        &project_id,
+        &conversation_id,
+        &session.user_id,
+        &message_id,
+    )
+    .await?
+    .ok_or_else(|| ApiError::not_found("message not found"))?;
+    if message.role != "assistant" {
+        return Err(ApiError::bad_request(
+            "only assistant messages can be saved to the wiki",
+        ));
+    }
+
+    let root = project_root_for_id(&state, &project_id).await?;
+
+    // Snapshot index.md/log.md before the save mutates them (same baseline
+    // pattern as the editor save handler; dedupe keeps no-ops out).
+    for rel in ["wiki/index.md", "wiki/log.md"] {
+        if let Err(error) = record_disk_version(
+            &state.pool,
+            &project_id,
+            &root,
+            rel,
+            "baseline",
+            "before.chat.save_to_wiki",
+        )
+        .await
+        {
+            tracing::warn!(?error, path = rel, "failed to record baseline file version");
+        }
+    }
+
+    let saved = knowledge_core::project::query_save::save_query_page(&root, &message.content)
+        .map_err(|error| match error {
+            knowledge_core::project::query_save::QuerySaveError::EmptyContent => {
+                ApiError::bad_request(error.to_string())
+            }
+            other => ApiError::internal(other.to_string()),
+        })?;
+
+    for rel in [saved.path.as_str(), "wiki/index.md", "wiki/log.md"] {
+        if let Err(error) = record_disk_version(
+            &state.pool,
+            &project_id,
+            &root,
+            rel,
+            &session.user_id,
+            "chat.save_to_wiki",
+        )
+        .await
+        {
+            tracing::warn!(?error, path = rel, "failed to record file version");
+        }
+    }
+
+    append_audit_log(
+        &state,
+        CreateAuditLog {
+            project_id: Some(project_id.clone()),
+            actor_id: session.user_id.clone(),
+            action: "chat.saved_to_wiki".to_string(),
+            target_type: "wiki_page".to_string(),
+            target_id: saved.path.clone(),
+            task_id: None,
+            summary: format!("Saved chat message to {}", saved.path),
+            metadata: json!({ "conversationId": conversation_id, "messageId": message_id }),
+        },
+    )
+    .await?;
+
+    // Upstream auto-ingests the saved page (L611-618); here the equivalent is
+    // a best-effort embedding refresh so the page becomes searchable.
+    let refresh_state = state.clone();
+    tokio::spawn(async move {
+        let Ok(root) = project_root_for_id(&refresh_state, &project_id).await else {
+            return;
+        };
+        match crate::retrieval::service::load_embedding_config(&refresh_state).await {
+            Ok(Some(config)) => {
+                if let Err(error) = crate::retrieval::service::ensure_project_embeddings(
+                    &refresh_state,
+                    &project_id,
+                    &root,
+                    &config,
+                )
+                .await
+                {
+                    tracing::warn!("embedding refresh after save-to-wiki failed: {error}");
+                }
+            }
+            Ok(None) => {}
+            Err(error) => {
+                tracing::warn!("embedding config load after save-to-wiki failed: {error}");
+            }
+        }
+    });
+
+    Ok(Json(json!({ "path": saved.path, "title": saved.title })))
 }
 
 fn conversation_json(record: &ConversationRecord) -> Value {
@@ -282,6 +641,8 @@ pub(crate) fn message_json(record: &MessageRecord) -> Value {
         "role": record.role,
         "content": record.content,
         "contextSummary": record.context_summary,
+        "agentMode": record.agent_mode,
+        "agentEvents": record.agent_events,
         "createdAt": record.created_at
     })
 }

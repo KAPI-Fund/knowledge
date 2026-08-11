@@ -2,7 +2,7 @@ import { z } from "zod";
 
 export const canvasNodeSchema = z.object({
   id: z.string(),
-  type: z.enum(["note", "url", "kb", "ai_analyze", "ai_image", "search"]),
+  type: z.enum(["note", "url", "kb", "ai_analyze", "ai_image", "search", "html"]),
   x: z.number(),
   y: z.number(),
   w: z.number().default(280),
@@ -15,6 +15,9 @@ export const canvasEdgeSchema = z.object({
   id: z.string(),
   source: z.string(),
   target: z.string(),
+  sourceHandle: z.string().optional(),
+  targetHandle: z.string().optional(),
+  kind: z.string().optional(),
 });
 export type CanvasEdge = z.infer<typeof canvasEdgeSchema>;
 

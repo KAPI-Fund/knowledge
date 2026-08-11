@@ -1,4 +1,5 @@
 import type { ColumnDef } from "@tanstack/react-table";
+import { Plus, Settings2, UsersRound } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
@@ -6,7 +7,13 @@ import { DataTable } from "@/components/shared/data-table";
 import { PageHeader } from "@/components/shared/page-header";
 import { ForbiddenState, LoadingState } from "@/components/shared/states";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 
 import { ManageAccessDialog } from "../kb-access/manage-access-dialog";
 import { useSpacesQuery } from "../spaces/use-spaces";
@@ -50,20 +57,26 @@ export function OrgWorkspacePage() {
 
   const adminActions = (
     <>
-      <Button type="button" onClick={() => setPublicDialogOpen(true)}>
-        New public project
-      </Button>
       <Button asChild variant="outline">
-        <Link to={`/orgs/${orgId}/members`}>Members</Link>
+        <Link to={`/orgs/${orgId}/members`}>
+          <UsersRound />
+          Members
+        </Link>
       </Button>
-      <Button type="button" onClick={() => setTeamDialogOpen(true)}>
+      <Button type="button" variant="outline" onClick={() => setTeamDialogOpen(true)}>
+        <Plus />
         New team
+      </Button>
+      <Button type="button" onClick={() => setPublicDialogOpen(true)}>
+        <Plus />
+        New public project
       </Button>
     </>
   );
 
   const nonAdminActions = (
     <Button type="button" onClick={() => setTeamDialogOpen(true)}>
+      <Plus />
       New team
     </Button>
   );
@@ -71,6 +84,7 @@ export function OrgWorkspacePage() {
   return (
     <div className="grid gap-6">
       <PageHeader
+        description="Organization-wide projects and team knowledge bases."
         title={`${org.name} workspace`}
         actions={isAdmin ? adminActions : nonAdminActions}
       />
@@ -187,14 +201,19 @@ function PublicProjectsSection({
   );
 
   return (
-    <section>
-      <h2 className="mb-3 text-sm font-medium">Public projects</h2>
-      <DataTable
-        columns={columns}
-        data={projects}
-        emptyMessage="No public projects yet."
-      />
-    </section>
+    <Card>
+      <CardHeader>
+        <CardTitle>Public projects</CardTitle>
+        <CardDescription>Visible to every member of the organization.</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <DataTable
+          columns={columns}
+          data={projects}
+          emptyMessage="No public projects yet."
+        />
+      </CardContent>
+    </Card>
   );
 }
 
@@ -257,15 +276,22 @@ function TeamSection({
     <Card>
       <CardHeader>
         <div className="flex items-center justify-between gap-2">
-          <CardTitle>Team - {team.name}</CardTitle>
+          <div className="grid gap-1">
+            <CardTitle>Team - {team.name}</CardTitle>
+            <CardDescription>Knowledge bases owned by this team.</CardDescription>
+          </div>
           <div className="flex items-center gap-2">
             {canManageTeam && teamSpaceId ? (
               <Button size="sm" type="button" onClick={onNewKb}>
+                <Plus />
                 New team KB
               </Button>
             ) : null}
             <Button asChild size="sm" variant="outline">
-              <Link to={`/orgs/${orgId}/teams/${team.id}`}>Manage</Link>
+              <Link to={`/orgs/${orgId}/teams/${team.id}`}>
+                <Settings2 />
+                Manage
+              </Link>
             </Button>
           </div>
         </div>

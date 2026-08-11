@@ -13,13 +13,22 @@ import { DedupPage } from "../features/dedup/page";
 import { DeepResearchPage } from "../features/deep-research/page";
 import { FilesPage } from "../features/files/page";
 import { LintPage } from "../features/lint/page";
+import { NotFoundPage } from "../features/misc/not-found-page";
 import { OrgMembersPage } from "../features/orgs/members-page";
 import { OrgWorkspacePage } from "../features/orgs/workspace-page";
 import { ProjectDetailPage } from "../features/projects/detail-page";
 import { ProjectsPage } from "../features/projects/page";
 import { ReviewsPage } from "../features/reviews/page";
 import { SearchPage } from "../features/search/page";
-import { SettingsPage } from "../features/settings/page";
+import { SettingsLayout } from "../features/settings/layout";
+import { AgentSkillsSection } from "../features/settings/sections/agent-skills-section";
+import { DefaultsSection } from "../features/settings/sections/defaults-section";
+import { EmbeddingSection } from "../features/settings/sections/embedding-section";
+import { FetchSection } from "../features/settings/sections/fetch-section";
+import { ImageSection } from "../features/settings/sections/image-section";
+import { LlmConnectionsSection } from "../features/settings/sections/llm-connections-section";
+import { McpSection } from "../features/settings/sections/mcp-section";
+import { WebSearchSection } from "../features/settings/sections/web-search-section";
 import { SourceWatchPage } from "../features/source-watch/page";
 import { SourcesPage } from "../features/sources/page";
 import { TasksPage } from "../features/tasks/page";
@@ -109,10 +118,20 @@ export function AppRoutes() {
           <Route path="orgs/:orgId/teams/:teamId" element={<TeamPage />} />
           <Route path="users" element={<UsersPage />} />
           <Route path="api-tokens" element={<ApiTokensPage />} />
-          <Route path="settings" element={<SettingsPage />} />
+          <Route path="settings" element={<SettingsLayout />}>
+            <Route index element={<Navigate replace to="llm" />} />
+            <Route path="llm" element={<LlmConnectionsSection />} />
+            <Route path="embedding" element={<EmbeddingSection />} />
+            <Route path="image" element={<ImageSection />} />
+            <Route path="search" element={<WebSearchSection />} />
+            <Route path="fetch" element={<FetchSection />} />
+            <Route path="agent-skills" element={<AgentSkillsSection />} />
+            <Route path="mcp" element={<McpSection />} />
+            <Route path="defaults" element={<DefaultsSection />} />
+          </Route>
         </Route>
       </Route>
-      <Route path="*" element={<Navigate replace to="/" />} />
+      <Route path="*" element={<NotFoundPage />} />
     </Routes>
   );
 }

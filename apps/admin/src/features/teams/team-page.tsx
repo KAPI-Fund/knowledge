@@ -1,11 +1,23 @@
 import type { ColumnDef } from "@tanstack/react-table";
+import { ArrowLeft, Plus, UserPlus } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
+import { toast } from "sonner";
 
+import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { DataTable } from "@/components/shared/data-table";
 import { PageHeader } from "@/components/shared/page-header";
 import { ForbiddenState, LoadingState } from "@/components/shared/states";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 
 import { ManageAccessDialog } from "../kb-access/manage-access-dialog";
@@ -28,7 +40,7 @@ function TeamMembersTable({
 }: {
   members: TeamMember[];
   canManage: boolean;
-  onRemove: (userId: string) => void;
+  onRemove: (member: TeamMember) => void;
 }) {
   const columns = useMemo<ColumnDef<TeamMember>[]>(
     () => [
@@ -36,19 +48,30 @@ function TeamMembersTable({
         accessorKey: "username",
         header: "Username",
         cell: ({ row }) => (
-          <span className="font-medium">{row.original.username}</span>
+          <div className="flex items-center gap-3">
+            <Avatar className="size-8">
+              <AvatarFallback className="text-xs uppercase">
+                {row.original.username.slice(0, 2)}
+              </AvatarFallback>
+            </Avatar>
+            <span className="font-medium">{row.original.username}</span>
+          </div>
         ),
       },
       {
         accessorKey: "role",
         header: "Role",
-        cell: ({ row }) => <span className="text-sm text-muted-foreground">{row.original.role}</span>,
+        cell: ({ row }) => (
+          <Badge variant={row.original.role === "leader" ? "default" : "secondary"}>
+            {row.original.role}
+          </Badge>
+        ),
       },
       ...(canManage
         ? [
             {
               id: "actions",
-              header: "Actions",
+              header: "",
               cell: ({ row }: { row: { original: TeamMember } }) =>
                 row.original.role === "leader" ? null : (
                   <div className="flex justify-end">
@@ -57,7 +80,7 @@ function TeamMembersTable({
                       variant="outline"
                       size="sm"
                       aria-label={`Remove ${row.original.username}`}
-                      onClick={() => onRemove(row.original.userId)}
+                      onClick={() => onRemove(row.original)}
                     >
                       Remove
                     </Button>
@@ -156,98 +179,138 @@ export function TeamPage() {
   const [username, setUsername] = useState("");
   const [kbName, setKbName] = useState("");
   const [manageProjectId, setManageProjectId] = useState<string | null>(null);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [removeTarget, setRemoveTarget] = useState<TeamMember | null>(null);
 
-  if (spaces.isLoading || teamsQuery.isLoading) return <LoadingState />;
+  if (spaces.isLoading || teamsQuery.isLoading) return <LoadingState rows={5} />;
   if (!team) return <ForbiddenState description="You do not have access to this team, or it does not exist." />;
 
   const add = async () => {
-    setErrorMessage(null);
     try {
       await addMember.mutateAsync({ usernameOrEmail: username.trim() });
+      toast.success(`Added ${username.trim()} to ${team.name}.`);
       setUsername("");
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "Failed to add member");
-    }
-  };
-
-  const remove = async (userId: string) => {
-    setErrorMessage(null);
-    try {
-      await removeMember.mutateAsync({ userId });
-    } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "Failed to remove member");
+      toast.error(error instanceof Error ? error.message : "Failed to add member");
     }
   };
 
   const addKb = async () => {
-    setErrorMessage(null);
     try {
       await createKb.mutateAsync({ name: kbName.trim() });
+      toast.success(`Created "${kbName.trim()}".`);
       setKbName("");
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "Failed to create KB");
+      toast.error(error instanceof Error ? error.message : "Failed to create KB");
     }
   };
 
   const backAction = (
-    <Button asChild variant="ghost">
-      <Link to={`/orgs/${orgId}`}>Back to workspace</Link>
+    <Button asChild variant="outline">
+      <Link to={`/orgs/${orgId}`}>
+        <ArrowLeft />
+        Back to workspace
+      </Link>
     </Button>
   );
 
   return (
     <div className="grid gap-6">
       <PageHeader
+        description="Manage this team's members and knowledge bases."
         title={`Team - ${team.name}`}
         actions={backAction}
       />
 
-      <section className="grid gap-3">
-        <h2 className="text-sm font-medium">Members</h2>
-        <TeamMembersTable
-          members={members.data?.members ?? []}
-          canManage={canManage}
-          onRemove={remove}
-        />
-        {canManage ? (
-          <div className="flex items-end gap-2">
-            <Input
-              placeholder="Username"
-              value={username}
-              onChange={(event) => setUsername(event.target.value)}
-            />
-            <Button type="button" onClick={add} disabled={addMember.isPending}>
-              Add member
-            </Button>
-          </div>
-        ) : null}
-      </section>
+      <Card>
+        <CardHeader>
+          <CardTitle>Members</CardTitle>
+          <CardDescription>People who can work in this team's spaces.</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-3">
+          <TeamMembersTable
+            members={members.data?.members ?? []}
+            canManage={canManage}
+            onRemove={setRemoveTarget}
+          />
+          {canManage ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <Input
+                aria-label="New team member username"
+                className="w-44"
+                placeholder="Username"
+                value={username}
+                onChange={(event) => setUsername(event.target.value)}
+              />
+              <Button
+                type="button"
+                onClick={add}
+                disabled={addMember.isPending || username.trim().length === 0}
+              >
+                <UserPlus />
+                Add member
+              </Button>
+            </div>
+          ) : null}
+        </CardContent>
+      </Card>
 
-      <section className="grid gap-3">
-        <h2 className="text-sm font-medium">Team KBs</h2>
-        <TeamKbsTable
-          projects={projects.data ?? []}
-          canManage={canManage}
-          onManage={(id) => setManageProjectId(id)}
-        />
-        {canManage ? (
-          <div className="flex items-end gap-2">
-            <Input
-              placeholder="New team KB name"
-              value={kbName}
-              onChange={(event) => setKbName(event.target.value)}
-            />
-            <Button type="button" onClick={addKb} disabled={createKb.isPending}>
-              New team KB
-            </Button>
-          </div>
-        ) : null}
-      </section>
+      <Card>
+        <CardHeader>
+          <CardTitle>Team KBs</CardTitle>
+          <CardDescription>Knowledge bases owned by this team.</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-3">
+          <TeamKbsTable
+            projects={projects.data ?? []}
+            canManage={canManage}
+            onManage={(id) => setManageProjectId(id)}
+          />
+          {canManage ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <Input
+                aria-label="New team KB name"
+                className="w-56"
+                placeholder="New team KB name"
+                value={kbName}
+                onChange={(event) => setKbName(event.target.value)}
+              />
+              <Button
+                type="button"
+                onClick={addKb}
+                disabled={createKb.isPending || kbName.trim().length === 0}
+              >
+                <Plus />
+                New team KB
+              </Button>
+            </div>
+          ) : null}
+        </CardContent>
+      </Card>
 
-      {errorMessage ? (
-        <p className="text-sm text-destructive">{errorMessage}</p>
-      ) : null}
+      <ConfirmDialog
+        confirmLabel="Remove member"
+        description={
+          removeTarget
+            ? `${removeTarget.username} will lose access to ${team.name}'s knowledge bases.`
+            : ""
+        }
+        destructive
+        isPending={removeMember.isPending}
+        onConfirm={async () => {
+          if (!removeTarget) return;
+          try {
+            await removeMember.mutateAsync({ userId: removeTarget.userId });
+            toast.success(`Removed ${removeTarget.username}.`);
+          } catch (error) {
+            toast.error(error instanceof Error ? error.message : "Failed to remove member");
+          }
+        }}
+        onOpenChange={(open) => {
+          if (!open) setRemoveTarget(null);
+        }}
+        open={Boolean(removeTarget)}
+        title="Remove this member?"
+      />
 
       {manageProjectId ? (
         <ManageAccessDialog

@@ -1,0 +1,15 @@
+id          = "guizang-ppt"
+command     = "ppt"
+name        = "PPT 生成"
+description = "把选中内容做成单文件 HTML 幻灯片"
+runtime     = "llm-skill"
+entry       = "SKILL.md"
+
+[input]
+source        = "selection"
+required      = true
+argument_hint = "可选:风格 / 要求"
+
+[output]
+node_type = "html"
+async     = true

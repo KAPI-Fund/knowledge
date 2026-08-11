@@ -5,16 +5,16 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { useSystemSettingsQuery, useUpdateSystemSettingsMutation } from "../queries";
-import { useSettingsTopLevel } from "./use-settings-top-level";
+import { parseTimeoutSeconds } from "./parse-timeout";
 
 export function EmbeddingSection() {
   const settings = useSystemSettingsQuery();
   const update = useUpdateSystemSettingsMutation();
-  const topLevel = useSettingsTopLevel(settings.data);
 
   const [enabled, setEnabled] = useState(false);
   const [baseUrl, setBaseUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
+  const [clearApiKey, setClearApiKey] = useState(false);
   const [model, setModel] = useState("");
   const [timeoutSeconds, setTimeoutSeconds] = useState("60");
   const hydratedFrom = useRef<string>("");
@@ -35,18 +35,24 @@ export function EmbeddingSection() {
     setTimeoutSeconds(String(emb.timeoutSeconds ?? 60));
   }, [settings.data?.embedding]);
 
+  const apiKeyConfigured = settings.data?.embedding?.apiKeyConfigured ?? false;
+
   async function save() {
     await update.mutateAsync({
-      ...topLevel,
       embedding: {
         enabled,
         baseUrl,
         model,
-        timeoutSeconds: Number(timeoutSeconds),
-        ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
+        timeoutSeconds: parseTimeoutSeconds(timeoutSeconds, 60),
+        ...(apiKey.trim()
+          ? { apiKey: apiKey.trim() }
+          : clearApiKey
+            ? { clearApiKey: true }
+            : {}),
       },
     });
     setApiKey("");
+    setClearApiKey(false);
   }
 
   return (
@@ -69,21 +75,44 @@ export function EmbeddingSection() {
           <Input
             type="password"
             placeholder={
-              settings.data?.embedding?.apiKeyConfigured
-                ? "Leave blank to keep the current key"
-                : "sk-..."
+              clearApiKey
+                ? "Saved key will be removed on save"
+                : apiKeyConfigured
+                  ? "Leave blank to keep the current key"
+                  : "sk-..."
             }
+            disabled={clearApiKey}
             value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
           />
         </label>
+        {apiKeyConfigured ? (
+          <label className="flex items-center justify-between text-sm font-medium">
+            <span>Clear saved key</span>
+            <Switch
+              aria-label="Clear saved key"
+              checked={clearApiKey}
+              onCheckedChange={(checked) => {
+                setClearApiKey(checked);
+                if (checked) {
+                  setApiKey("");
+                }
+              }}
+            />
+          </label>
+        ) : null}
         <label className="grid gap-1.5 text-sm font-medium">
           Model
           <Input value={model} onChange={(e) => setModel(e.target.value)} />
         </label>
         <label className="grid gap-1.5 text-sm font-medium">
           Timeout Seconds
-          <Input value={timeoutSeconds} onChange={(e) => setTimeoutSeconds(e.target.value)} />
+          <Input
+            type="number"
+            min={1}
+            value={timeoutSeconds}
+            onChange={(e) => setTimeoutSeconds(e.target.value)}
+          />
         </label>
         <div className="flex justify-end">
           <Button onClick={save} disabled={update.isPending}>

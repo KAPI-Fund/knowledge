@@ -1,3 +1,4 @@
+pub mod agent;
 pub mod app;
 pub mod assets;
 pub mod auth;
@@ -8,15 +9,18 @@ pub mod config;
 pub mod db;
 pub mod deep_research;
 pub mod http;
+pub mod mcp;
 pub mod multimodal;
 pub mod projects;
 pub mod providers;
 pub mod query;
 pub mod retrieval;
 pub mod settings;
+pub mod skills;
 pub mod tasks;
 pub mod tenancy;
 pub mod users;
+pub mod web_fetch;
 pub mod web_search;
 
 use app::state::AppState;
@@ -28,9 +32,16 @@ use time::format_description::well_known::Rfc3339;
 use uuid::Uuid;
 
 pub async fn run() -> anyhow::Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
     let config = AppConfig::from_env();
     let state = bootstrap_state(&config).await?;
     let listener = tokio::net::TcpListener::bind(config.bind_addr).await?;
+    tracing::info!(addr = %config.bind_addr, "knowledge-server listening");
     axum::serve(listener, build_app(state)).await?;
     Ok(())
 }
@@ -38,17 +49,36 @@ pub async fn run() -> anyhow::Result<()> {
 pub async fn bootstrap_state(config: &AppConfig) -> anyhow::Result<AppState> {
     let pool = db::pool::connect_pool(&config.database_url).await?;
     db::migrate::run(&pool).await?;
-    seed_runtime_settings(&pool, config).await?;
     seed_admin_user(&pool, config).await?;
     let cache = CacheStore::connect(&config.redis_url).await?;
+    let skills_dir = std::env::var("KNOWLEDGE_SKILLS_DIR")
+        .unwrap_or_else(|_| "/app/skills".to_string());
+    let descriptors =
+        skills::SkillRegistry::load_from_dir(std::path::Path::new(&skills_dir))?;
+    let skill_registry = skills::SkillRegistry::new(descriptors);
+    let executor: std::sync::Arc<dyn crate::canvas::executor::SkillExecutor> =
+        std::sync::Arc::new(crate::canvas::executor::CubeExecutor::new(
+            config.skill_runner_url.clone(),
+        ));
+    let global_skills_dir = std::env::var("KNOWLEDGE_GLOBAL_SKILLS_DIR")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map(std::path::PathBuf::from);
     let state = AppState {
         pool,
         cache,
         project_root: config.project_root.clone(),
         session_ttl_hours: config.session_ttl_hours,
+        skill_registry,
+        executor,
+        agent_cancellations: agent::cancel::AgentCancellationRegistry::default(),
+        global_skills_dir,
+        skill_jobs_per_user: config.skill_jobs_per_user,
     };
     tasks::recovery::recover_tasks(&state).await?;
     tasks::scheduler::spawn_scheduler(state.clone());
+    crate::canvas::skill_jobs::recover_skill_jobs(&state.pool).await?;
+    crate::canvas::skill_worker::spawn_skill_worker(state.clone(), config.skill_worker_concurrency);
     projects::source_watch::spawn_source_watch_scheduler(state.clone());
     Ok(state)
 }
@@ -64,71 +94,6 @@ pub async fn table_exists(pool: &PgPool, table_name: &str) -> anyhow::Result<boo
         .await?;
 
     Ok(exists.is_some())
-}
-
-async fn seed_runtime_settings(pool: &PgPool, config: &AppConfig) -> anyhow::Result<()> {
-    let Some(provider_base_url) = config.provider_base_url.clone() else {
-        return Ok(());
-    };
-    let Some(provider_model) = config.provider_model.clone() else {
-        return Ok(());
-    };
-
-    let current = sqlx::query_as::<_, (String, Option<String>, Option<String>, Option<String>, Option<i64>)>(
-    "SELECT provider_mode, provider_base_url, provider_api_key, provider_model, provider_timeout_seconds
-     FROM system_settings
-     WHERE id = 1",
-  )
-  .fetch_optional(pool)
-  .await?;
-
-    let Some((
-        provider_mode,
-        current_base_url,
-        current_api_key,
-        current_model,
-        current_timeout_seconds,
-    )) = current
-    else {
-        return Ok(());
-    };
-
-    if provider_mode != "deterministic"
-        && current_base_url
-            .as_deref()
-            .is_some_and(|value| !value.trim().is_empty())
-        && current_model
-            .as_deref()
-            .is_some_and(|value| !value.trim().is_empty())
-    {
-        return Ok(());
-    }
-
-    let timeout_seconds = config.provider_timeout_seconds.or(current_timeout_seconds);
-
-    sqlx::query(
-        "UPDATE system_settings
-     SET provider_mode = $1,
-         provider_base_url = $2,
-         provider_api_key = $3,
-         provider_model = $4,
-         provider_timeout_seconds = $5
-     WHERE id = 1",
-    )
-    .bind(
-        config
-            .provider_mode
-            .clone()
-            .unwrap_or_else(|| "openai-compatible".to_string()),
-    )
-    .bind(provider_base_url)
-    .bind(config.provider_api_key.clone().or(current_api_key))
-    .bind(provider_model)
-    .bind(timeout_seconds)
-    .execute(pool)
-    .await?;
-
-    Ok(())
 }
 
 pub async fn seed_admin_user(pool: &PgPool, config: &AppConfig) -> anyhow::Result<()> {
